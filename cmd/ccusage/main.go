@@ -5,30 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sdpower/ccusage-go/internal/commands"
-	"github.com/spf13/cobra"
+	"github.com/RedwindA/ccusage_go/internal/commands"
 )
 
-var version = "v0.9.0"
+var version = "dev"
 
 func main() {
 	ctx := context.Background()
 
-	rootCmd := &cobra.Command{
-		Use:     "ccusage",
-		Short:   "Claude Code usage analysis tool",
-		Long:    `A CLI tool for analyzing Claude Code usage data from local JSONL files.`,
-		Version: version,
-	}
-
-	rootCmd.AddCommand(
-		commands.NewDailyCommand(),
-		commands.NewMonthlyCommand(),
-		commands.NewWeeklyCommand(),
-		commands.NewSessionCommand(),
-		commands.NewBlocksCommand(),
-		commands.NewMonitorCommand(),
-	)
+	rootCmd := commands.NewRootCommand(version)
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

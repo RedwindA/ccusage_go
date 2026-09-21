@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/stretchr/testify/assert"
 )
 

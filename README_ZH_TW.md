@@ -19,89 +19,61 @@
 
 ## 關於專案
 
-`ccusage_go` 是 [@ryoppippi](https://github.com/ryoppippi) 開發的熱門工具 [ccusage](https://github.com/ryoppippi/ccusage) 的 Go 語言實作版本。此版本保持與原始 TypeScript 版本的相容性，同時提供顯著的效能改進和更低的記憶體使用量。
+`ccusage_go` 是 [@ryoppippi](https://github.com/ryoppippi) 開發的熱門工具 [ccusage](https://github.com/ryoppippi/ccusage) 的 Go 語言實作版本。此儲存庫以 [SDpower/ccusage_go](https://github.com/SDpower/ccusage_go) 為基礎，新增多來源報表並保留即時監控。
 
 ## 為什麼選擇 Go 版本？
 
-### 🎯 效能優勢（實測數據）
+- 原生執行檔，無需 Node.js 執行環境。
+- 串流 JSONL 與唯讀 SQLite 解析。
+- 內嵌模型定價，支援離線報表。
+- 保留 CSV 匯出與即時終端監控。
 
-#### blocks --live 即時監控模式效能比較
-
-| 指標 | ccusage (TypeScript) | ccusage_go | 改善幅度 |
-|------|---------------------|------------|----------|
-| **尖峰記憶體使用量** | ~446 MB | ~46 MB | **減少 90%** |
-| **尖峰 CPU 使用率** | 40.0% | 142% (僅啟動時) | 見註解† |
-| **穩定狀態記憶體** | ~263 MB | ~45 MB | **減少 83%** |
-| **程序數量** | 3 個 (script+npm+node) | 2 個 (script+執行檔) | 更簡單 |
-| **啟動記憶體** | ~240 MB (Node.js) | ~10 MB | **減少 96%** |
-| **下載大小** | ~1 MB* | **3.5-4 MB** 壓縮檔 | 見下方說明 |
-| **需要執行環境** | Node.js (~100MB) | 無（單一執行檔） | **無需執行環境** |
-
-*實測環境：macOS, Apple Silicon, 監控 10+ 個專案，5 秒暖機後測量 15 秒*
-†CPU：Go 版本在初始載入檔案時有較高尖峰，但監控期間降至 <10%
-
-**關於下載大小的說明**：雖然 ccusage npm 套件只有 ~1 MB，但需要預先安裝 Node.js 執行環境（~100 MB）。ccusage_go 執行檔壓縮後為 3.5-4 MB，完全獨立運作，不需要任何執行環境或相依套件。
-
-**效能測試方法**：以上測量數據使用我們的監控腳本（`docs/monitor_ccusage.sh`）取得，該腳本會追蹤包括 Node.js 執行環境在內的所有子程序。您可以使用以下指令重現這些測試：
-```bash
-# 監控 ccusage (TypeScript 版本)
-./docs/monitor_ccusage.sh
-
-# 監控 ccusage_go
-./docs/monitor_ccusage.sh ccusage_go
-```
-
-#### 其他效能指標
-
-| 指標 | TypeScript 版本 | Go 版本 | 說明 |
-|------|----------------|---------|------|
-| 啟動時間 | ~300ms | ~50ms | **快 6 倍** |
-| 資源占用 | Node 進程 + npm 套件 | 單一執行檔 | 更簡潔 |
-| 系統影響 | 中等 | 極低 | 幾乎不影響系統 |
-
-### 📦 發布優勢
-
-- **超級精簡**：僅 **3.5-4 MB** 下載大小（壓縮後）
-- **單一執行檔**：~10 MB 執行檔，無需任何執行環境
-- **零依賴**：不需要 Node.js、npm 或任何其他相依套件
-- **即時啟動**：直接執行，無需安裝過程
-- **跨平台支援**：為所有主要平台提供原生執行檔
+舊版的下載大小與 TypeScript 效能比較來自僅支援 Claude 的版本；
+新版內嵌 SQLite 與更多定價資料，不再沿用那些測量結果。
 
 ## 安裝
 
-### 從原始碼編譯
+### 快速安裝（Linux / macOS）
 
-```bash
-# 複製儲存庫
-git clone https://github.com/SDpower/ccusage_go.git
-cd ccusage_go
+```sh
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/latest/download/install.sh | sh
+```
 
-# 建置
-make build
+腳本自動辨識 Linux/macOS 與 amd64/arm64，驗證 SHA-256，預設安裝至
+`~/.local/bin/ccusage_go`，不需要 sudo。若尚未加入 PATH：
 
-# 安裝到系統
-make install
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+ccusage_go --version
+ccusage_go daily --offline
+```
+
+再次執行即可更新。指定版本或安裝目錄：
+
+```sh
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.15.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.15.0
 ```
 
 ### 預編譯版本
 
-從 [GitHub Releases](https://github.com/SDpower/ccusage_go/releases) 下載
+從 [GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) 下載。
+支援 Linux、macOS、Windows 的 amd64 與 arm64，附 `checksums.txt`。
+Windows 請解壓縮對應 ZIP，將執行檔改名為 `ccusage_go.exe`。
 
-#### 快速安裝 (macOS/Linux)
+### 從原始碼編譯
 
-```bash
-# macOS Apple Silicon
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-darwin-arm64.tar.gz | tar xz
-sudo mv ccusage_go-darwin-arm64 /usr/local/bin/ccusage_go
-
-# macOS Intel
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-darwin-amd64.tar.gz | tar xz
-sudo mv ccusage_go-darwin-amd64 /usr/local/bin/ccusage_go
-
-# Linux x64
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-linux-amd64.tar.gz | tar xz
-sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
+```sh
+git clone https://github.com/RedwindA/ccusage_go.git
+cd ccusage_go
+make build
+./bin/ccusage_go --help
 ```
+
+也可使用 `go install github.com/RedwindA/ccusage_go/cmd/ccusage@latest`，
+在 Go bin 目錄安裝名稱為 `ccusage` 的指令；與預編譯的 `ccusage_go` 功能相同。
+
+發版步驟請見 [RELEASING.md](docs/RELEASING.md)。
 
 ## 使用方法
 
@@ -147,30 +119,6 @@ sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
 ./ccusage_go blocks --recent
 ```
 
-## 為什麼選擇 ccusage_go？
-
-### 💾 儲存空間與執行環境比較
-
-| 面向 | ccusage (TypeScript) | ccusage_go |
-|------|---------------------|------------|
-| **套件下載** | ~1 MB (npm 套件) | **3.5-4 MB** (壓縮的執行檔) |
-| **執行環境需求** | Node.js (~100 MB) | **無** |
-| **總儲存需求** | ~101 MB (Node.js + 套件) | **~10 MB** (單一執行檔) |
-| **相依性** | npm 套件 + Node.js 執行環境 | **零相依性** |
-| **更新方式** | npm update (需要網路) | 替換單一檔案 |
-
-### 🚀 實際運作效能影響
-
-| 場景 | ccusage (TypeScript) | ccusage_go |
-|------|---------------------|------------|
-| **全新安裝** | 安裝 Node.js + npm install | 下載即可執行 |
-| **啟動時記憶體** | ~240 MB (Node.js 初始化) | ~10 MB |
-| **尖峰記憶體** | ~419 MB | ~54 MB |
-| **CPU 使用率 (live 模式)** | 120.3% (多核心) | 9.8% |
-| **系統影響** | 明顯 | 極小 |
-
-*雖然 ccusage 的 npm 套件較小（1 MB），但需要 Node.js 執行環境。ccusage_go 在單一 3.5-4 MB 下載中提供完整解決方案，運作時**記憶體使用量減少 87%**，**CPU 使用量減少 92%**。*
-
 ## 功能特色
 
 ### ✅ 已實作功能
@@ -199,23 +147,9 @@ sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
 
 ## 功能比較
 
-| 功能 | TypeScript 版本 | Go 版本 | 狀態 |
-|------|----------------|---------|------|
-| `daily` 指令 | ✅ | ✅ | 完成 |
-| `monthly` 指令 | ✅ | ✅ | 完成 |
-| `weekly` 指令 | ✅ | ✅ | 完成 |
-| `session` 指令 | ✅ | ✅ | 完成 |
-| `blocks` 指令 | ✅ | ✅ | 完成 |
-| `blocks --live` | ✅ | ✅ | 增強漸變效果 |
-| `monitor` 指令 | ✅ | ✅ | 完成 |
-| `statusline` (Beta) | ✅ | ❌ | 未實作 |
-| JSON 輸出 | ✅ | ✅ | 完成 |
-| CSV 輸出 | ✅ | ✅ | 完成 |
-| `--project` 過濾 | ✅ | ❌ | 未實作 |
-| `--instances` 分組 | ✅ | ❌ | 未實作 |
-| `--locale` 選項 | ✅ | ❌ | 未實作 |
-| MCP 整合 | ✅ | 🚧 | 部分完成 |
-| 離線模式 | ✅ | ✅ | 完成 |
+目前以本機 Rust 版 ccusage 為參考，支援 18 種來源、統一報表、statusline、
+專案分組、模型與工作區報表、設定檔和自訂定價。
+請參閱下方「統一多來源報表」。
 
 ## 技術堆疊
 
@@ -293,17 +227,38 @@ ccusage_go/
 
 - [ ] 實作剩餘的 TypeScript 功能
 - [ ] 為主要平台新增預編譯版本
-- [ ] 增強 MCP 整合
 - [ ] 新增更多自訂選項
-- [ ] 實作 `--project` 和 `--instances` 過濾器
+- [x] 實作 `--project` 和 `--instances` 過濾器
 - [ ] 新增國際化支援
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SDpower/ccusage_go&type=Date)](https://star-history.com/#SDpower/ccusage_go&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=RedwindA/ccusage_go&type=Date)](https://star-history.com/#RedwindA/ccusage_go&Date)
 
 ---
 
 <p align="center">
   使用 Go 語言 ❤️ 打造
 </p>
+
+## 統一多來源報表
+
+新版命令對齊本機 Rust 版 ccusage 的使用方式：`ccusage daily` 彙整所有偵測到的
+來源，`ccusage claude daily` 或 `ccusage codex daily` 則只查詢指定來源。
+支援 Claude、Codex、OpenCode、Amp、Droid、Codebuff、Hermes、pi、Goose、
+OpenClaw、Kilo、Kimi、Qwen、Copilot、Gemini、Antigravity、Grok、ZCode。
+
+```bash
+ccusage daily --offline --last 7 --by-agent
+ccusage daily --sections monthly,session --json --no-cost
+ccusage claude daily --instances --project myproject
+ccusage claude workspace --breakdown
+ccusage codex model --speed fast
+ccusage blocks --json --offline
+ccusage statusline --cost-source both
+```
+
+日期篩選支援 `YYYY-MM-DD` 與 `YYYYMMDD`，並在指定時區依日、週、月分組。
+`--last N` 包含目前所在的曆日、週或月，不能與 `--since` / `--until` 同時使用。
+設定檔支援共用預設值、命令設定、自訂模型定價和具名 pi 儲存區，命令列參數優先。
+保留 Go 版 CSV、會話名稱篩選和即時監控。

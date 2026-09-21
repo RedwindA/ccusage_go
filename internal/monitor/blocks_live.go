@@ -17,12 +17,12 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
-	"github.com/sdpower/ccusage-go/internal/calculator"
-	"github.com/sdpower/ccusage-go/internal/loader"
-	"github.com/sdpower/ccusage-go/internal/output"
-	"github.com/sdpower/ccusage-go/internal/pricing"
-	"github.com/sdpower/ccusage-go/internal/types"
-	"github.com/sdpower/ccusage-go/internal/usage"
+	"github.com/RedwindA/ccusage_go/internal/calculator"
+	"github.com/RedwindA/ccusage_go/internal/loader"
+	"github.com/RedwindA/ccusage_go/internal/output"
+	"github.com/RedwindA/ccusage_go/internal/pricing"
+	"github.com/RedwindA/ccusage_go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/usage"
 )
 
 // Burn rate thresholds for indicators
@@ -33,14 +33,17 @@ const (
 
 // BlocksLiveConfig contains configuration for live monitoring
 type BlocksLiveConfig struct {
-	DataPath         string
-	TokenLimit       int
-	RefreshInterval  time.Duration
-	SessionLength    int
-	NoColor          bool
-	Timezone         *time.Location
-	UseGradient      bool  // Enable gradient progress bars
-	OptimizeMemory   bool  // Enable memory optimization (only load recent data)
+	Calculator      *calculator.Calculator
+	SessionDuration time.Duration
+	NoCost          bool
+	DataPath        string
+	TokenLimit      int
+	RefreshInterval time.Duration
+	SessionLength   int
+	NoColor         bool
+	Timezone        *time.Location
+	UseGradient     bool // Enable gradient progress bars
+	OptimizeMemory  bool // Enable memory optimization (only load recent data)
 }
 
 // BlocksLiveModel represents the state of the live monitor
@@ -125,7 +128,11 @@ func (m *BlocksLiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if changed || m.activeBlock == nil {
 			// Data changed or no active block yet — recalculate
-			blocks := m.calculator.IdentifySessionBlocks(entries, m.config.SessionLength)
+			duration := m.config.SessionDuration
+			if duration <= 0 {
+				duration = time.Duration(m.config.SessionLength) * time.Hour
+			}
+			blocks := m.calculator.IdentifySessionBlocksDuration(entries, duration)
 			m.activeBlock = nil
 			for i := range blocks {
 				if blocks[i].IsActive {
@@ -168,7 +175,7 @@ func (m *BlocksLiveModel) View() string {
 		waitingStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("226")).
 			Bold(true)
-		return waitingStyle.Render("No active session block found. Waiting...") + 
+		return waitingStyle.Render("No active session block found. Waiting...") +
 			"\n\nPress 'q' to quit."
 	}
 
@@ -187,16 +194,16 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 	remaining := block.EndTime.Sub(now)
 	sessionDuration := elapsed + remaining
 	sessionPercent := float64(elapsed) / float64(sessionDuration) * 100
-	
+
 	// Calculate burn rate
 	burnRate := calculator.CalculateBurnRate(*block)
-	
+
 	// Calculate projection
 	projection := calculator.ProjectBlockUsage(*block)
 
 	// Create a buffer for the table
 	var buf bytes.Buffer
-	
+
 	// Create table with tablewriter v1.0.9 API
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
@@ -214,9 +221,9 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 				Alignment: tw.CellAlignment{Global: tw.AlignLeft}, // 內容左對齊
 				Padding: tw.CellPadding{
 					Global: tw.Padding{
-						Bottom: " ",   // 在儲存格下方增加一個空格
-						Left:   " ",   // 左側保持一個空格
-						Right:  " ",   // 右側保持一個空格
+						Bottom: " ", // 在儲存格下方增加一個空格
+						Left:   " ", // 左側保持一個空格
+						Right:  " ", // 右側保持一個空格
 					},
 				},
 			},
@@ -226,15 +233,15 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		}),
 		tablewriter.WithHeaderAutoFormat(tw.Off),
 	)
-	
+
 	// Title row - use Header for center alignment
 	title := "CLAUDE CODE - LIVE TOKEN USAGE MONITOR (WITH GO)"
 	titleStyle := lipgloss.NewStyle().Bold(true)
 	table.Header([]string{titleStyle.Render(title)})
-	
+
 	// SESSION section
 	sessionLine := m.renderCompactSectionAsString(
-		"⏱️", "SESSION", 
+		"⏱️", "SESSION",
 		sessionPercent,
 		fmt.Sprintf("Started: %s  Elapsed: %s  Remaining: %s (%s)",
 			block.StartTime.In(m.config.Timezone).Format("03:04:05 PM"),
@@ -245,13 +252,13 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		fmt.Sprintf("%.1f%%", sessionPercent),
 	)
 	table.Append([]string{sessionLine})
-	
+
 	// USAGE section
 	usagePercent := 0.0
 	if m.config.TokenLimit > 0 {
 		usagePercent = float64(totalTokens) / float64(m.config.TokenLimit) * 100
 	}
-	
+
 	burnRateIndicator := ""
 	burnRateValue := 0
 	if burnRate != nil {
@@ -264,19 +271,22 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 			burnRateIndicator = " ✓ NORMAL"
 		}
 	}
-	
+
 	usageInfo := fmt.Sprintf("Tokens: %s (Burn Rate: %s token/min%s)  Limit: %s  Cost: $%.2f",
 		formatNumberWithCommas(totalTokens),
 		formatNumberWithCommas(burnRateValue),
 		burnRateIndicator,
 		formatNumberWithCommas(m.config.TokenLimit),
 		block.CostUSD)
-	
+	if m.config.NoCost {
+		usageInfo = strings.Split(usageInfo, "  Cost:")[0]
+	}
+
 	usageRightText := fmt.Sprintf("%.1f%% (%s/%s)",
 		usagePercent,
 		formatTokensShort(totalTokens),
 		formatTokensShort(m.config.TokenLimit))
-	
+
 	// Determine usage color
 	usageColor := "green"
 	if usagePercent > 80 {
@@ -285,7 +295,7 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 	if usagePercent > 95 {
 		usageColor = "red"
 	}
-	
+
 	usageLine := m.renderCompactSectionAsString(
 		"🔥", "USAGE",
 		usagePercent,
@@ -294,11 +304,11 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		usageRightText,
 	)
 	table.Append([]string{usageLine})
-	
+
 	// PROJECTION section
 	if projection != nil && m.config.TokenLimit > 0 {
 		projPercent := float64(projection.TotalTokens) / float64(m.config.TokenLimit) * 100
-		
+
 		// Determine status
 		var statusText string
 		if projPercent > 100 {
@@ -308,17 +318,20 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		} else {
 			statusText = "✅ WITHIN LIMIT"
 		}
-		
+
 		projInfo := fmt.Sprintf("Status: %s  Tokens: %s  Cost: $%.2f",
 			statusText,
 			formatNumberWithCommas(projection.TotalTokens),
 			projection.TotalCost)
-		
+		if m.config.NoCost {
+			projInfo = strings.Split(projInfo, "  Cost:")[0]
+		}
+
 		projRightText := fmt.Sprintf("%.1f%% (%s/%s)",
 			projPercent,
 			formatTokensShort(projection.TotalTokens),
 			formatTokensShort(m.config.TokenLimit))
-		
+
 		// Determine projection color
 		projColor := "green"
 		if projPercent > 80 {
@@ -327,7 +340,7 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		if projPercent > 95 {
 			projColor = "red"
 		}
-		
+
 		projectionLine := m.renderCompactSectionAsString(
 			"📈", "PROJECTION",
 			projPercent,
@@ -337,7 +350,7 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		)
 		table.Append([]string{projectionLine})
 	}
-	
+
 	// LIMITS section
 	limitsSection := m.renderLimitsSection()
 	if limitsSection != "" {
@@ -358,27 +371,27 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 		modelsText += "none"
 	}
 	table.Append([]string{modelsText})
-	
+
 	// Footer (inside the box) - use Footer for center alignment
 	footerText := fmt.Sprintf("↻ Refreshing every %ds  •  Press Ctrl+C to stop",
 		int(m.config.RefreshInterval.Seconds()))
 	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240"))
 	table.Footer([]string{footerStyle.Render(footerText)})
-	
+
 	// Render the table
 	table.Render()
-	
+
 	// If terminal is wider than max width, center the entire table
 	if m.width > 120 {
 		tableOutput := buf.String()
 		lines := strings.Split(tableOutput, "\n")
 		var centeredOutput strings.Builder
-		
+
 		// Calculate left padding for centering
 		leftPadding := (m.width - 120) / 2
 		paddingStr := strings.Repeat(" ", leftPadding)
-		
+
 		// Add padding to each line
 		for i, line := range lines {
 			if line != "" {
@@ -388,10 +401,10 @@ func (m *BlocksLiveModel) renderActiveBlock() string {
 				centeredOutput.WriteString("\n")
 			}
 		}
-		
+
 		return centeredOutput.String()
 	}
-	
+
 	return buf.String()
 }
 
@@ -460,7 +473,7 @@ func (m *BlocksLiveModel) renderLimitsSection() string {
 func (m *BlocksLiveModel) renderCompactSectionAsString(icon, title string, percent float64, info, barColor, rightText string) string {
 	// Build left part (icon + title)
 	leftPart := fmt.Sprintf("%s %-9s", icon, title)
-	
+
 	// Determine progress bar width based on terminal width
 	// Min width: 95, Max width: 120
 	progressBarWidth := 40 // Default for minimum width
@@ -472,10 +485,10 @@ func (m *BlocksLiveModel) renderCompactSectionAsString(icon, title string, perce
 			progressBarWidth = 45 // Medium width
 		}
 	}
-	
+
 	// Build progress bar
 	progressBar := m.renderEnhancedProgressBar(percent, progressBarWidth, barColor)
-	
+
 	// Build the complete line with dynamic spacing
 	// Adjust spacing based on progress bar width
 	rightPadding := 20
@@ -487,7 +500,7 @@ func (m *BlocksLiveModel) renderCompactSectionAsString(icon, title string, perce
 		rightPadding = 10
 	}
 	topLine := fmt.Sprintf("%-12s %s %*s", leftPart, progressBar, rightPadding, rightText)
-	
+
 	// Add spacing above and below for better readability
 	return fmt.Sprintf("\n%s\n%s\n", topLine, info)
 }
@@ -495,25 +508,25 @@ func (m *BlocksLiveModel) renderCompactSectionAsString(icon, title string, perce
 // renderCompactSection renders a compact single-line section with progress bar
 func (m *BlocksLiveModel) renderCompactSection(icon, title string, percent float64, info, barColor, rightText string, boxWidth int) string {
 	// Calculate layout widths
-	leftPartWidth := 12  // Icon + title
+	leftPartWidth := 12    // Icon + title
 	progressBarWidth := 50 // Progress bar
 	rightPartWidth := len(rightText) + 2
-	
+
 	// Build left part (icon + title)
 	leftPart := fmt.Sprintf("%s %-9s", icon, title)
-	
+
 	// Build progress bar
 	progressBar := m.renderEnhancedProgressBar(percent, progressBarWidth, barColor)
-	
+
 	// Build the line
 	line := fmt.Sprintf("│ %-*s %s %*s │\n",
 		leftPartWidth, leftPart,
 		progressBar,
 		rightPartWidth, rightText)
-	
+
 	// Add info line below
 	infoLine := fmt.Sprintf("│ %-*s │\n", boxWidth-4, info)
-	
+
 	return line + infoLine
 }
 
@@ -525,12 +538,12 @@ func (m *BlocksLiveModel) renderEnhancedProgressBar(percent float64, width int, 
 	if percent > 100 {
 		percent = 100
 	}
-	
+
 	filled := int(percent * float64(width) / 100)
 	if filled > width {
 		filled = width
 	}
-	
+
 	// Use gradient or solid color based on configuration
 	if m.config.UseGradient && !m.config.NoColor {
 		return m.renderGradientProgressBar(percent, width, colorName)
@@ -546,20 +559,20 @@ func (m *BlocksLiveModel) renderGradientProgressBar(percent float64, width int, 
 	if percent > 100 {
 		percent = 100
 	}
-	
+
 	filled := int(percent * float64(width) / 100)
 	if filled > width {
 		filled = width
 	}
-	
+
 	// Create cache key
 	cacheKey := fmt.Sprintf("%s-%d-%d", colorName, width, filled)
-	
+
 	// Check cache first
 	if m.gradientCache == nil {
 		m.gradientCache = make(map[string][]string)
 	}
-	
+
 	// Define gradient colors based on type
 	var startColor, endColor string
 	switch colorName {
@@ -584,35 +597,35 @@ func (m *BlocksLiveModel) renderGradientProgressBar(percent float64, width int, 
 		startColor = "#3b82f6"
 		endColor = "#60a5fa"
 	}
-	
+
 	// Check if we have cached colors for this configuration
 	if cachedColors, ok := m.gradientCache[cacheKey]; ok && len(cachedColors) == filled {
 		// Use cached colors
 		var bar strings.Builder
 		bar.WriteString("[")
-		
+
 		for _, hexColor := range cachedColors {
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor))
 			bar.WriteString(style.Render("█"))
 		}
-		
+
 		// Add empty portion
 		emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 		bar.WriteString(emptyStyle.Render(strings.Repeat("░", width-filled)))
 		bar.WriteString("]")
-		
+
 		return bar.String()
 	}
-	
+
 	// Parse colors
 	c1, err1 := colorful.Hex(startColor)
 	c2, err2 := colorful.Hex(endColor)
-	
+
 	// Fallback to solid color if parsing fails
 	if err1 != nil || err2 != nil {
 		return m.renderSolidProgressBar(percent, width, colorName)
 	}
-	
+
 	// Calculate and cache gradient colors
 	gradientColors := make([]string, filled)
 	if filled > 0 {
@@ -622,32 +635,32 @@ func (m *BlocksLiveModel) renderGradientProgressBar(percent float64, width int, 
 			if filled == 1 {
 				blend = 0.5 // Middle color if only one character
 			}
-			
+
 			// Blend colors in LUV space for smooth transitions
 			blendedColor := c1.BlendLuv(c2, blend)
 			gradientColors[i] = blendedColor.Hex()
 		}
-		
+
 		// Cache the calculated colors
 		m.gradientCache[cacheKey] = gradientColors
 	}
-	
+
 	// Build gradient progress bar
 	var bar strings.Builder
 	bar.WriteString("[")
-	
+
 	// Render filled portion with gradient
 	for _, hexColor := range gradientColors {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color(hexColor))
 		bar.WriteString(style.Render("█"))
 	}
-	
+
 	// Add empty portion
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
 	bar.WriteString(emptyStyle.Render(strings.Repeat("░", width-filled)))
-	
+
 	bar.WriteString("]")
-	
+
 	return bar.String()
 }
 
@@ -659,19 +672,19 @@ func (m *BlocksLiveModel) renderSolidProgressBar(percent float64, width int, col
 	if percent > 100 {
 		percent = 100
 	}
-	
+
 	filled := int(percent * float64(width) / 100)
 	if filled > width {
 		filled = width
 	}
-	
+
 	// Select color based on name
 	var color lipgloss.Color
 	switch colorName {
 	case "cyan":
-		color = lipgloss.Color("51")  // Cyan
+		color = lipgloss.Color("51") // Cyan
 	case "green":
-		color = lipgloss.Color("46")  // Green
+		color = lipgloss.Color("46") // Green
 	case "yellow":
 		color = lipgloss.Color("226") // Yellow
 	case "red":
@@ -679,16 +692,16 @@ func (m *BlocksLiveModel) renderSolidProgressBar(percent float64, width int, col
 	default:
 		color = lipgloss.Color("252") // Default white
 	}
-	
+
 	// Build the progress bar
 	filledStyle := lipgloss.NewStyle().Foreground(color)
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	
+
 	bar := "["
 	bar += filledStyle.Render(strings.Repeat("█", filled))
 	bar += emptyStyle.Render(strings.Repeat("░", width-filled))
 	bar += "]"
-	
+
 	return bar
 }
 
@@ -719,16 +732,16 @@ func (m *BlocksLiveModel) renderProgressBar(current, total time.Duration, width 
 	if total == 0 {
 		return ""
 	}
-	
+
 	percent := float64(current) / float64(total)
 	filled := int(percent * float64(width))
-	
+
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	
+
 	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	percentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	
-	return fmt.Sprintf("[%s] %s", 
+
+	return fmt.Sprintf("[%s] %s",
 		barStyle.Render(bar),
 		percentStyle.Render(fmt.Sprintf("%.1f%%", percent*100)))
 }
@@ -763,7 +776,7 @@ func blocksTickCmd(d time.Duration) tea.Cmd {
 func formatDuration(d time.Duration) string {
 	hours := int(d.Hours())
 	minutes := int(d.Minutes()) % 60
-	
+
 	if hours > 0 {
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
@@ -789,13 +802,18 @@ func StartBlocksLiveMonitoring(config BlocksLiveConfig) error {
 	}
 
 	// Initialize services
-	pricingService := pricing.NewService()
-	calc := calculator.New(pricingService)
+	calc := config.Calculator
+	if calc == nil {
+		calc = calculator.New(pricing.NewService())
+	}
 	dataLoader := loader.New()
-	
+	if config.Timezone != nil {
+		dataLoader.SetTimezone(config.Timezone)
+	}
+
 	// Optimize for live mode: reduce concurrent file reads to minimize CPU usage
 	dataLoader.SetMaxWorkers(3) // Even more conservative for live monitoring
-	
+
 	// Enable debug mode if DEBUG env var is set
 	if os.Getenv("DEBUG") != "" {
 		dataLoader.SetDebug(true)

@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 // FileState tracks the state of a single JSONL file
@@ -19,10 +18,11 @@ type FileState struct {
 
 // ProjectCache holds cached data for a single project directory
 type ProjectCache struct {
-	DirPath   string
-	Files     map[string]FileState // filename → state
-	Entries   []types.UsageEntry   // deduplicated, cost-calculated entries
-	DedupeMap map[string]bool      // uniqueHash → seen (per-project dedup)
+	DirPath     string
+	Files       map[string]FileState          // filename → state
+	Entries     []types.UsageEntry            // deduplicated, cost-calculated entries
+	fileEntries map[string][]types.UsageEntry // native records per file, before cross-file selection
+	DedupeMap   map[string]bool               // uniqueHash → seen (per-project dedup)
 }
 
 // IncrementalCache is the top-level cache keyed by project directory path
@@ -81,57 +81,24 @@ func (ic *IncrementalCache) Update(
 			continue
 		}
 
-		dirEntries, err := os.ReadDir(projectDir)
+		discovered, err := l.findJSONLFiles(projectDir)
 		if err != nil {
 			continue
 		}
-
-		// Collect current JSONL files with their state.
-		// Sub-agent files live in subagents/ and are tracked under the
-		// "subagents/<filename>" key so the file → state map is unique.
 		currentFiles := make(map[string]FileState)
-		for _, de := range dirEntries {
-			if de.IsDir() {
-				continue
-			}
-			if !strings.HasSuffix(strings.ToLower(de.Name()), ".jsonl") {
-				continue
-			}
-			info, err := de.Info()
+		for _, path := range discovered {
+			info, err := os.Stat(path)
 			if err != nil {
 				continue
 			}
 			if modifiedWithin > 0 && info.ModTime().Before(cutoffTime) {
 				continue
 			}
-			currentFiles[de.Name()] = FileState{
-				ModTime: info.ModTime(),
-				Size:    info.Size(),
+			relative, err := filepath.Rel(projectDir, path)
+			if err != nil {
+				continue
 			}
-		}
-
-		subagentsDir := filepath.Join(projectDir, "subagents")
-		if subEntries, subErr := os.ReadDir(subagentsDir); subErr == nil {
-			for _, se := range subEntries {
-				if se.IsDir() {
-					continue
-				}
-				if !strings.HasSuffix(strings.ToLower(se.Name()), ".jsonl") {
-					continue
-				}
-				info, err := se.Info()
-				if err != nil {
-					continue
-				}
-				if modifiedWithin > 0 && info.ModTime().Before(cutoffTime) {
-					continue
-				}
-				key := filepath.Join("subagents", se.Name())
-				currentFiles[key] = FileState{
-					ModTime: info.ModTime(),
-					Size:    info.Size(),
-				}
-			}
+			currentFiles[relative] = FileState{ModTime: info.ModTime(), Size: info.Size()}
 		}
 
 		if len(currentFiles) == 0 {
@@ -169,6 +136,7 @@ func (ic *IncrementalCache) Update(
 			// Reset project cache for full reload
 			pc.Files = make(map[string]FileState)
 			pc.Entries = nil
+			pc.fileEntries = nil
 			pc.DedupeMap = make(map[string]bool)
 		}
 
@@ -192,7 +160,10 @@ func (ic *IncrementalCache) Update(
 			continue // No changes in this project
 		}
 
-		// Load changed files
+		// Keep each file's latest complete snapshot; usage can grow or disappear.
+		if pc.fileEntries == nil {
+			pc.fileEntries = make(map[string][]types.UsageEntry)
+		}
 		ic.dirty = true
 		for _, filePath := range filesToLoad {
 			fileEntries, _, loadErr := l.loadFileWithDedupe(filePath, pc.DedupeMap)
@@ -212,8 +183,14 @@ func (ic *IncrementalCache) Update(
 				}
 			}
 
-			pc.Entries = append(pc.Entries, fileEntries...)
+			pc.fileEntries[filePath] = fileEntries
 		}
+
+		pc.Entries = nil
+		for _, entries := range pc.fileEntries {
+			pc.Entries = append(pc.Entries, entries...)
+		}
+		pc.Entries = deduplicateUsage(pc.Entries)
 
 		// Update file states
 		for name, state := range currentFiles {
@@ -233,20 +210,10 @@ func (ic *IncrementalCache) Update(
 	}
 
 	merged := make([]types.UsageEntry, 0, totalLen)
-	// Global dedup across projects (for safety, though cross-project dupes are rare)
-	globalDedup := make(map[string]bool, totalLen)
 	for _, pc := range ic.projects {
-		for _, entry := range pc.Entries {
-			key := entryDedupeKey(entry)
-			if key != "" && globalDedup[key] {
-				continue
-			}
-			if key != "" {
-				globalDedup[key] = true
-			}
-			merged = append(merged, entry)
-		}
+		merged = append(merged, pc.Entries...)
 	}
+	merged = deduplicateUsage(merged)
 
 	ic.mergedEntries = merged
 	return merged, true, nil

@@ -1,7 +1,7 @@
 # ccusage_go
 
 <p align="center">
-  <strong>🚀 A high-performance Go implementation of Claude Code usage analyzer</strong>
+  <strong>Usage and cost reports for Claude Code, Codex, and other coding agents</strong>
 </p>
 
 <p align="center">
@@ -19,89 +19,62 @@
 
 ## About
 
-`ccusage_go` is a Go implementation of the popular [ccusage](https://github.com/ryoppippi/ccusage) tool by [@ryoppippi](https://github.com/ryoppippi). This version maintains compatibility with the original TypeScript version while offering significant performance improvements and reduced memory footprint.
+`ccusage_go` is a Go implementation of the popular [ccusage](https://github.com/ryoppippi/ccusage) tool by [@ryoppippi](https://github.com/ryoppippi). This repository builds on [SDpower/ccusage_go](https://github.com/SDpower/ccusage_go), adding unified reports for multiple coding agents while retaining Go-specific reporting and live monitoring features.
 
 ## Why Go Version?
 
-### 🎯 Performance Benefits (Real-world Measurements)
+- A native binary with no Node.js runtime requirement.
+- Streaming JSONL and read-only SQLite support for local agent history.
+- Embedded model pricing for reproducible offline reports.
+- Go-specific CSV export and a live terminal dashboard.
 
-#### blocks --live Real-time Monitoring Performance
-
-| Metric | ccusage (TypeScript) | ccusage_go | Improvement |
-|--------|---------------------|------------|-------------|
-| **Peak Memory Usage** | ~446 MB | ~46 MB | **90% reduction** |
-| **Peak CPU Usage** | 40.0% | 142% (startup only) | See note† |
-| **Steady-state Memory** | ~263 MB | ~45 MB | **83% reduction** |
-| **Process Count** | 3 (script+npm+node) | 2 (script+binary) | Simpler |
-| **Startup Memory** | ~240 MB (Node.js) | ~10 MB | **96% reduction** |
-| **Download Size** | ~1 MB* | **3.5-4 MB** compressed | See note below |
-| **Runtime Required** | Node.js (~100MB) | None (single binary) | **No runtime needed** |
-
-*Test environment: macOS, Apple Silicon, monitoring 10+ projects, 15-second measurements after 5s warmup*
-†CPU: Go version has higher peak during initial file loading but drops to <10% during monitoring
-
-**Note on Download Size**: While the ccusage npm package is only ~1 MB, it requires Node.js runtime (~100 MB) to be pre-installed. The ccusage_go binary is completely self-contained at 3.5-4 MB compressed, requiring no runtime or dependencies.
-
-**Performance Testing**: The above measurements were obtained using our monitoring script (`docs/monitor_ccusage.sh`) which tracks all child processes including Node.js runtime. You can reproduce these tests with:
-```bash
-# Monitor ccusage (TypeScript version)
-./docs/monitor_ccusage.sh
-
-# Monitor ccusage_go
-./docs/monitor_ccusage.sh ccusage_go
-```
-
-#### Other Performance Metrics
-
-| Metric | TypeScript Version | Go Version | Notes |
-|--------|-------------------|------------|-------|
-| Startup Time | ~300ms | ~50ms | **6x faster** |
-| Resource Footprint | Node process + npm packages | Single binary | Cleaner |
-| System Impact | Moderate | Minimal | Almost no system impact |
-
-### 📦 Distribution Advantages
-
-- **Ultra-Compact**: Only **3.5-4 MB** download (compressed)
-- **Single Binary**: ~10 MB executable, no runtime required
-- **Zero Dependencies**: No Node.js, npm, or any other dependencies
-- **Instant Start**: Direct execution without installation process
-- **Cross-Platform**: Native binaries for all major platforms
+The previous download-size and TypeScript performance comparisons described an
+older Claude-only release. They do not describe the current binary, which also
+embeds SQLite and expanded pricing catalogs.
 
 ## Installation
 
-### From Source
+### Quick Install (Linux / macOS)
 
-```bash
-# Clone the repository
-git clone https://github.com/SDpower/ccusage_go.git
-cd ccusage_go
+```sh
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/latest/download/install.sh | sh
+```
 
-# Build
-make build
+The installer detects Linux/macOS and amd64/arm64, verifies the release archive's
+SHA-256 checksum, and installs `ccusage_go` into `~/.local/bin` without sudo.
+Add that directory to your PATH if needed:
 
-# Install to system
-make install
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+ccusage_go --version
+ccusage_go daily --offline
+```
+
+Run the same command to upgrade. To choose a version or installation directory:
+
+```sh
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.15.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.15.0
 ```
 
 ### Pre-built Binaries
 
-Download from [GitHub Releases](https://github.com/SDpower/ccusage_go/releases)
+[GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) includes Linux,
+macOS, and Windows archives for amd64 and arm64, plus `checksums.txt`.
+On Windows, extract the matching ZIP and rename the executable to `ccusage_go.exe`.
 
-#### Quick Install (macOS/Linux)
+### From Source
 
-```bash
-# macOS Apple Silicon
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-darwin-arm64.tar.gz | tar xz
-sudo mv ccusage_go-darwin-arm64 /usr/local/bin/ccusage_go
-
-# macOS Intel
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-darwin-amd64.tar.gz | tar xz
-sudo mv ccusage_go-darwin-amd64 /usr/local/bin/ccusage_go
-
-# Linux x64
-curl -L https://github.com/SDpower/ccusage_go/releases/download/v0.14.0/ccusage_go-linux-amd64.tar.gz | tar xz
-sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
+```sh
+git clone https://github.com/RedwindA/ccusage_go.git
+cd ccusage_go
+make build
+./bin/ccusage_go --help
 ```
+
+Alternatively, `go install github.com/RedwindA/ccusage_go/cmd/ccusage@latest`
+installs the command as `ccusage` in your Go bin directory. In this README,
+`ccusage_go` refers to the pre-built binary; both commands support the same options.
 
 ## Usage
 
@@ -147,30 +120,6 @@ sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
 ./ccusage_go blocks --recent
 ```
 
-## Why Choose ccusage_go?
-
-### 💾 Storage & Runtime Comparison
-
-| Aspect | ccusage (TypeScript) | ccusage_go |
-|--------|---------------------|------------|
-| **Package Download** | ~1 MB (npm package) | **3.5-4 MB** (compressed binary) |
-| **Runtime Requirement** | Node.js (~100 MB) | **None** |
-| **Total Storage Need** | ~101 MB (Node.js + package) | **~10 MB** (single binary) |
-| **Dependencies** | npm packages + Node.js runtime | **Zero dependencies** |
-| **Update Process** | npm update (network required) | Replace single file |
-
-### 🚀 Real-World Performance Impact
-
-| Scenario | ccusage (TypeScript) | ccusage_go |
-|----------|---------------------|------------|
-| **Fresh Install** | Install Node.js + npm install | Download & run |
-| **Memory at Startup** | ~240 MB (Node.js init) | ~10 MB |
-| **Memory at Peak** | ~419 MB | ~54 MB |
-| **CPU Usage (live mode)** | 120.3% (multi-core) | 9.8% |
-| **System Impact** | Noticeable | Minimal |
-
-*While ccusage's npm package is smaller (1 MB), it requires Node.js runtime. The ccusage_go provides a complete solution in a single 3.5-4 MB download with **87% less memory usage** and **92% less CPU usage** during operation.*
-
 ## Features
 
 ### ✅ Implemented Features
@@ -197,25 +146,60 @@ sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
 - **"WITH GO" Branding**: All reports clearly marked as Go version
 - **Unified Model Labels**: Support for latest Claude model formats (Opus-4.6, Sonnet-4.6, Opus-4.5, Sonnet-4.5, Haiku-4.5)
 
-## Feature Comparison
+## Unified reports and source commands
 
-| Feature | TypeScript Version | Go Version | Status |
-|---------|-------------------|------------|--------|
-| `daily` command | ✅ | ✅ | Complete |
-| `monthly` command | ✅ | ✅ | Complete |
-| `weekly` command | ✅ | ✅ | Complete |
-| `session` command | ✅ | ✅ | Complete |
-| `blocks` command | ✅ | ✅ | Complete |
-| `blocks --live` | ✅ | ✅ | Enhanced with gradients |
-| `monitor` command | ✅ | ✅ | Complete |
-| `statusline` (Beta) | ✅ | ❌ | Not implemented |
-| JSON output | ✅ | ✅ | Complete |
-| CSV output | ✅ | ✅ | Complete |
-| `--project` filter | ✅ | ❌ | Not implemented |
-| `--instances` grouping | ✅ | ❌ | Not implemented |
-| `--locale` option | ✅ | ❌ | Not implemented |
-| MCP integration | ✅ | 🚧 | Partial |
-| Offline mode | ✅ | ✅ | Complete |
+Running `ccusage_go`
+without a subcommand produces a daily report across detected sources. Use a source
+prefix to focus on one agent:
+
+```bash
+ccusage_go daily --offline --last 7 --by-agent
+ccusage_go daily --sections monthly,session --json --no-cost
+ccusage_go claude daily --project myproject --instances
+ccusage_go claude workspace --breakdown --since 2026-01-01
+ccusage_go codex model --speed fast --offline
+ccusage_go codex session --json
+ccusage_go pi daily --pi-path /path/to/sessions,/archive/sessions
+ccusage_go blocks --json --offline
+ccusage_go statusline --cost-source both
+```
+
+Supported sources: Claude Code, Codex, OpenCode, Amp, Droid, Codebuff, Hermes,
+pi-agent, Goose, OpenClaw, Kilo, Kimi, Qwen, GitHub Copilot CLI, Gemini CLI,
+Antigravity, Grok Build CLI, and ZCode. SQLite stores are read without a separate
+SQLite installation. Existing Go CSV output, session-name filters, and live
+monitoring remain available.
+
+Daily, weekly, and monthly reports share inclusive `--since`/`--until` filters
+(YYYY-MM-DD or YYYYMMDD), timezone-aware grouping, `--last N`, sorting, compact
+output, JSON, CSV, and model breakdowns. `--last` counts calendar periods including
+the current period and cannot be combined with explicit date bounds. Claude,
+Codex, and Droid also provide `model` and `workspace` reports. Workspace grouping
+uses the full recorded workspace path.
+
+`--mode auto` uses available recorded costs, `--mode calculate` recalculates them,
+and `--mode display` uses recorded costs only, with source-specific billing rules.
+`--offline` uses embedded pricing snapshots; `--no-offline` enables online refresh.
+Custom per-model overrides are supported in JSON configuration. `--no-cost`
+removes cost columns and JSON fields, including nested breakdowns. `--jq` pipes
+JSON through an installed `jq` executable.
+
+Configuration is discovered in `.ccusage/ccusage.json`, then the Claude config
+locations, or selected with `--config`. Explicit CLI arguments take precedence.
+For example:
+
+```json
+{
+  "defaults": {"offline": true, "timezone": "UTC"},
+  "commands": {"daily": {"breakdown": true}},
+  "pi": {"stores": [{"name": "archive", "path": "/data/pi-archive"}]}
+}
+```
+
+Named pi stores contribute to unified reports and must not overlap other pi
+stores. On Linux, root can use `--all-users` to scan system accounts' default
+stores grouped by username; this ignores custom source paths and named stores.
+
 
 ## Technical Stack
 
@@ -225,6 +209,10 @@ sudo mv ccusage_go-linux-amd64 /usr/local/bin/ccusage_go
 - **Table Rendering**: [tablewriter](https://github.com/olekukonko/tablewriter)
 - **Styling**: [Lip Gloss](https://github.com/charmbracelet/lipgloss)
 - **Color Gradients**: [go-colorful](https://github.com/lucasb-eyer/go-colorful)
+
+## Releasing
+
+See [RELEASING.md](docs/RELEASING.md) for the tag-based release process.
 
 ## Development
 
@@ -291,16 +279,15 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Roadmap
 
-- [ ] Implement remaining TypeScript features
-- [ ] Add pre-built binaries for major platforms
-- [ ] Enhance MCP integration
+- [x] Add unified reports and adapters for multiple coding agents
+- [x] Add pre-built binaries for major platforms
 - [ ] Add more customization options
-- [ ] Implement `--project` and `--instances` filters
+- [x] Implement `--project` and `--instances` filters
 - [ ] Add internationalization support
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=SDpower/ccusage_go&type=Date)](https://star-history.com/#SDpower/ccusage_go&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=RedwindA/ccusage_go&type=Date)](https://star-history.com/#RedwindA/ccusage_go&Date)
 
 ---
 

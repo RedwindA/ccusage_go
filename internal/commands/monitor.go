@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/monitor"
+	"github.com/RedwindA/ccusage_go/internal/monitor"
 	"github.com/spf13/cobra"
 )
 

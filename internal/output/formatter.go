@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 type Formatter struct {

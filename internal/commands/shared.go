@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 func getDefaultDataPath() string {

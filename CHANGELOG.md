@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [v0.15.0] - 2026-09-21
+
+### Added
+
+- Public releases under `RedwindA/ccusage_go`, with Linux/macOS/Windows amd64
+  and arm64 archives, SHA-256 checksums, and a verified Linux/macOS installer.
+- Tag-triggered release automation gated by tests on Linux, macOS, and Windows.
+
+- Unified daily, weekly, monthly and session commands, plus focused commands for
+  18 coding-agent sources from the local Rust-first ccusage reference.
+- Native JSON/JSONL, SQLite and Antigravity protobuf readers; model and workspace
+  reports for Claude, Codex and Droid.
+- Calendar-period filters, project/instance grouping, agent breakdowns, sections,
+  no-cost output, JSON configuration, custom pricing, named pi stores and Linux
+  all-users reports.
+- Claude statusline hook with context usage, cost source selection, burn rate and
+  cache invalidation; embedded LiteLLM and models.dev pricing with source rules.
+
+### Fixed
+
+- Consistent date filtering across table, JSON and CSV, including timezone/DST.
+- Claude streaming duplicate replacement, sidechain replay and advisor usage;
+  recursive incremental cache discovery and file truncation handling.
+- Source-specific cached/reasoning token accounting and cumulative usage replay.
+- Clean blocks JSON, fractional billing windows, and propagation of pricing and
+  no-cost settings into live monitoring.
+
 ## [v0.14.0] - 2026-05-08
 
 ### 🐛 Bug Fixes

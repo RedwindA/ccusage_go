@@ -1,8 +1,11 @@
-.PHONY: build clean test lint install build-all
+.PHONY: build clean test lint install build-all release-all release-linux release-darwin release-windows compress-releases
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS = -s -w -X main.version=$(VERSION)
 
 # Default target - static build with optimizations
 build:
-	CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go ./cmd/ccusage
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/ccusage_go ./cmd/ccusage
 
 # Clean build artifacts
 clean:
@@ -28,53 +31,28 @@ lint:
 
 # Install to GOPATH
 install:
-	go install ./cmd/ccusage
+	go install -ldflags="$(LDFLAGS)" ./cmd/ccusage
 
-# Multi-platform build (all static)
-build-all:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-linux-amd64 ./cmd/ccusage
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-darwin-amd64 ./cmd/ccusage
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-darwin-arm64 ./cmd/ccusage
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-windows-amd64.exe ./cmd/ccusage
+# Six supported static release targets; archives include the MIT license.
+build-all: release-all
 
-# Release builds for different platforms
 release-linux:
-	@echo "Building Linux releases..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-linux-amd64 ./cmd/ccusage
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-linux-arm64 ./cmd/ccusage
-	GOOS=linux GOARCH=386 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-linux-386 ./cmd/ccusage
-	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-linux-armv7 ./cmd/ccusage
+	VERSION=$(VERSION) GOOS=linux GOARCH=amd64 sh scripts/build-release.sh
+	VERSION=$(VERSION) GOOS=linux GOARCH=arm64 sh scripts/build-release.sh
 
 release-darwin:
-	@echo "Building macOS releases..."
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-darwin-amd64 ./cmd/ccusage
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-darwin-arm64 ./cmd/ccusage
+	VERSION=$(VERSION) GOOS=darwin GOARCH=amd64 sh scripts/build-release.sh
+	VERSION=$(VERSION) GOOS=darwin GOARCH=arm64 sh scripts/build-release.sh
 
 release-windows:
-	@echo "Building Windows releases..."
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-windows-amd64.exe ./cmd/ccusage
-	GOOS=windows GOARCH=386 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-windows-386.exe ./cmd/ccusage
-	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/ccusage_go-windows-arm64.exe ./cmd/ccusage
+	VERSION=$(VERSION) GOOS=windows GOARCH=amd64 sh scripts/build-release.sh
+	VERSION=$(VERSION) GOOS=windows GOARCH=arm64 sh scripts/build-release.sh
 
-# Build all release targets
 release-all: release-linux release-darwin release-windows
-	@echo "All release builds completed!"
+	cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt
 
-# Compress release binaries
-compress-releases:
-	@echo "Compressing release binaries..."
-	@cd bin && for file in ccusage_go-linux-* ccusage_go-darwin-*; do \
-		if [ -f $$file ]; then \
-			tar -czf $$file.tar.gz $$file; \
-			echo "Created $$file.tar.gz"; \
-		fi \
-	done
-	@cd bin && for file in ccusage_go-windows-*.exe; do \
-		if [ -f $$file ]; then \
-			zip $$file.zip $$file; \
-			echo "Created $$file.zip"; \
-		fi \
-	done
+# Archives are created by each release target.
+compress-releases: release-all
 
 # Run go mod tidy
 tidy:
@@ -97,4 +75,4 @@ dev:
 
 # Dynamic build (non-static, smaller size)
 dynamic:
-	go build -ldflags="-s -w" -o bin/ccusage_go-dynamic ./cmd/ccusage
+	go build -ldflags="$(LDFLAGS)" -o bin/ccusage_go-dynamic ./cmd/ccusage

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 // CostCalculator interface for optional cost calculation during loading
@@ -23,7 +23,7 @@ type CostCalculator interface {
 // rawRetainKeys lists raw JSONL fields that must survive Raw cleanup.
 // cache_* token fields are now first-class on UsageEntry, so they no longer
 // need preserving in Raw. usage_limit_reset_time is still consumed by blocks.
-var rawRetainKeys = []string{"usage_limit_reset_time"}
+var rawRetainKeys = []string{"usage_limit_reset_time", "cache_creation", "service_tier", "message_id", "request_id"}
 
 // clearRawExceptKeys drops every Raw entry except the named keys, keeping
 // memory bounded after first-class fields are populated.
@@ -46,10 +46,10 @@ func clearRawExceptKeys(entry *types.UsageEntry, keep []string) {
 
 // LoaderOptions configures optional loading behaviors
 type LoaderOptions struct {
-	OnlyActiveSession bool          // Only load active session data
-	ModifiedWithin    time.Duration // Only load files modified within this duration
-	MaxFiles          int           // Maximum number of files to load (0 = unlimited)
-	StreamProcessing  bool          // Enable stream processing - calculate costs immediately after reading each file
+	OnlyActiveSession bool           // Only load active session data
+	ModifiedWithin    time.Duration  // Only load files modified within this duration
+	MaxFiles          int            // Maximum number of files to load (0 = unlimited)
+	StreamProcessing  bool           // Enable stream processing - calculate costs immediately after reading each file
 	Calculator        CostCalculator // Optional calculator for stream processing
 }
 
@@ -97,13 +97,13 @@ func (l *Loader) LoadFromPathWithOptions(ctx context.Context, path string, optio
 		}
 		return nil, fmt.Errorf("path does not exist: %s", path)
 	}
-	
+
 	// Look for JSONL files in projects subdirectory
 	projectsPath := filepath.Join(path, "projects")
 	if _, err := os.Stat(projectsPath); err == nil {
 		path = projectsPath
 	}
-	
+
 	// Find files with optional filtering
 	var paths []string
 	var err error
@@ -164,13 +164,13 @@ func (l *Loader) LoadFromPathWithOptions(ctx context.Context, path string, optio
 	} else {
 		entries, err = l.LoadParallel(ctx, paths)
 	}
-	
+
 	if l.debug {
 		fmt.Fprintf(os.Stderr, "Debug: Loaded %d usage entries\n", len(entries))
 		if options != nil && options.StreamProcessing {
 			fmt.Fprintf(os.Stderr, "Debug: Stream processing enabled - costs calculated during loading\n")
 		}
-		
+
 		// Count valid entries (any entry with timestamp is valid)
 		validCount := 0
 		for _, e := range entries {
@@ -180,7 +180,7 @@ func (l *Loader) LoadFromPathWithOptions(ctx context.Context, path string, optio
 		}
 		fmt.Fprintf(os.Stderr, "Debug: %d entries have valid timestamps\n", validCount)
 	}
-	
+
 	return entries, err
 }
 
@@ -204,10 +204,6 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 		workers = len(paths)
 	}
 
-	// Global deduplication map shared across all files
-	var dedupeMutex sync.Mutex
-	globalDedupeMap := make(map[string]bool)
-
 	// Start workers
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -218,7 +214,7 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 				case <-ctx.Done():
 					return
 				default:
-					entries, sessionNames, err := l.loadFileWithGlobalDedupe(path, &dedupeMutex, globalDedupeMap)
+					entries, sessionNames, err := l.loadFile(path)
 
 					// Stream processing: calculate costs immediately if enabled
 					if options != nil && options.StreamProcessing && options.Calculator != nil && err == nil {
@@ -273,6 +269,11 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 		return nil, fmt.Errorf("failed to load any files: %v", errors[0])
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	allEntries = deduplicateUsage(allEntries)
+
 	// Global backfill: apply session names across all entries
 	for i := range allEntries {
 		if name, ok := globalSessionNames[allEntries[i].SessionID]; ok {
@@ -313,15 +314,16 @@ func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedu
 
 	var entries []types.UsageEntry
 	scanner := bufio.NewScanner(file)
-	
+
 	// Increase buffer size to handle very long lines (like TypeScript version)
-	buf := make([]byte, 0, 64*1024)  // Start with 64KB
-	scanner.Buffer(buf, 1024*1024)  // Allow up to 1MB per line
-	
+	buf := make([]byte, 0, 64*1024)   // Start with 64KB
+	scanner.Buffer(buf, 64*1024*1024) // Allow up to 1MB per line
+
 	lineNum := 0
 	parseErrors := 0
 	firstError := ""
 	sessionNameMap := make(map[string]string)
+	workspace := ""
 
 	for scanner.Scan() {
 		lineNum++
@@ -337,6 +339,10 @@ func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedu
 				firstError = fmt.Sprintf("Line %d: JSON parse error: %v", lineNum, err)
 			}
 			continue // Skip malformed JSON lines
+		}
+
+		if cwd, ok := raw["cwd"].(string); ok && strings.TrimSpace(cwd) != "" {
+			workspace = cwd
 		}
 
 		// Intercept custom-title and agent-name entries for session name mapping
@@ -392,37 +398,32 @@ func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedu
 		if entry.Timestamp.IsZero() || entry.Timestamp.Year() < 2020 {
 			continue
 		}
-		
+
 		// Skip synthetic model entries (matches TypeScript behavior)
 		if entry.Model == "<synthetic>" {
 			continue
 		}
-		
-		// Implement deduplication based on message ID and request ID (like TypeScript)
-		uniqueHash := l.createUniqueHash(raw)
-		if uniqueHash != "" {
-			// Use mutex if provided (for global dedupe)
-			if len(dedupeMutex) > 0 && dedupeMutex[0] != nil {
-				dedupeMutex[0].Lock()
-				if dedupeMap[uniqueHash] {
-					dedupeMutex[0].Unlock()
-					continue // Skip duplicate
-				}
-				dedupeMap[uniqueHash] = true
-				dedupeMutex[0].Unlock()
-			} else {
-				// Local dedupe without mutex
-				if dedupeMap[uniqueHash] {
-					continue // Skip duplicate
-				}
-				dedupeMap[uniqueHash] = true
+
+		candidates := []types.UsageEntry{entry}
+		for _, advisor := range advisorRecords(raw) {
+			if child, err := l.parseEntry(advisor, projectPath); err == nil {
+				candidates = append(candidates, child)
 			}
 		}
-
-		// Drop bulky Raw fields; retain usage_limit_reset_time (used by blocks).
-		clearRawExceptKeys(&entry, rawRetainKeys)
-
-		entries = append(entries, entry)
+		for _, candidate := range candidates {
+			candidate.SourceFile = path
+			if candidate.SessionID == "" {
+				candidate.SessionID = fileSessionID(path)
+			}
+			if candidate.Workspace == "" {
+				candidate.Workspace = workspace
+			}
+			if candidate.Workspace == "" {
+				candidate.Workspace = projectPath
+			}
+			clearRawExceptKeys(&candidate, rawRetainKeys)
+			entries = append(entries, candidate)
+		}
 	}
 
 	if l.debug && parseErrors > 0 {
@@ -436,11 +437,21 @@ func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedu
 		return nil, nil, types.LoaderError{Path: path, Err: err}
 	}
 
-	return entries, sessionNameMap, nil
+	return deduplicateUsage(entries), sessionNameMap, nil
 }
 
 func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.UsageEntry, error) {
-	entry := types.UsageEntry{Raw: raw}
+	entry := types.UsageEntry{Raw: raw, Agent: "claude"}
+	entry.Workspace, _ = raw["cwd"].(string)
+	if message, ok := raw["message"].(map[string]interface{}); ok {
+		if id, ok := message["id"].(string); ok {
+			entry.Raw["message_id"] = id
+			entry.ID = id
+		}
+	}
+	if id, ok := raw["requestId"].(string); ok {
+		entry.Raw["request_id"] = id
+	}
 
 	// Debug: print first entry structure (simple approach for now)
 	// This is just for debugging
@@ -460,7 +471,7 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 			"2006-01-02T15:04:05Z",
 			"2006-01-02T15:04:05.999Z",
 		}
-		
+
 		var parsedTime time.Time
 		var parseErr error
 		for _, format := range formats {
@@ -470,7 +481,7 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 				break
 			}
 		}
-		
+
 		// If all formats fail, try parsing as Unix timestamp
 		if parseErr != nil {
 			if tsFloat, ok := raw["timestamp"].(float64); ok {
@@ -532,8 +543,10 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 
 	if cost, ok := raw["cost"].(float64); ok {
 		entry.Cost = cost
+		entry.HasCost = true
 	} else if costUSD, ok := raw["costUSD"].(float64); ok {
 		entry.Cost = costUSD
+		entry.HasCost = true
 	}
 
 	if sessionID, ok := raw["session_id"].(string); ok {
@@ -550,24 +563,24 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 func (l *Loader) createUniqueHash(raw map[string]interface{}) string {
 	// Extract message ID and request ID for deduplication (matches TypeScript's createUniqueHash)
 	var messageID, requestID string
-	
+
 	// Get message ID from nested message object (required)
 	if message, ok := raw["message"].(map[string]interface{}); ok {
 		if id, ok := message["id"].(string); ok {
 			messageID = id
 		}
 	}
-	
+
 	// Get request ID (required)
 	if id, ok := raw["requestId"].(string); ok {
 		requestID = id
 	}
-	
+
 	// TypeScript returns null if either ID is missing
 	if messageID == "" || requestID == "" {
 		return ""
 	}
-	
+
 	// Create hash using same format as TypeScript: messageId:requestId
 	return messageID + ":" + requestID
 }
@@ -594,18 +607,18 @@ func (l *Loader) findJSONLFiles(basePath string) ([]string, error) {
 func (l *Loader) findJSONLFilesWithFilter(basePath string, options *LoaderOptions) ([]string, error) {
 	var files []string
 	cutoffTime := time.Now().Add(-options.ModifiedWithin)
-	
+
 	// Two-phase scanning for better performance
 	// Phase 1: Find all project directories
 	projectDirs, err := l.findProjectDirectories(basePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find project directories: %w", err)
 	}
-	
+
 	if l.debug {
 		fmt.Fprintf(os.Stderr, "Debug: Found %d project directories\n", len(projectDirs))
 	}
-	
+
 	// Phase 2: Filter projects and collect JSONL files
 	for _, projectDir := range projectDirs {
 		// Quick check if project has recent activity
@@ -617,7 +630,7 @@ func (l *Loader) findJSONLFilesWithFilter(basePath string, options *LoaderOption
 				continue
 			}
 		}
-		
+
 		// Collect JSONL files from active project
 		projectFiles, err := l.collectProjectFiles(projectDir, cutoffTime, options.ModifiedWithin > 0)
 		if err != nil {
@@ -626,28 +639,28 @@ func (l *Loader) findJSONLFilesWithFilter(basePath string, options *LoaderOption
 			}
 			continue
 		}
-		
+
 		files = append(files, projectFiles...)
-		
+
 		if l.debug && len(projectFiles) > 0 {
-			fmt.Fprintf(os.Stderr, "Debug: Project %s has %d recent files\n", 
+			fmt.Fprintf(os.Stderr, "Debug: Project %s has %d recent files\n",
 				filepath.Base(projectDir), len(projectFiles))
 		}
 	}
-	
+
 	return files, nil
 }
 
 // findProjectDirectories finds all project directories under the base path
 func (l *Loader) findProjectDirectories(basePath string) ([]string, error) {
 	var projectDirs []string
-	
+
 	// Read the projects directory
 	entries, err := os.ReadDir(basePath)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Collect all subdirectories (these are project directories in flat structure)
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -655,7 +668,7 @@ func (l *Loader) findProjectDirectories(basePath string) ([]string, error) {
 			projectDirs = append(projectDirs, projectPath)
 		}
 	}
-	
+
 	return projectDirs, nil
 }
 
@@ -795,13 +808,13 @@ func isProjectDir(path string) bool {
 	if !strings.Contains(path, "/projects/") {
 		return false
 	}
-	
+
 	// Split by /projects/ and check structure
 	parts := strings.Split(path, "/projects/")
 	if len(parts) < 2 {
 		return false
 	}
-	
+
 	// Project directories are direct children of projects/
 	afterProjects := parts[1]
 	slashCount := strings.Count(afterProjects, "/")
@@ -814,7 +827,7 @@ func (l *Loader) sortFilesByModTime(files []string) ([]string, error) {
 		path    string
 		modTime time.Time
 	}
-	
+
 	filesWithTime := make([]fileWithModTime, len(files))
 	for i, file := range files {
 		info, err := os.Stat(file)
@@ -825,18 +838,18 @@ func (l *Loader) sortFilesByModTime(files []string) ([]string, error) {
 			filesWithTime[i] = fileWithModTime{path: file, modTime: info.ModTime()}
 		}
 	}
-	
+
 	// Sort by modification time (newest first)
 	sort.Slice(filesWithTime, func(i, j int) bool {
 		return filesWithTime[i].modTime.After(filesWithTime[j].modTime)
 	})
-	
+
 	// Extract sorted file paths
 	result := make([]string, len(filesWithTime))
 	for i, item := range filesWithTime {
 		result[i] = item.path
 	}
-	
+
 	return result, nil
 }
 
@@ -847,7 +860,7 @@ type fileWithTimestamp struct {
 
 func (l *Loader) sortFilesByTimestamp(files []string) ([]string, error) {
 	filesWithTimestamps := make([]fileWithTimestamp, len(files))
-	
+
 	// Get earliest timestamp for each file
 	for i, file := range files {
 		timestamp, err := l.getEarliestTimestamp(file)
@@ -858,11 +871,11 @@ func (l *Loader) sortFilesByTimestamp(files []string) ([]string, error) {
 			filesWithTimestamps[i] = fileWithTimestamp{path: file, timestamp: &timestamp}
 		}
 	}
-	
+
 	// Sort by timestamp (files without timestamp go last)
 	sort.Slice(filesWithTimestamps, func(i, j int) bool {
 		a, b := filesWithTimestamps[i], filesWithTimestamps[j]
-		
+
 		// Files without timestamp go to the end
 		if a.timestamp == nil && b.timestamp == nil {
 			return false
@@ -873,17 +886,17 @@ func (l *Loader) sortFilesByTimestamp(files []string) ([]string, error) {
 		if b.timestamp == nil {
 			return true
 		}
-		
+
 		// Sort by timestamp (earliest first)
 		return a.timestamp.Before(*b.timestamp)
 	})
-	
+
 	// Extract sorted file paths
 	result := make([]string, len(filesWithTimestamps))
 	for i, item := range filesWithTimestamps {
 		result[i] = item.path
 	}
-	
+
 	return result, nil
 }
 
@@ -893,10 +906,10 @@ func (l *Loader) getEarliestTimestamp(filePath string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	defer file.Close()
-	
+
 	scanner := bufio.NewScanner(file)
 	var earliestTime time.Time
-	
+
 	// Scan first few lines to find earliest timestamp
 	lineCount := 0
 	for scanner.Scan() && lineCount < 100 { // Only check first 100 lines for performance
@@ -905,12 +918,12 @@ func (l *Loader) getEarliestTimestamp(filePath string) (time.Time, error) {
 		if line == "" {
 			continue
 		}
-		
+
 		var raw map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			continue
 		}
-		
+
 		// Try to parse timestamp
 		if ts, ok := raw["timestamp"].(string); ok {
 			if parsedTime, err := time.Parse(time.RFC3339, ts); err == nil {
@@ -920,30 +933,42 @@ func (l *Loader) getEarliestTimestamp(filePath string) (time.Time, error) {
 			}
 		}
 	}
-	
+
 	if earliestTime.IsZero() {
 		return time.Time{}, fmt.Errorf("no valid timestamp found in file")
 	}
-	
+
 	return earliestTime, nil
 }
 
 // validateUsageData validates entry according to TypeScript usageDataSchema
 func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.UsageEntry) error {
 	// timestamp is required (already validated in parseEntry)
-	
+
 	// message object is required
 	message, ok := raw["message"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("missing required message object")
 	}
-	
+
 	// message.usage is required
 	usage, ok := message["usage"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("missing required message.usage object")
 	}
-	
+	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
+		entry.Raw["cache_creation"] = nested
+	}
+	if speed, ok := usage["speed"].(string); ok && (speed == "fast" || speed == "standard") {
+		entry.Speed = speed
+	}
+	if tier, ok := usage["service_tier"].(string); ok {
+		entry.Raw["service_tier"] = tier
+		if tier == "priority" || tier == "fast" {
+			entry.Speed = "fast"
+		}
+	}
+
 	// input_tokens is required (must be number, can be 0)
 	inputTokens, hasInput := usage["input_tokens"]
 	if !hasInput {
@@ -954,7 +979,7 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	} else {
 		return fmt.Errorf("input_tokens must be a number")
 	}
-	
+
 	// output_tokens is required (must be number, can be 0)
 	outputTokens, hasOutput := usage["output_tokens"]
 	if !hasOutput {
@@ -965,12 +990,12 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	} else {
 		return fmt.Errorf("output_tokens must be a number")
 	}
-	
+
 	// Optional fields
 	if model, ok := message["model"].(string); ok {
 		entry.Model = model
 	}
-	
+
 	// cache_creation_input_tokens — flat takes precedence; fall back to
 	// nested usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens
 	// (Anthropic 2026 schema).
@@ -1017,21 +1042,21 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 			}
 		}
 	}
-	
+
 	// costUSD is optional
 	if cost, ok := raw["costUSD"].(float64); ok {
 		entry.Cost = cost
 	} else if cost, ok := raw["cost"].(float64); ok {
 		entry.Cost = cost
 	}
-	
+
 	// sessionId is optional (various field names)
 	if sessionID, ok := raw["sessionId"].(string); ok {
 		entry.SessionID = sessionID
 	} else if sessionID, ok := raw["session_id"].(string); ok {
 		entry.SessionID = sessionID
 	}
-	
+
 	return nil
 }
 

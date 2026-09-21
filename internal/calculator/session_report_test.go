@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,13 +65,13 @@ func TestGenerateSessionReportAPICost(t *testing.T) {
 	entries := []types.UsageEntry{
 		{
 			Timestamp: ts, ProjectPath: "/project/a", SessionID: "s1",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			Cost: 4.0, APICost: 2.5,
 		},
 		{
 			Timestamp: ts.Add(time.Minute), ProjectPath: "/project/a", SessionID: "s1",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 200, OutputTokens: 100, TotalTokens: 300,
 			Cost: 8.0, APICost: 5.0,
 		},
@@ -90,13 +90,13 @@ func TestAggregateBySourceFileAPICost(t *testing.T) {
 	entries := []types.UsageEntry{
 		{
 			Timestamp: ts, SourceFile: "/data/main.jsonl",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			Cost: 4.0, APICost: 2.5,
 		},
 		{
 			Timestamp: ts.Add(time.Minute), SourceFile: "/data/main.jsonl",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 200, OutputTokens: 100, TotalTokens: 300,
 			Cost: 8.0, APICost: 5.0,
 		},
@@ -278,13 +278,13 @@ func TestGenerateSessionReportCacheCosts(t *testing.T) {
 	entries := []types.UsageEntry{
 		{
 			Timestamp: ts, ProjectPath: "/project/a", SessionID: "s1",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			Cost: 4.0, APICost: 2.5, CacheCreateCost: 1.0, CacheReadCost: 0.5,
 		},
 		{
 			Timestamp: ts.Add(time.Minute), ProjectPath: "/project/a", SessionID: "s1",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 200, OutputTokens: 100, TotalTokens: 300,
 			Cost: 8.0, APICost: 5.0, CacheCreateCost: 1.0, CacheReadCost: 0.5,
 		},
@@ -303,14 +303,14 @@ func TestAggregateBySourceFileCacheCosts(t *testing.T) {
 	entries := []types.UsageEntry{
 		{
 			Timestamp: ts, SourceFile: "/data/main.jsonl",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			Cost: 4.0, APICost: 2.5, CacheCreateCost: 1.0, CacheReadCost: 0.5,
 			Raw: map[string]interface{}{"cache_creation_input_tokens": 200, "cache_read_input_tokens": 500},
 		},
 		{
 			Timestamp: ts.Add(time.Minute), SourceFile: "/data/main.jsonl",
-			Model: "claude-sonnet-4-5-20250514",
+			Model:       "claude-sonnet-4-5-20250514",
 			InputTokens: 200, OutputTokens: 100, TotalTokens: 300,
 			Cost: 8.0, APICost: 5.0, CacheCreateCost: 1.0, CacheReadCost: 0.5,
 			Raw: map[string]interface{}{"cache_creation_input_tokens": 200, "cache_read_input_tokens": 500},

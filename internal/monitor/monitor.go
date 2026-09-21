@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sdpower/ccusage-go/internal/calculator"
-	"github.com/sdpower/ccusage-go/internal/loader"
-	"github.com/sdpower/ccusage-go/internal/pricing"
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/calculator"
+	"github.com/RedwindA/ccusage_go/internal/loader"
+	"github.com/RedwindA/ccusage_go/internal/pricing"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 type Monitor struct {

@@ -13,8 +13,8 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
-	"github.com/sdpower/ccusage-go/internal/calculator"
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/calculator"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 // TableWriterFormatter uses tablewriter for better table formatting

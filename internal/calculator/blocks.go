@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sdpower/ccusage-go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 const (
@@ -21,15 +21,19 @@ func floorToHour(t time.Time) time.Time {
 
 // IdentifySessionBlocks groups entries into time-based blocks with gap detection
 func (c *Calculator) IdentifySessionBlocks(entries []types.UsageEntry, sessionDurationHours int) []types.SessionBlock {
+	return c.IdentifySessionBlocksDuration(entries, time.Duration(sessionDurationHours)*time.Hour)
+}
+
+// IdentifySessionBlocksDuration also supports fractional-hour billing windows.
+func (c *Calculator) IdentifySessionBlocksDuration(entries []types.UsageEntry, sessionDuration time.Duration) []types.SessionBlock {
 	if len(entries) == 0 {
 		return []types.SessionBlock{}
 	}
 
-	if sessionDurationHours <= 0 {
-		sessionDurationHours = DefaultSessionDurationHours
+	if sessionDuration <= 0 {
+		sessionDuration = DefaultSessionDurationHours * time.Hour
 	}
 
-	sessionDuration := time.Duration(sessionDurationHours) * time.Hour
 	blocks := []types.SessionBlock{}
 
 	// Sort entries by timestamp
@@ -157,9 +161,9 @@ func (c *Calculator) createBlock(startTime time.Time, entries []types.UsageEntry
 		Entries:             entries,
 		TokenCounts:         tokenCounts,
 		CostUSD:             costUSD,
-		APICostUSD:           apiCostUSD,
-		CacheCreateCostUSD:   cacheCreateCostUSD,
-		CacheReadCostUSD:     cacheReadCostUSD,
+		APICostUSD:          apiCostUSD,
+		CacheCreateCostUSD:  cacheCreateCostUSD,
+		CacheReadCostUSD:    cacheReadCostUSD,
 		Models:              models,
 		UsageLimitResetTime: usageLimitResetTime,
 	}
@@ -258,13 +262,13 @@ func ProjectBlockUsage(block types.SessionBlock) *types.ProjectedUsage {
 func FilterRecentBlocks(blocks []types.SessionBlock, days int) []types.SessionBlock {
 	cutoff := time.Now().AddDate(0, 0, -days)
 	filtered := []types.SessionBlock{}
-	
+
 	for _, block := range blocks {
 		if block.StartTime.After(cutoff) {
 			filtered = append(filtered, block)
 		}
 	}
-	
+
 	return filtered
 }
 
