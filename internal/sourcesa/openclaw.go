@@ -70,7 +70,16 @@ func loadOpenClaw(p string) ([]types.UsageEntry, error) {
 	return entries, nil
 }
 func loadOpenClawDB(ctx context.Context, p string) ([]types.UsageEntry, error) {
-	u := url.URL{Scheme: "file", Path: p, RawQuery: "mode=ro"}
+	absolute, err := filepath.Abs(p)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.ToSlash(absolute)
+	// SQLite file URIs require /C:/... for Windows drive paths.
+	if len(path) >= 2 && path[1] == ':' {
+		path = "/" + path
+	}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return nil, err

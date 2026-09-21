@@ -12,6 +12,7 @@ func isolateSourceHomes(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "DROID_SESSIONS_DIR", "AMP_DATA_DIR", "PI_AGENT_DIR", "OPENCLAW_DIR", "GEMINI_DATA_DIR", "GROK_HOME", "QWEN_DATA_DIR", "OPENCODE_DATA_DIR", "CODEBUFF_DATA_DIR", "HERMES_HOME", "KILO_DATA_DIR", "KIMI_DATA_DIR", "ANTIGRAVITY_DATA_DIR", "ZCODE_HOME", "GOOSE_PATH_ROOT", "COPILOT_HOME", "COPILOT_OTEL_FILE_EXPORTER_PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		t.Setenv(key, filepath.Join(home, "absent"))
 	}

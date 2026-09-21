@@ -24,6 +24,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Windows SQLite file URI handling for native agent stores.
+
 - Consistent date filtering across table, JSON and CSV, including timezone/DST.
 - Claude streaming duplicate replacement, sidechain replay and advisor usage;
   recursive incremental cache discovery and file truncation handling.

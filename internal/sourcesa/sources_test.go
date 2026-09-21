@@ -65,6 +65,7 @@ func TestAmpMalformedElementsAndTotalFallback(t *testing.T) {
 func TestDroidSettingsAndSidecar(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	fixture(t, root, ".factory/settings.json", `{"customModels":[{"id":"custom:mine","model":"Claude Sonnet 4.5 [custom]","provider":"anthropic"}]}`)
 	fixture(t, root, "sessions/encoded/s.settings.json", `{"model":"custom:mine","providerLockTimestamp":"2026-01-02T00:00:00Z","tokenUsage":{"inputTokens":11,"outputTokens":12,"cacheCreationTokens":13,"cacheReadTokens":14,"thinkingTokens":15}}`)
 	fixture(t, root, "sessions/encoded/s.jsonl", `{"type":"session_start","payload":{"cwd":"/work/project"}}`)

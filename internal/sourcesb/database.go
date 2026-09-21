@@ -7,12 +7,22 @@ import (
 	"github.com/RedwindA/ccusage_go/internal/types"
 	_ "modernc.org/sqlite"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 func openDB(file string) (*sql.DB, error) {
-	u := url.URL{Scheme: "file", Path: file}
+	absolute, err := filepath.Abs(file)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.ToSlash(absolute)
+	// SQLite file URIs require /C:/... for Windows drive paths.
+	if len(path) >= 2 && path[1] == ':' {
+		path = "/" + path
+	}
+	u := url.URL{Scheme: "file", Path: path}
 	q := u.Query()
 	q.Set("mode", "ro")
 	q.Add("_pragma", "busy_timeout(5000)")
