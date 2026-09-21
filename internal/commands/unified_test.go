@@ -66,7 +66,11 @@ func TestSystemUserHomesDeduplicated(t *testing.T) {
 		t.Skip(err)
 	}
 	users := parseSystemUsers("alice:x:123:123::" + home + ":/bin/sh\nbob:x:124:124::" + alias + ":/bin/sh\nmissing:x:9:9::/this-does-not-exist:/bin/sh")
-	if len(users) != 1 || users[0].Home != home {
+	canonicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 1 || users[0].Home != canonicalHome {
 		t.Fatalf("bad users: %+v", users)
 	}
 }
