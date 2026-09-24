@@ -3,11 +3,9 @@ package reports
 import (
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 )
 
 func Key(kind string) string {
@@ -83,110 +81,6 @@ func StripCosts(v any) {
 			StripCosts(v)
 		}
 	}
-}
-
-func WriteTable(w io.Writer, rows []*Row, o Options) error {
-	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "No usage data found.")
-		return err
-	}
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	title := strings.ToUpper(o.Kind[:1]) + o.Kind[1:] + " usage report (Go)"
-	if o.Color {
-		title = "\x1b[1;36m" + title + "\x1b[0m"
-	}
-	fmt.Fprintln(tw, title)
-	headers := []string{strings.ToUpper(o.Kind[:1]) + o.Kind[1:]}
-	showUser := false
-	showCredits := o.Agent == "codebuff"
-	for _, r := range rows {
-		if r.Credits != 0 {
-			showCredits = true
-		}
-		if r.User != "" {
-			showUser = true
-		}
-	}
-	if showUser {
-		headers = append(headers, "User")
-	}
-	if o.Instances {
-		headers = append(headers, "Project")
-	}
-	if o.Agent == "" {
-		headers = append(headers, "Agent")
-	}
-	headers = append(headers, "Models", "Input", "Output")
-	if !o.Compact {
-		headers = append(headers, "Cache Create", "Cache Read")
-	}
-	headers = append(headers, "Total Tokens")
-	if showCredits {
-		headers = append(headers, "Credits")
-	}
-	if !o.NoCost {
-		if !o.Compact {
-			headers = append(headers, "API Cost", "CC Cost", "CR Cost")
-		}
-		headers = append(headers, "Cost (USD)")
-	}
-	fmt.Fprintln(tw, strings.Join(headers, "\t"))
-	write := func(r *Row, label string) {
-		v := []string{label}
-		if showUser {
-			v = append(v, r.User)
-		}
-		if o.Instances {
-			v = append(v, r.Project)
-		}
-		if o.Agent == "" {
-			v = append(v, r.Agent)
-		}
-		v = append(v, strings.Join(r.Models, ", "), strconv.Itoa(r.Input), strconv.Itoa(r.Output))
-		if !o.Compact {
-			v = append(v, strconv.Itoa(r.CacheCreate), strconv.Itoa(r.CacheRead))
-		}
-		v = append(v, strconv.Itoa(r.Total))
-		if showCredits {
-			v = append(v, fmt.Sprintf("%.2f", r.Credits))
-		}
-		if !o.NoCost {
-			if !o.Compact {
-				v = append(v, fmt.Sprintf("$%.4f", r.APICost), fmt.Sprintf("$%.4f", r.CacheCreateCost), fmt.Sprintf("$%.4f", r.CacheReadCost))
-			}
-			v = append(v, fmt.Sprintf("$%.4f", r.Cost))
-		}
-		for i := range v {
-			v[i] = terminalText(v[i])
-		}
-		fmt.Fprintln(tw, strings.Join(v, "\t"))
-	}
-	var total Row
-	for _, r := range rows {
-		write(r, r.Period)
-		if o.ByAgent {
-			for _, a := range r.Agents {
-				write(a, "  ↳")
-			}
-		}
-		if o.Breakdown {
-			for _, m := range r.Breakdowns {
-				write(&Row{Models: []string{m.Name}, Input: m.Input, Output: m.Output, CacheCreate: m.CacheCreate, CacheRead: m.CacheRead, Total: m.Total, Cost: m.Cost, APICost: m.APICost, CacheCreateCost: m.CacheCreateCost, CacheReadCost: m.CacheReadCost}, "  ↳")
-			}
-		}
-		total.Input += r.Input
-		total.Output += r.Output
-		total.CacheCreate += r.CacheCreate
-		total.CacheRead += r.CacheRead
-		total.Total += r.Total
-		total.Cost += r.Cost
-		total.APICost += r.APICost
-		total.CacheCreateCost += r.CacheCreateCost
-		total.CacheReadCost += r.CacheReadCost
-		total.Credits += r.Credits
-	}
-	write(&total, "Total")
-	return tw.Flush()
 }
 
 func WriteCSV(w io.Writer, rows []*Row, o Options) error {

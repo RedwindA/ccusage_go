@@ -13,6 +13,8 @@ import (
 )
 
 type Options struct {
+	TerminalWidth                                                     int
+	DetectedAgents                                                    []string
 	Color                                                             bool
 	Kind, Agent, Since, Until, Project, SessionID, SessionName, Order string
 	Instances, ByAgent, NoCost, Breakdown, Compact                    bool

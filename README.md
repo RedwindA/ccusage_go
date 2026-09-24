@@ -177,6 +177,21 @@ the current period and cannot be combined with explicit date bounds. Claude,
 Codex, and Droid also provide `model` and `workspace` reports. Workspace grouping
 uses the full recorded workspace path.
 
+Terminal reports follow ccusage's boxed layout: a rounded title, blue column
+headers, multiline model lists, comma-separated token counts, two-decimal USD
+costs, and yellow totals. `--by-agent --breakdown` adds agent and model detail
+rows. Standard tables show input, output, cache creation, cache reads, total
+tokens, and total cost; the former API/CC/CR cost columns are omitted to match
+ccusage's layout.
+
+Tables fit the detected terminal width (120 columns when redirected).
+`COLUMNS=80 ccusage_go daily --offline` selects a reproducible narrow layout.
+Below 100 columns, or with `--compact`, cache and total-token columns are hidden;
+`--responsive=false` keeps the full natural-width layout. Very narrow terminals
+retain readable minimum column widths and may need horizontal scrolling.
+`--no-color` or `NO_COLOR` disables colors; `--color` or `FORCE_COLOR` enables
+them for redirected output. JSON and CSV exports retain their existing schemas.
+
 `--mode auto` uses available recorded costs, `--mode calculate` recalculates them,
 and `--mode display` uses recorded costs only, with source-specific billing rules.
 `--offline` uses embedded pricing snapshots; `--no-offline` enables online refresh.

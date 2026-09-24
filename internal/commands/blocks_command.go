@@ -175,10 +175,11 @@ func NewBlocksCommand() *cobra.Command {
 				rows = append(rows, &reports.Row{Period: b.ID, Models: b.Models, Input: b.TokenCounts.InputTokens, Output: b.TokenCounts.OutputTokens, CacheCreate: b.TokenCounts.CacheCreationInputTokens, CacheRead: b.TokenCounts.CacheReadInputTokens, Total: b.TokenCounts.GetTotal(), Cost: b.CostUSD})
 			}
 			o := reports.Options{Kind: "blocks", Agent: "claude", NoCost: f.noCost, Compact: f.compact}
+			configureTableOutput(cmd, f, &o)
 			if f.format == "csv" {
 				return reports.WriteCSV(cmd.OutOrStdout(), rows, o)
 			}
-			return reports.WriteTable(cmd.OutOrStdout(), rows, o)
+			return writeUsageTable(cmd, rows, o)
 		}
 		if f.format == "csv" {
 			formatter := output.NewFormatter(output.FormatterOptions{Format: "csv"})

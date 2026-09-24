@@ -33,7 +33,7 @@ func writeClaudeSessionDetail(cmd *cobra.Command, entries []types.UsageEntry, o 
 	if f.format == "csv" {
 		return reports.WriteCSV(cmd.OutOrStdout(), rows, o)
 	}
-	if err := reports.WriteTable(cmd.OutOrStdout(), rows, o); err != nil {
+	if err := writeUsageTable(cmd, rows, o); err != nil {
 		return err
 	}
 	// Preserve the Go session detail view's attribution to main/subagent files.
@@ -43,5 +43,5 @@ func writeClaudeSessionDetail(cmd *cobra.Command, entries []types.UsageEntry, o 
 	o.SessionID = ""
 	o.SessionName = ""
 	fmt.Fprintln(cmd.OutOrStdout(), "\nSource file breakdown")
-	return reports.WriteTable(cmd.OutOrStdout(), reports.Aggregate(entries, o), o)
+	return writeUsageTable(cmd, reports.Aggregate(entries, o), o)
 }

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/term"
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/config"
 	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/reports"
 	"github.com/RedwindA/ccusage_go/internal/types"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -262,24 +262,16 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		return err
 	}
 	o := reports.Options{Kind: kind, Agent: agent, Since: since, Until: until, Project: f.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: loc, WeekStart: start}
+	configureTableOutput(cmd, f, &o)
+	detected := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Agent != "" && !detected[entry.Agent] {
+			detected[entry.Agent] = true
+			o.DetectedAgents = append(o.DetectedAgents, entry.Agent)
+		}
+	}
 	if agent == "claude" && kind == "session" && (f.sessionID != "" || f.sessionName != "" && f.format == "table") {
 		return writeClaudeSessionDetail(cmd, entries, o, f)
-	}
-	o.Color = (f.color || os.Getenv("FORCE_COLOR") != "") && !f.noColor && os.Getenv("NO_COLOR") == ""
-	terminalWidth := 0
-	if file, ok := cmd.OutOrStdout().(*os.File); ok && term.IsTerminal(file.Fd()) {
-		terminalWidth, _, _ = term.GetSize(file.Fd())
-		if !f.noColor && os.Getenv("NO_COLOR") == "" {
-			o.Color = true
-		}
-	}
-	if f.responsive {
-		if width, _ := strconv.Atoi(os.Getenv("COLUMNS")); width > 0 {
-			terminalWidth = width
-		}
-		if terminalWidth > 0 && terminalWidth < 100 {
-			o.Compact = true
-		}
 	}
 	payload := map[string]any{}
 	for _, k := range kinds {
@@ -338,7 +330,7 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 				return err
 			}
 		default:
-			if err := reports.WriteTable(cmd.OutOrStdout(), rows, o); err != nil {
+			if err := writeUsageTable(cmd, rows, o); err != nil {
 				return err
 			}
 		}
@@ -347,6 +339,42 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		return writeReportJSON(cmd, payload, f)
 	}
 	return nil
+}
+
+func writeUsageTable(cmd *cobra.Command, rows []*reports.Row, o reports.Options) error {
+	if err := reports.WriteTable(cmd.OutOrStdout(), rows, o); err != nil {
+		return err
+	}
+	if o.Compact && len(rows) > 0 {
+		_, err := fmt.Fprintln(cmd.ErrOrStderr(), "\nRunning in Compact Mode\nExpand terminal width to see cache metrics and total tokens")
+		return err
+	}
+	return nil
+}
+
+// Use the command's output stream, so redirected reports do not inherit the
+// terminal's colors. COLUMNS also makes a chosen layout reproducible in scripts.
+func configureTableOutput(cmd *cobra.Command, f *reportFlags, o *reports.Options) {
+	_, noColor := os.LookupEnv("NO_COLOR")
+	_, forceColor := os.LookupEnv("FORCE_COLOR")
+	o.Color = (f.color || forceColor) && !f.noColor && !noColor
+	o.TerminalWidth = 120
+	if file, ok := cmd.OutOrStdout().(*os.File); ok && term.IsTerminal(file.Fd()) {
+		if width, _, err := term.GetSize(file.Fd()); err == nil && width > 0 {
+			o.TerminalWidth = width
+		}
+		if !f.noColor && !noColor {
+			o.Color = true
+		}
+	}
+	if width, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && width > 0 {
+		o.TerminalWidth = width
+	}
+	if f.responsive {
+		o.Compact = o.Compact || o.TerminalWidth < 100
+	} else {
+		o.TerminalWidth = int(^uint(0) >> 1)
+	}
 }
 
 func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {
