@@ -4,7 +4,7 @@ import "github.com/spf13/cobra"
 
 func NewRootCommand(version string) *cobra.Command {
 	root := NewReportCommand("daily", "")
-	root.Use = "ccusage"
+	root.Use = "ccusage_go"
 	root.Short = "Analyze coding agent token usage and costs"
 	root.Version = version
 	root.SilenceUsage = true

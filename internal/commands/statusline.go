@@ -76,6 +76,9 @@ func NewStatuslineCommand() *cobra.Command {
 	p.StringVar(&f.configPath, "config", "", "Path to JSON config")
 	p.BoolVarP(&f.debug, "debug", "d", false, "Show load diagnostics")
 	p.StringVar(&f.modelAliases, "model-label-aliases", "", "Model display aliases as a JSON object")
+	completeValues(cmd, "visual-burn-rate", "off", "emoji", "text", "emoji-text")
+	completeValues(cmd, "cost-source", "auto", "ccusage", "cc", "both")
+	completeJSONFile(cmd, "config")
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error { return runStatusline(cmd, f) }
 	return cmd
 }

@@ -97,6 +97,14 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 	if kind == "session" {
 		p.StringVarP(&f.sessionID, "id", "i", "", "Show Claude session details by ID")
 	}
+	completeValues(cmd, "format", "table", "json", "csv")
+	completeValues(cmd, "order", "asc", "desc")
+	completeValues(cmd, "mode", "auto", "calculate", "display")
+	completeValues(cmd, "speed", "auto", "standard", "fast")
+	completeValues(cmd, "start-of-week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+	completeList(cmd, "sections", "daily", "weekly", "monthly", "session")
+	completeDir(cmd, "data-path", "pi-path", "openclaw-path", "open-claw-path")
+	completeJSONFile(cmd, "config")
 }
 
 func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {

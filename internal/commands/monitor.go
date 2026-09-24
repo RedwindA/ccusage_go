@@ -45,6 +45,7 @@ func NewMonitorCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&dataPath, "data-path", "", "Path to Claude data directory")
+	completeDir(cmd, "data-path")
 	cmd.Flags().IntVar(&interval, "interval", 5, "Update interval in seconds")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	cmd.Flags().BoolVar(&continuous, "continuous", true, "Run continuously")

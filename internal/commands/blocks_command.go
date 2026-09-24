@@ -36,6 +36,7 @@ func NewBlocksCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&tokenLimit, "token-limit", "t", "", "Token limit or max")
 	cmd.Flags().Float64VarP(&length, "session-length", "n", 5, "Billing window length in hours")
 	cmd.Flags().IntVar(&interval, "refresh-interval", 1, "Live refresh interval in seconds")
+	completeValues(cmd, "token-limit", "max")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load(f.configPath)
 		if err != nil {
