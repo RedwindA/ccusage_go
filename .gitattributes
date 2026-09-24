@@ -1,0 +1,2 @@
+# Terminal snapshots compare exact bytes, including LF line endings.
+internal/reports/testdata/*.txt text eol=lf

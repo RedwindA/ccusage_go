@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-09-25
+
+### Added
+
+- ccusage-style terminal reports with rounded titles, blue headers, yellow
+  totals, multiline model lists, and agent/model breakdown rows.
+- Responsive column widths with Unicode-aware wrapping and truncation,
+  compact layouts below 100 columns, and reproducible sizing through `COLUMNS`.
+- Reference snapshots and terminal layout tests covering wide and narrow
+  output, Unicode, colors, exports, and distinct model identities.
+
+### Changed
+
+- Standard report tables show comma-separated token counts and two-decimal USD
+  totals. Separate API/CC/CR cost columns are omitted to match ccusage's layout;
+  compact tables hide cache metrics and total tokens. JSON/CSV schemas remain
+  unchanged.
+- Session detail tables respect terminal width and color settings, including
+  `NO_COLOR` and `FORCE_COLOR`.
+
+### Fixed
+
+- Preserve available width for workspace paths, session filenames, and other
+  non-date identifiers instead of applying date-column limits.
+- Keep focused model breakdown labels in the Models column so regular and
+  fast variants remain distinguishable.
+- Preserve non-date model suffixes such as `kimi-k2-thinking` when shortening
+  model names.
+- Keep terminal snapshot fixtures at LF line endings on Windows checkouts.
+
 ## [v0.15.0] - 2026-09-21
 
 ### Added

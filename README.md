@@ -53,8 +53,8 @@ ccusage_go daily --offline
 Run the same command to upgrade. To choose a version or installation directory:
 
 ```sh
-curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.15.0/install.sh -o install.sh
-INSTALL_DIR="$HOME/bin" sh install.sh v0.15.0
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.16.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.16.0
 ```
 
 ### Pre-built Binaries
