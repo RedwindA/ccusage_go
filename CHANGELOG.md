@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-09-25
+
+### Added
+
+- Shell completion for flag values: output formats, sort order, cost modes,
+  pricing tiers, weekdays, comma-separated `--sections`, statusline options,
+  `--token-limit max`, directory flags, and JSON `--config` files.
+
+### Fixed
+
+- `ccusage_go completion <shell>` scripts now register for the installed
+  `ccusage_go` binary instead of `ccusage`; help output uses the same name.
+
 ## [v0.16.0] - 2026-09-25
 
 ### Added

@@ -51,8 +51,8 @@ ccusage_go daily --offline
 再次執行即可更新。指定版本或安裝目錄：
 
 ```sh
-curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.16.0/install.sh -o install.sh
-INSTALL_DIR="$HOME/bin" sh install.sh v0.16.0
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.17.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.17.0
 ```
 
 ### 預編譯版本
