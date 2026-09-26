@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.17.1] - 2026-09-26
+
+### Fixed
+
+- Online reports no longer stall for several seconds while merging
+  models.dev pricing; `ccusage_go daily` drops from about 5s to under 1s.
+
 ## [v0.17.0] - 2026-09-25
 
 ### Added
