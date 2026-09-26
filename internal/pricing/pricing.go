@@ -230,8 +230,10 @@ func apply(p ModelPricing, o Override) ModelPricing {
 	}
 	return p
 }
+var normalizer = strings.NewReplacer(".", "-", "@", "-")
+
 func normalize(s string) string {
-	return strings.NewReplacer(".", "-", "@", "-").Replace(strings.ToLower(s))
+	return normalizer.Replace(strings.ToLower(s))
 }
 
 var dateSuffix = regexp.MustCompile(`-(?:[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})$`)
