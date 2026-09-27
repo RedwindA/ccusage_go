@@ -4,9 +4,13 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 )
 
 // Snapshot pinned by upstream flake.lock: BerriAI/litellm at
@@ -33,12 +37,24 @@ func contains(list []string, v string) bool {
 	}
 	return false
 }
-func fastMultiplier(name string) float64 {
-	var f struct {
-		Exact  map[string]float64 `json:"exact"`
-		Prefix map[string]float64 `json:"normalized_prefix"`
+
+type fastOverrides struct {
+	Exact  map[string]float64 `json:"exact"`
+	Prefix map[string]float64 `json:"normalized_prefix"`
+}
+
+// fastSnapshotOverrides decodes the embedded overrides once; fastMultiplier
+// runs for every LiteLLM model on each online refresh.
+var fastSnapshotOverrides = sync.OnceValue(func() fastOverrides {
+	var f fastOverrides
+	if err := json.Unmarshal(fastSnapshot, &f); err != nil {
+		panic(err)
 	}
-	_ = json.Unmarshal(fastSnapshot, &f)
+	return f
+})
+
+func fastMultiplier(name string) float64 {
+	f := fastSnapshotOverrides()
 	for _, part := range strings.Split(name, "/") {
 		if mult, ok := f.Exact[canonical(part)]; ok {
 			return mult
@@ -52,15 +68,38 @@ func fastMultiplier(name string) float64 {
 	}
 	return 1
 }
+
+// rawFields is json.Unmarshal into map[string]json.RawMessage without the
+// reflection and copying: values alias data, and a present key always has a
+// non-nil value (a JSON null is the literal "null").
+func rawFields(data []byte) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	null, err := jsonscan.Fields(data, func(key []byte, value jsonscan.Value) error {
+		if fields == nil {
+			fields = map[string]json.RawMessage{}
+		}
+		raw, err := value.Raw()
+		fields[string(key)] = raw
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if fields == nil && !null {
+		fields = map[string]json.RawMessage{}
+	}
+	return fields, nil
+}
+
 func litePricing(data []byte) map[string]ModelPricing {
-	var raw map[string]json.RawMessage
 	out := map[string]ModelPricing{}
-	if json.Unmarshal(data, &raw) != nil {
+	raw, err := rawFields(data)
+	if err != nil {
 		return out
 	}
 	for name, data := range raw {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(data, &fields) != nil || fields["input_cost_per_token"] == nil || fields["output_cost_per_token"] == nil {
+		fields, err := rawFields(data)
+		if err != nil || fields["input_cost_per_token"] == nil || fields["output_cost_per_token"] == nil {
 			continue
 		}
 		var p ModelPricing
@@ -155,7 +194,7 @@ func patchContextTiers(primary, fallback map[string]ModelPricing) {
 		}
 	}
 	for name, p := range primary {
-		base := canonical(dateSuffix.ReplaceAllString(name, ""))
+		base := canonical(stripDateSuffix(name))
 		tier, ok := fallback[base]
 		if !ok {
 			tier, ok = normalized[normalize(base)]
@@ -173,8 +212,32 @@ func patchContextTiers(primary, fallback map[string]ModelPricing) {
 		primary[name] = p
 	}
 }
+
+const modelsURL = "https://models.dev/api.json"
+
+func fetchModels(ctx context.Context, client *http.Client) map[string]ModelPricing {
+	var live map[string]ModelPricing
+	data := fetchUsable(ctx, client, modelsURL, func(data []byte) bool {
+		live = cachedParse(modelsURL, data, parseModelsCatalog)
+		return len(live) > 0
+	})
+	if len(live) == 0 {
+		live = cachedParse(modelsURL, data, parseModelsCatalog)
+	}
+	return live
+}
+
 func (s *Service) refreshModels(ctx context.Context) {
-	live := parseModelsCatalog(s.fetch(ctx, "https://models.dev/api.json"))
+	var live map[string]ModelPricing
+	prefetched := false
+	if s.prefetch != nil && !s.prefetchedModelsUsed {
+		// Only the first attempt uses the prefetch; retries fetch again.
+		s.prefetchedModelsUsed = true
+		live, prefetched = s.prefetch.take(true)
+	}
+	if !prefetched {
+		live = fetchModels(ctx, s.client)
+	}
 	s.modelsFailed = len(live) == 0
 	s.modelsRetryAt = time.Now().Add(time.Minute)
 	spellings := map[string][]string{}
@@ -195,17 +258,84 @@ func (s *Service) refreshModels(ctx context.Context) {
 		}
 	}
 	s.memo = map[string]lookupResult{}
+	s.idx = nil
+}
+
+// catalogKey reports whether parseModelsCatalog reads key from a provider
+// or model object: accept reads id, modalities, cost and limit, providers
+// add models, and the final re-encode keeps cost, exactOnly and limit in any
+// letter case.
+func catalogKey(key []byte) bool {
+	switch string(key) {
+	case "id", "models", "modalities":
+		return true
+	}
+	k := string(key)
+	return strings.EqualFold(k, "cost") || strings.EqualFold(k, "limit") || strings.EqualFold(k, "exactOnly")
+}
+
+// decodeCatalogObject is jsonscan.DecodeObject restricted to catalogKey
+// fields, recursing into a provider's models; the rest of the models.dev
+// payload (names, dates, descriptions) is validated but never materialized.
+func decodeCatalogObject(data []byte) (map[string]any, error) {
+	var m map[string]any
+	null, err := jsonscan.FieldsStrict(data, func(key []byte, value jsonscan.Value) error {
+		if m == nil {
+			m = map[string]any{}
+		}
+		return decodeCatalogField(m, key, value)
+	})
+	if err != nil || null {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
+}
+
+func decodeCatalogField(m map[string]any, key []byte, value jsonscan.Value) error {
+	if !catalogKey(key) {
+		return nil
+	}
+	if string(key) != "models" || value.Kind() != '{' {
+		v, err := value.Decode()
+		m[string(key)] = v
+		return err
+	}
+	models := map[string]any{}
+	m[string(key)] = models
+	_, err := value.Fields(func(name []byte, model jsonscan.Value) error {
+		if model.Kind() != '{' {
+			v, err := model.Decode()
+			models[string(name)] = v
+			return err
+		}
+		fields := map[string]any{}
+		models[string(name)] = fields
+		_, err := model.Fields(func(key []byte, value jsonscan.Value) error {
+			return decodeCatalogField(fields, key, value)
+		})
+		return err
+	})
+	return err
 }
 
 // parseModelsCatalog reconciles owner, platform and reseller claims using the
 // same trust/detail/tie ordering as the upstream snapshot generator.
 func parseModelsCatalog(data []byte) map[string]ModelPricing {
-	var raw map[string]json.RawMessage
-	if json.Unmarshal(data, &raw) != nil {
+	raw, err := rawFields(data)
+	if err != nil {
 		return nil
 	}
 	var rules catalogRules
 	_ = json.Unmarshal(rulesSnapshot, &rules)
+	authored := make(map[string]bool, len(rules.Authored))
+	authoredPrefixes := make([]string, len(rules.Authored))
+	for i, id := range rules.Authored {
+		authored[id] = true
+		authoredPrefixes[i] = normalize(id) + "-"
+	}
 	type claim struct {
 		score                int
 		provider, source, id string
@@ -221,7 +351,7 @@ func parseModelsCatalog(data []byte) map[string]ModelPricing {
 		if contains(rules.Assets, n) {
 			return
 		}
-		if !contains(rules.Authored, n) {
+		if !authored[n] {
 			if modalities, ok := value["modalities"].(map[string]any); ok {
 				if out, exists := modalities["output"]; exists {
 					a, ok := out.([]any)
@@ -283,8 +413,8 @@ func parseModelsCatalog(data []byte) map[string]ModelPricing {
 		if derive {
 			exact := !strings.ContainsAny(model, "0123456789")
 			if !strings.Contains(source, "/") {
-				for _, authored := range rules.Authored {
-					if strings.HasPrefix(n, normalize(authored)+"-") {
+				for _, prefix := range authoredPrefixes {
+					if strings.HasPrefix(n, prefix) {
 						exact = true
 						break
 					}
@@ -305,8 +435,8 @@ func parseModelsCatalog(data []byte) map[string]ModelPricing {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		var value map[string]any
-		if json.Unmarshal(raw[key], &value) != nil {
+		value, err := decodeCatalogObject(raw[key])
+		if err != nil {
 			continue
 		}
 		if models, ok := value["models"].(map[string]any); ok {
@@ -323,9 +453,17 @@ func parseModelsCatalog(data []byte) map[string]ModelPricing {
 			accept("", key, value, false)
 		}
 	}
+	// modelsPricing decodes only cost, exactOnly and limit (struct fields,
+	// so keys match case-insensitively); drop the rest before re-encoding.
 	flat := map[string]any{}
 	for _, c := range claims {
-		flat[c.id] = c.value
+		value := map[string]any{}
+		for k, v := range c.value {
+			if strings.EqualFold(k, "cost") || strings.EqualFold(k, "exactOnly") || strings.EqualFold(k, "limit") {
+				value[k] = v
+			}
+		}
+		flat[c.id] = value
 	}
 	encoded, _ := json.Marshal(flat)
 	return modelsPricing(encoded)

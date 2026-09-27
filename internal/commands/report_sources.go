@@ -15,6 +15,7 @@ import (
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/config"
 	"github.com/RedwindA/ccusage_go/internal/loader"
+	"github.com/RedwindA/ccusage_go/internal/parallel"
 	"github.com/RedwindA/ccusage_go/internal/sourcesa"
 	"github.com/RedwindA/ccusage_go/internal/sourcesb"
 	"github.com/RedwindA/ccusage_go/internal/types"
@@ -110,6 +111,10 @@ func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *ti
 	}
 	results := make([]result, len(jobs))
 	var wg sync.WaitGroup
+	ctx := cmd.Context()
+	if f.singleThread {
+		ctx = parallel.WithLimit(ctx, 1)
+	}
 	work := func(i int) {
 		defer wg.Done()
 		job := jobs[i]
@@ -120,12 +125,12 @@ func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *ti
 			if e != nil {
 				err = e
 			} else {
-				entries, err = sourcesb.LoadUntil(cmd.Context(), job.name, job.paths, loc, bound.AddDate(0, 0, 1))
+				entries, err = sourcesb.LoadUntil(ctx, job.name, job.paths, loc, bound.AddDate(0, 0, 1))
 			}
 		} else if job.name == "pi" {
-			entries, err = sourcesa.LoadWithMode(cmd.Context(), job.name, job.paths, loc, f.mode)
+			entries, err = sourcesa.LoadWithMode(ctx, job.name, job.paths, loc, f.mode)
 		} else {
-			entries, err = loadSource(cmd.Context(), job.name, job.paths, loc, f.debug)
+			entries, err = loadSource(ctx, job.name, job.paths, loc, f.debug, f.singleThread)
 		}
 		fallbackSpeed := "standard"
 		if job.name == "codex" {
@@ -202,11 +207,14 @@ func sourcePaths(name, home string, env bool) []string {
 	return sourcesb.DefaultPathsForHome(name, home)
 }
 
-func loadSource(ctx context.Context, name string, paths []string, loc *time.Location, debug bool) ([]types.UsageEntry, error) {
+func loadSource(ctx context.Context, name string, paths []string, loc *time.Location, debug, singleThread bool) ([]types.UsageEntry, error) {
 	if name == "claude" {
 		l := loader.New()
 		l.SetTimezone(loc)
 		l.SetDebug(debug)
+		if !singleThread {
+			l.SetMaxWorkers(runtime.GOMAXPROCS(0))
+		}
 		// A single load across every root deduplicates repeated request/message IDs.
 		files := []string{}
 		seen := map[string]bool{}

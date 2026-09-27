@@ -242,12 +242,13 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		agent = "claude"
 	}
 	f.until = until
+	offline := f.offline && !f.noOffline
+	prefetch := startPricing(cmd, offline)
 	entries, err := loadReportEntries(cmd, agent, f, loc, cfg)
 	if err != nil {
 		return err
 	}
-	service := pricing.NewService()
-	service.SetOffline(f.offline && !f.noOffline)
+	service := newPricingService(offline, prefetch)
 	service.SetOverrides(cfg.PricingOverrides(kind, agent))
 	debugPricing(cmd, service, entries, f)
 	if agent == "claude" && kind == "session" && f.sessionID != "" {

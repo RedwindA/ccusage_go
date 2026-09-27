@@ -139,13 +139,14 @@ func loadPi(ctx context.Context, files []string, loc *time.Location, mode string
 	sessions := make([]piSession, len(files))
 	var loadErrors []error
 	byPath := map[string]int{}
+	parseErrors := make([]error, len(files))
+	if err := parallelEach(ctx, files, func(i int) {
+		sessions[i], parseErrors[i] = parsePi(files[i])
+	}); err != nil {
+		return nil, err
+	}
 	for i, p := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		var err error
-		sessions[i], err = parsePi(p)
-		if err != nil {
+		if err := parseErrors[i]; err != nil {
 			loadErrors = append(loadErrors, fmt.Errorf("pi source %s: %w", p, err))
 		}
 		abs, _ := filepath.Abs(p)

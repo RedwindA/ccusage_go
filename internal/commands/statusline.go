@@ -162,12 +162,13 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 		writeStatuslineCache(cachePath, statuslineCache{Output: previous.Output, Updated: previous.Updated, Mtime: mtime, Size: size, Updating: true, PID: os.Getpid()})
 	}
 
-	service := pricing.NewService()
-	service.SetOffline(f.offline && !f.noOffline)
+	offline := f.offline && !f.noOffline
+	prefetch := startPricing(cmd, offline)
+	home, _ := os.UserHomeDir()
+	entries, loadErr := loadSource(cmd.Context(), "claude", sourcePaths("claude", home, true), loc, f.debug, false)
+	service := newPricingService(offline, prefetch)
 	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
 	calc := calculator.New(service)
-	home, _ := os.UserHomeDir()
-	entries, loadErr := loadSource(cmd.Context(), "claude", sourcePaths("claude", home, true), loc, f.debug)
 	if loadErr != nil && f.debug {
 		fmt.Fprintf(cmd.ErrOrStderr(), "statusline: %v\n", loadErr)
 	}

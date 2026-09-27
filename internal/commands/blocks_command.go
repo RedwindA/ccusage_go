@@ -15,7 +15,6 @@ import (
 	"github.com/RedwindA/ccusage_go/internal/config"
 	"github.com/RedwindA/ccusage_go/internal/monitor"
 	"github.com/RedwindA/ccusage_go/internal/output"
-	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/reports"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/spf13/cobra"
@@ -104,12 +103,13 @@ func NewBlocksCommand() *cobra.Command {
 		if f.dataPath != "" {
 			paths = splitPaths(f.dataPath, home)
 		}
-		entries, err := loadSource(cmd.Context(), "claude", paths, loc, f.debug)
+		offline := f.offline && !f.noOffline
+		prefetch := startPricing(cmd, offline)
+		entries, err := loadSource(cmd.Context(), "claude", paths, loc, f.debug, f.singleThread)
 		if err != nil {
 			return err
 		}
-		service := pricing.NewService()
-		service.SetOffline(f.offline && !f.noOffline)
+		service := newPricingService(offline, prefetch)
 		service.SetOverrides(cfg.PricingOverrides("blocks", "claude"))
 		debugPricing(cmd, service, entries, f)
 		calc := calculator.New(service)

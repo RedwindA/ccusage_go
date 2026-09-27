@@ -21,10 +21,8 @@ func (s *Service) exactPricing(ctx context.Context, model string, at time.Time) 
 		if _, ok := s.cache[candidate]; ok {
 			return p, nil
 		}
-		for key := range s.cache {
-			if normalize(candidate) == normalize(key) {
-				return p, nil
-			}
+		if _, ok := s.index().byNorm[normalize(candidate)]; ok {
+			return p, nil
 		}
 	}
 	return ModelPricing{}, fmt.Errorf("no exact pricing for %q", model)

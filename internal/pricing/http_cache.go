@@ -14,7 +14,7 @@ import (
 
 const pricingMaxBytes = 64 << 20
 
-func pricingCachePath(url string) string {
+func pricingCacheDir() string {
 	dir := os.Getenv("XDG_CACHE_HOME")
 	if !filepath.IsAbs(dir) {
 		home, _ := os.UserHomeDir()
@@ -23,7 +23,15 @@ func pricingCachePath(url string) string {
 		}
 		dir = filepath.Join(home, ".cache")
 	}
-	return filepath.Join(dir, "ccusage-go", "http-cache", fmtHash(url)+".cache")
+	return filepath.Join(dir, "ccusage-go", "http-cache")
+}
+
+func pricingCachePath(url string) string {
+	dir := pricingCacheDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, fmtHash(url)+".cache")
 }
 func fmtHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
@@ -55,7 +63,7 @@ func readPricingCache(path string) (string, []byte) {
 		return "", nil
 	}
 	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, pricingMaxBytes+4098))
+	raw, err := readAllLimited(file, pricingMaxBytes+4098)
 	if err != nil || len(raw) > pricingMaxBytes+4097 {
 		return "", nil
 	}
@@ -66,6 +74,31 @@ func readPricingCache(path string) (string, []byte) {
 	}
 	return tag, body
 }
+
+// readAllLimited is io.ReadAll(io.LimitReader(file, limit)) with the buffer
+// sized from the file up front instead of grown by repeated copying.
+func readAllLimited(file *os.File, limit int64) ([]byte, error) {
+	size := int64(512)
+	if info, err := file.Stat(); err == nil && info.Size() > 0 {
+		size = min(info.Size()+1, limit) // +1 reaches EOF without growing
+	}
+	buf := make([]byte, 0, size)
+	r := io.LimitReader(file, limit)
+	for {
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
+	}
+}
+
 func writePricingCache(path, etag string, body []byte) {
 	if path == "" || !validETag(etag) || len(body) > pricingMaxBytes {
 		return
@@ -86,6 +119,13 @@ func writePricingCache(path, etag string, body []byte) {
 	}
 }
 func (s *Service) fetch(ctx context.Context, url string) []byte {
+	return fetchUsable(ctx, s.client, url, func(data []byte) bool { return validatesPricing(url, data, true) })
+}
+
+// fetchUsable is fetch with a caller-supplied check for a revalidated cache
+// body, so callers that parse the body anyway can keep that parse instead of
+// decoding the multi-megabyte payload twice.
+func fetchUsable(ctx context.Context, client *http.Client, url string, usable func([]byte) bool) []byte {
 	path := pricingCachePath(url)
 	etag, cached := readPricingCache(path)
 	for attempt := 0; attempt < 2; attempt++ {
@@ -96,7 +136,7 @@ func (s *Service) fetch(ctx context.Context, url string) []byte {
 		if etag != "" {
 			req.Header.Set("If-None-Match", etag)
 		}
-		resp, err := s.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil
 		}
@@ -105,7 +145,7 @@ func (s *Service) fetch(ctx context.Context, url string) []byte {
 			if etag == "" {
 				return nil
 			}
-			if validatesPricing(url, cached, true) {
+			if usable(cached) {
 				return cached
 			}
 			if path != "" {

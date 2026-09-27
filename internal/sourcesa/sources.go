@@ -3,6 +3,7 @@
 package sourcesa
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/fileread"
+	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
@@ -94,13 +97,12 @@ func LoadWithMode(ctx context.Context, name string, paths []string, loc *time.Lo
 	if discoveryErr != nil {
 		loadErrors = append(loadErrors, discoveryErr)
 	}
-	var err error
-	var result []types.UsageEntry
-	for _, f := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	loaded := make([][]types.UsageEntry, len(files))
+	fileErrors := make([]error, len(files))
+	if err := parallelEach(ctx, files, func(i int) {
+		f := files[i]
 		var entries []types.UsageEntry
+		var err error
 		switch name {
 		case "amp":
 			entries, err = loadAmp(f)
@@ -119,14 +121,20 @@ func LoadWithMode(ctx context.Context, name string, paths []string, loc *time.Lo
 				entries, err = loadOpenClaw(f)
 			}
 		}
+		loaded[i], fileErrors[i] = entries, err
+	}); err != nil {
+		return nil, err
+	}
+	var result []types.UsageEntry
+	for i, f := range files {
 		// Preserve usable records while reporting damaged or unreadable source files.
-		if err != nil {
+		if err := fileErrors[i]; err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			loadErrors = append(loadErrors, fmt.Errorf("%s source %s: %w", name, f, err))
 		}
-		result = append(result, entries...)
+		result = append(result, loaded[i]...)
 	}
 	if name == "openclaw" {
 		result = mergeOpenClaw(result)
@@ -249,14 +257,20 @@ func readObject(path string) (object, error) {
 	return m, e
 }
 func readLines(path string) ([]object, error) {
-	b, e := os.ReadFile(path)
-	if e != nil {
-		return nil, e
+	b, release, err := fileread.Read(path)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 	var rows []object
-	for _, line := range strings.Split(string(b), "\n") {
-		var m object
-		if json.Unmarshal([]byte(line), &m) == nil && m != nil {
+	for len(b) > 0 {
+		line := b
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			line, b = b[:i], b[i+1:]
+		} else {
+			b = nil
+		}
+		if m, err := jsonscan.DecodeObject(line); err == nil && m != nil {
 			rows = append(rows, m)
 		}
 	}

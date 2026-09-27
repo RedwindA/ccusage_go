@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
@@ -12,17 +14,24 @@ import (
 // deduplicateUsage delays selection until every candidate has been parsed.
 // Streaming snapshots can grow, and sidechain replay can change request ids.
 func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].Timestamp.Equal(entries[j].Timestamp) {
-			return entries[i].SourceFile < entries[j].SourceFile
+	// Sort indexes rather than the (large) entries themselves.
+	order := make([]int, len(entries))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := &entries[order[i]], &entries[order[j]]
+		if a.Timestamp.Equal(b.Timestamp) {
+			return a.SourceFile < b.SourceFile
 		}
-		return entries[i].Timestamp.Before(entries[j].Timestamp)
+		return a.Timestamp.Before(b.Timestamp)
 	})
 	out := make([]types.UsageEntry, 0, len(entries))
 	exact := map[string]int{}
 	aliases := map[string][]int{}
-	key := func(parts ...string) string { b, _ := json.Marshal(parts); return string(b) }
-	for _, e := range entries {
+	key := dedupeKey
+	for _, k := range order {
+		e := entries[k]
 		message, _ := e.Raw["message_id"].(string)
 		request, _ := e.Raw["request_id"].(string)
 		if message == "" {
@@ -72,6 +81,37 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	}
 	return out
 }
+
+// dedupeKey joins parts into a map key. Keys were once json.Marshal(parts),
+// which turns every invalid UTF-8 byte into the same \ufffd escape; marking
+// those bytes with 0xFF (never valid UTF-8) behind length prefixes keeps
+// exactly the same collisions without the reflection.
+func dedupeKey(parts ...string) string {
+	n := 0
+	for _, p := range parts {
+		n += len(p) + 4
+	}
+	b := make([]byte, 0, n)
+	for _, p := range parts {
+		b = strconv.AppendInt(b, int64(len(p)), 10)
+		b = append(b, ':')
+		if utf8.ValidString(p) {
+			b = append(b, p...)
+			continue
+		}
+		for i := 0; i < len(p); {
+			r, size := utf8.DecodeRuneInString(p[i:])
+			if r == utf8.RuneError && size == 1 {
+				b = append(b, 0xff)
+			} else {
+				b = append(b, p[i:i+size]...)
+			}
+			i += size
+		}
+	}
+	return string(b)
+}
+
 func fileSessionID(path string) string {
 	parts := strings.Split(filepath.ToSlash(path), "/")
 	for i, p := range parts {

@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,25 +69,46 @@ type Service struct {
 	modelsFailed    bool
 	modelsRetryAt   time.Time
 	memo            map[string]lookupResult
-	client          *http.Client
-	mu              sync.Mutex
-	offline         bool
-	attempted       bool
-	cache           map[string]ModelPricing
-	overrides       map[string]Override
+	idx             *priceIndex
+	prefetch        *Prefetch
+	// prefetchedModelsUsed records that refreshModels consumed prefetch.models.
+	prefetchedModelsUsed bool
+	client               *http.Client
+	mu                   sync.Mutex
+	offline              bool
+	attempted            bool
+	cache                map[string]ModelPricing
+	overrides            map[string]Override
 }
+
+// snapshotPricing is the embedded models.dev snapshot; callers must not
+// modify the returned map.
+var snapshotPricing = sync.OnceValue(func() map[string]ModelPricing {
+	return cachedEmbedded("snapshot", func() map[string]ModelPricing { return modelsPricing(snapshot) })
+})
 
 var embeddedOnce sync.Once
 var embeddedPrices, embeddedPrimary map[string]ModelPricing
 
+func initEmbedded() {
+	fallback := snapshotPricing()
+	embeddedPrices = make(map[string]ModelPricing, len(fallback))
+	for model, p := range fallback {
+		embeddedPrices[model] = p
+	}
+	embeddedPrimary = cachedEmbedded("primary", func() map[string]ModelPricing { return primaryPricing(fallback) })
+	for model, p := range embeddedPrimary {
+		embeddedPrices[model] = p
+	}
+}
+
+// Preload starts decoding the embedded price tables in the background, so a
+// command can overlap that fixed cost with loading usage data before it
+// calls NewService.
+func Preload() { go embeddedOnce.Do(initEmbedded) }
+
 func NewService() *Service {
-	embeddedOnce.Do(func() {
-		embeddedPrices = modelsPricing(snapshot)
-		embeddedPrimary = primaryPricing(embeddedPrices)
-		for model, p := range embeddedPrimary {
-			embeddedPrices[model] = p
-		}
-	})
+	embeddedOnce.Do(initEmbedded)
 	cache := make(map[string]ModelPricing, len(embeddedPrices))
 	primary := make(map[string]ModelPricing, len(embeddedPrimary))
 	for model, p := range embeddedPrices {
@@ -230,17 +251,49 @@ func apply(p ModelPricing, o Override) ModelPricing {
 	}
 	return p
 }
+
 var normalizer = strings.NewReplacer(".", "-", "@", "-")
 
 func normalize(s string) string {
 	return normalizer.Replace(strings.ToLower(s))
 }
 
-var dateSuffix = regexp.MustCompile(`-(?:[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})$`)
+// stripDateSuffix removes a trailing -YYYYMMDD or -YYYY-MM-DD, like
+// regexp `-(?:[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})$` replaced with "" (the
+// two shapes cannot both match one suffix). It runs for every price key.
+func stripDateSuffix(s string) string {
+	digits := func(t string) bool {
+		for i := 0; i < len(t); i++ {
+			if t[i] < '0' || t[i] > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	if n := len(s); n >= 9 && s[n-9] == '-' && digits(s[n-8:]) {
+		return s[:n-9]
+	}
+	if n := len(s); n >= 11 && s[n-11] == '-' && s[n-6] == '-' && s[n-3] == '-' && digits(s[n-10:n-6]) && digits(s[n-5:n-3]) && digits(s[n-2:]) {
+		return s[:n-11]
+	}
+	return s
+}
 
-func ResolveModelName(model string) string {
-	aliases := map[string]string{}
+type parsedAliases struct {
+	raw     string
+	aliases map[string]string
+}
+
+// lastAliases caches the parse of CCUSAGE_MODEL_ALIASES, which
+// ResolveModelName otherwise repeats for every priced entry.
+var lastAliases atomic.Pointer[parsedAliases]
+
+func modelAliases() map[string]string {
 	raw := strings.TrimSpace(os.Getenv("CCUSAGE_MODEL_ALIASES"))
+	if cached := lastAliases.Load(); cached != nil && cached.raw == raw {
+		return cached.aliases
+	}
+	aliases := map[string]string{}
 	if json.Unmarshal([]byte(raw), &aliases) != nil {
 		for _, pair := range strings.FieldsFunc(strings.Trim(raw, "{}"), func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
 			if a, b, ok := strings.Cut(pair, "="); ok {
@@ -248,6 +301,12 @@ func ResolveModelName(model string) string {
 			}
 		}
 	}
+	lastAliases.Store(&parsedAliases{raw: raw, aliases: aliases})
+	return aliases
+}
+
+func ResolveModelName(model string) string {
+	aliases := modelAliases()
 	if alias := aliases[model]; alias != "" {
 		return alias
 	}
@@ -269,11 +328,51 @@ func canonical(model string) string {
 	}
 	return model
 }
-func find(all map[string]ModelPricing, model string) (ModelPricing, bool) {
+
+// priceIndex holds find's per-key work for one version of a price table:
+// keys in sorted order, each key's normalized date-less base, and the first
+// sorted key for every normalized spelling.
+type priceIndex struct {
+	keys   []string
+	base   []string
+	byNorm map[string]string
+}
+
+func newPriceIndex(all map[string]ModelPricing) *priceIndex {
+	idx := &priceIndex{keys: make([]string, 0, len(all)), byNorm: make(map[string]string, len(all))}
+	for key := range all {
+		idx.keys = append(idx.keys, key)
+	}
+	sort.Strings(idx.keys)
+	idx.base = make([]string, len(idx.keys))
+	for i, key := range idx.keys {
+		if n := normalize(key); !hasKey(idx.byNorm, n) {
+			idx.byNorm[n] = key
+		}
+		idx.base[i] = normalize(stripDateSuffix(key))
+	}
+	return idx
+}
+
+func hasKey(m map[string]string, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+
+// index returns the priceIndex for s.cache; callers hold s.mu, and code that
+// changes s.cache resets s.idx.
+func (s *Service) index() *priceIndex {
+	if s.idx == nil {
+		s.idx = newPriceIndex(s.cache)
+	}
+	return s.idx
+}
+
+func find(all map[string]ModelPricing, idx *priceIndex, model string) (ModelPricing, bool) {
 	if p, ok := all[model]; ok {
 		return p, true
 	}
-	candidates := []string{canonical(model), strings.TrimSuffix(model, "-fast"), dateSuffix.ReplaceAllString(model, "")}
+	candidates := []string{canonical(model), strings.TrimSuffix(model, "-fast"), stripDateSuffix(model)}
 	for _, prefix := range []string{"anthropic.", "us.anthropic.", "eu.anthropic.", "global.anthropic.", "jp.anthropic.", "au.anthropic."} {
 		if strings.HasPrefix(model, prefix) {
 			tail := strings.TrimPrefix(model, prefix)
@@ -295,22 +394,15 @@ func find(all map[string]ModelPricing, model string) (ModelPricing, bool) {
 			return p, true
 		}
 		n := normalize(c)
-		keys := make([]string, 0, len(all))
-		for key := range all {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if normalize(key) == n {
-				return all[key], true
-			}
+		if key, ok := idx.byNorm[n]; ok {
+			return all[key], true
 		}
 		best := ""
-		for _, key := range keys {
+		for i, key := range idx.keys {
 			if all[key].ExactOnly {
 				continue
 			}
-			base := normalize(dateSuffix.ReplaceAllString(key, ""))
+			base := idx.base[i]
 			if (n == base || strings.HasPrefix(n, base+"-")) && len(base) > len(best) {
 				best = base
 				model = key
@@ -326,18 +418,42 @@ func (s *Service) lookup(model string) (ModelPricing, bool) {
 	if result, ok := s.memo[model]; ok {
 		return result.price, result.found
 	}
-	p, ok := find(s.cache, model)
+	p, ok := find(s.cache, s.index(), model)
 	s.memo[model] = lookupResult{p, ok}
 	return p, ok
 }
+
+const liteURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+
+func parseLite(data []byte) map[string]ModelPricing {
+	live := litePricing(data)
+	patchContextTiers(live, snapshotPricing())
+	return live
+}
+
+func fetchLite(ctx context.Context, client *http.Client) map[string]ModelPricing {
+	var live map[string]ModelPricing
+	data := fetchUsable(ctx, client, liteURL, func(data []byte) bool {
+		live = cachedParse(liteURL, data, parseLite)
+		return len(live) > 0
+	})
+	if len(live) == 0 {
+		live = cachedParse(liteURL, data, parseLite)
+	}
+	return live
+}
+
 func (s *Service) refresh(ctx context.Context) {
-	live := litePricing(s.fetch(ctx, "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"))
-	patchContextTiers(live, modelsPricing(snapshot))
+	live, prefetched := s.prefetch.take(false)
+	if !prefetched {
+		live = fetchLite(ctx, s.client)
+	}
 	for model, p := range live {
 		s.cache[model] = p
 		s.primary[model] = p
 	}
 	s.memo = map[string]lookupResult{}
+	s.idx = nil
 }
 func modelsPricing(payload []byte) map[string]ModelPricing {
 	type cost struct {
@@ -366,13 +482,7 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 	if err := json.Unmarshal(payload, &data); err != nil {
 		panic(err)
 	}
-	var fast struct {
-		Exact  map[string]float64 `json:"exact"`
-		Prefix map[string]float64 `json:"normalized_prefix"`
-	}
-	if err := json.Unmarshal(fastSnapshot, &fast); err != nil {
-		panic(err)
-	}
+	fast := fastSnapshotOverrides()
 	all := make(map[string]ModelPricing, len(data))
 	perToken := func(v *float64) *float64 {
 		if v == nil {
@@ -405,8 +515,8 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 				p.FastMultiplier = mult
 			}
 		}
+		n := normalize(name)
 		for key, mult := range fast.Prefix {
-			n := normalize(name)
 			if n == key || strings.HasPrefix(n, key+"-") || strings.Contains(n, "/"+key) {
 				p.FastMultiplier = mult
 			}

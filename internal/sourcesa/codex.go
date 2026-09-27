@@ -1,6 +1,7 @@
 package sourcesa
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/fileread"
+	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
@@ -41,8 +44,87 @@ type codexSession struct {
 	fork       time.Time
 }
 
+// codexRowKeys are the top-level row fields parseCodex reads, except
+// payload: that is decoded only for the row types that read it, because on
+// response items it holds the transcript text and dominates the file.
+var codexRowKeys = map[string]bool{
+	"type": true, "timestamp": true, "created_at": true, "createdAt": true, "usage": true,
+	"model": true, "model_name": true, "metadata": true, "data": true, "result": true, "response": true,
+}
+
+// codexPayloadKeys are the payload fields parseCodex reads: the session
+// header's identity, model fields and event details. Session headers carry
+// the full instructions and messages carry their text; both are skipped.
+var codexPayloadKeys = map[string]bool{
+	"id": true, "forked_from_id": true, "source": true, "cwd": true,
+	"model": true, "model_name": true, "metadata": true,
+	"type": true, "thread_settings": true, "info": true,
+}
+
+func decodeCodexPayload(payload []byte) (interface{}, error) {
+	if payload[0] != '{' {
+		return jsonscan.Decode(payload)
+	}
+	fields := object{}
+	_, err := jsonscan.FieldsStrict(payload, func(key []byte, value jsonscan.Value) error {
+		if !codexPayloadKeys[string(key)] {
+			return nil
+		}
+		v, err := value.Decode()
+		fields[string(key)] = v
+		return err
+	})
+	return fields, err
+}
+
+// readCodexRows is readLines restricted to the fields parseCodex uses.
+func readCodexRows(path string) ([]object, error) {
+	b, release, err := fileread.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	var rows []object
+	for len(b) > 0 {
+		line := b
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			line, b = b[:i], b[i+1:]
+		} else {
+			b = nil
+		}
+		row := object{}
+		var payload []byte
+		null, err := jsonscan.FieldsStrict(line, func(key []byte, value jsonscan.Value) error {
+			if string(key) == "payload" {
+				var err error
+				payload, err = value.Raw()
+				return err
+			}
+			if !codexRowKeys[string(key)] {
+				return nil
+			}
+			v, err := value.Decode()
+			row[string(key)] = v
+			return err
+		})
+		if err != nil || null {
+			continue
+		}
+		if payload != nil {
+			switch str(row["type"]) {
+			case "session_meta", "turn_context", "event_msg":
+				if row["payload"], err = decodeCodexPayload(payload); err != nil {
+					continue
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
 func parseCodex(p string) (codexSession, error) {
-	rows, err := readLines(p)
+	rows, err := readCodexRows(p)
 	s := codexSession{}
 	if err != nil {
 		return s, err
@@ -186,13 +268,14 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 	sessions := make([]codexSession, len(files))
 	var loadErrors []error
 	byID := map[string]int{}
+	parseErrors := make([]error, len(files))
+	if err := parallelEach(ctx, files, func(i int) {
+		sessions[i], parseErrors[i] = parseCodex(files[i])
+	}); err != nil {
+		return nil, err
+	}
 	for i, p := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		var err error
-		sessions[i], err = parseCodex(p)
-		if err != nil {
+		if err := parseErrors[i]; err != nil {
 			loadErrors = append(loadErrors, fmt.Errorf("codex source %s: %w", p, err))
 		}
 		if _, ok := byID[sessions[i].id]; !ok {

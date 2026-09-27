@@ -198,3 +198,25 @@ func TestSessionNameAcrossFiles(t *testing.T) {
 		assert.Equal(t, sessionID, entry.SessionID)
 	}
 }
+
+// Usage-less lines take a metadata-only decode path; it must keep the exact
+// key matching of the generic-map path.
+func TestMetadataLineKeysMatchExactly(t *testing.T) {
+	basePath, cleanup := setupTestProject(t)
+	defer cleanup()
+
+	sessionID := "66666666-7777-8888-9999-000000000000"
+	lines := []string{
+		`{"type":"custom-title","sessionId":"` + sessionID + `","customTitle":"kept","CustomTitle":false}`,
+		`{"type":"user","cwd":"/work/real","CWD":"/work/other"}`,
+		createTestJSONLEntryWithSessionID(time.Now(), "claude-sonnet-4-5-20250514", 100, 50, "msg1", "req1", sessionID),
+	}
+
+	addProjectFile(t, basePath, "test-project", sessionID+".jsonl", lines)
+
+	entries, err := New().LoadFromPath(context.Background(), basePath)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "kept", entries[0].SessionName)
+	assert.Equal(t, "/work/real", entries[0].Workspace)
+}

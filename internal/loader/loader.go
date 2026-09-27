@@ -2,6 +2,7 @@ package loader
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/fileread"
+	"github.com/RedwindA/ccusage_go/internal/parallel"
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
@@ -19,6 +22,8 @@ import (
 type CostCalculator interface {
 	CalculateCost(entry *types.UsageEntry) error
 }
+
+const maxLineBytes = 64 * 1024 * 1024
 
 // rawRetainKeys lists raw JSONL fields that must survive Raw cleanup.
 // cache_* token fields are now first-class on UsageEntry, so they no longer
@@ -192,66 +197,36 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	type result struct {
 		entries      []types.UsageEntry
 		sessionNames map[string]string
+		debugMsg     string
 		err          error
 	}
 
-	jobs := make(chan string, len(paths))
-	results := make(chan result, len(paths))
+	// Results are merged in path order so the outcome (first session name
+	// wins, dedupe tie-breaks) does not depend on worker scheduling.
+	results := make([]result, len(paths))
+	order := parallel.LargestFirst(ctx, l.maxWorkers, paths)
+	_ = parallel.Run(ctx, l.maxWorkers, order, func(i int) {
+		entries, sessionNames, debugMsg, err := l.parseFile(paths[i])
 
-	var wg sync.WaitGroup
-	workers := l.maxWorkers
-	if workers > len(paths) {
-		workers = len(paths)
-	}
-
-	// Start workers
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for path := range jobs {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					entries, sessionNames, err := l.loadFile(path)
-
-					// Stream processing: calculate costs immediately if enabled
-					if options != nil && options.StreamProcessing && options.Calculator != nil && err == nil {
-						for i := range entries {
-							options.Calculator.CalculateCost(&entries[i])
-							clearRawExceptKeys(&entries[i], rawRetainKeys)
-						}
-					}
-
-					results <- result{entries: entries, sessionNames: sessionNames, err: err}
-				}
-			}
-		}()
-	}
-
-	// Send jobs
-	go func() {
-		defer close(jobs)
-		for _, path := range paths {
-			select {
-			case <-ctx.Done():
-				return
-			case jobs <- path:
+		// Stream processing: calculate costs immediately if enabled
+		if options != nil && options.StreamProcessing && options.Calculator != nil && err == nil {
+			for i := range entries {
+				options.Calculator.CalculateCost(&entries[i])
+				clearRawExceptKeys(&entries[i], rawRetainKeys)
 			}
 		}
-	}()
 
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+		results[i] = result{entries: entries, sessionNames: sessionNames, debugMsg: debugMsg, err: err}
+	})
 
 	var allEntries []types.UsageEntry
 	var errors []error
 	globalSessionNames := make(map[string]string)
 
-	for res := range results {
+	for _, res := range results {
+		if res.debugMsg != "" {
+			fmt.Fprint(os.Stderr, res.debugMsg)
+		}
 		if res.err != nil {
 			errors = append(errors, res.err)
 		} else {
@@ -284,12 +259,6 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	return allEntries, nil
 }
 
-func (l *Loader) loadFile(path string) ([]types.UsageEntry, map[string]string, error) {
-	// Legacy function - redirect to new version with local dedupe
-	dedupeMap := make(map[string]bool)
-	return l.loadFileWithDedupe(path, dedupeMap)
-}
-
 func (l *Loader) loadFileWithGlobalDedupe(path string, dedupeMutex *sync.Mutex, globalDedupeMap map[string]bool) ([]types.UsageEntry, map[string]string, error) {
 	return l.loadFileWithDedupe(path, globalDedupeMap, dedupeMutex)
 }
@@ -302,40 +271,62 @@ func clearRawData(entries []types.UsageEntry) {
 }
 
 func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedupeMutex ...*sync.Mutex) ([]types.UsageEntry, map[string]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, nil, types.LoaderError{Path: path, Err: err}
+	entries, sessionNames, debugMsg, err := l.parseFile(path)
+	if debugMsg != "" {
+		fmt.Fprint(os.Stderr, debugMsg)
 	}
-	defer file.Close()
+	return entries, sessionNames, err
+}
+
+// parseFile loads one transcript. With debug enabled, debugMsg summarizes
+// its parse errors; callers print it so parallel loads can keep file order.
+func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]string, debugMsg string, _ error) {
+	data, release, err := fileread.Read(path)
+	if err != nil {
+		return nil, nil, "", types.LoaderError{Path: path, Err: err}
+	}
+	defer release()
 
 	// Extract project path from file path
 	// File path format: /path/to/claude/projects/project-name/YYYY/MM/DD/file.jsonl
 	projectPath := l.extractProjectPath(path)
 
 	var entries []types.UsageEntry
-	scanner := bufio.NewScanner(file)
-
-	// Increase buffer size to handle very long lines (like TypeScript version)
-	buf := make([]byte, 0, 64*1024)   // Start with 64KB
-	scanner.Buffer(buf, 64*1024*1024) // Allow up to 1MB per line
-
 	lineNum := 0
 	parseErrors := 0
 	firstError := ""
 	sessionNameMap := make(map[string]string)
 	workspace := ""
+	var readErr error
 
-	for scanner.Scan() {
+	for len(data) > 0 {
+		line := data
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			line, data = data[:i], data[i+1:]
+		} else {
+			data = nil
+		}
+		// Lines were once read with a bufio.Scanner capped at 64MiB per
+		// line (newline included); keep rejecting the file past that cap.
+		if len(line) >= maxLineBytes {
+			readErr = bufio.ErrTooLong
+			break
+		}
 		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		raw, err := scanLine(line)
+		if err != nil {
 			parseErrors++
 			if firstError == "" && l.debug {
+				// Report encoding/json's wording, as before the scanner.
+				var full map[string]interface{}
+				if jsonErr := json.Unmarshal(line, &full); jsonErr != nil {
+					err = jsonErr
+				}
 				firstError = fmt.Sprintf("Line %d: JSON parse error: %v", lineNum, err)
 			}
 			continue // Skip malformed JSON lines
@@ -427,17 +418,17 @@ func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedu
 	}
 
 	if l.debug && parseErrors > 0 {
-		fmt.Fprintf(os.Stderr, "Debug: File %s had %d parse errors\n", filepath.Base(path), parseErrors)
+		debugMsg = fmt.Sprintf("Debug: File %s had %d parse errors\n", filepath.Base(path), parseErrors)
 		if firstError != "" {
-			fmt.Fprintf(os.Stderr, "  First error: %s\n", firstError)
+			debugMsg += fmt.Sprintf("  First error: %s\n", firstError)
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, nil, types.LoaderError{Path: path, Err: err}
+	if readErr != nil {
+		return nil, nil, debugMsg, types.LoaderError{Path: path, Err: readErr}
 	}
 
-	return deduplicateUsage(entries), sessionNameMap, nil
+	return deduplicateUsage(entries), sessionNameMap, debugMsg, nil
 }
 
 func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.UsageEntry, error) {
