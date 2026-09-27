@@ -8,97 +8,68 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- `ccusage_go update` (alias `upgrade`) upgrades in place from GitHub
-  Releases: it verifies the archive's SHA-256 checksum and that the new binary
-  runs before replacing the current one. `--check` only reports whether an
-  update is available; `ccusage_go update vX.Y.Z` installs a specific release.
+- `ccusage_go update` (alias `upgrade`) upgrades in place from GitHub Releases: it verifies the archive's SHA-256 checksum and that the new binary runs before replacing the current one. `--check` only reports whether an update is available; `ccusage_go update vX.Y.Z` installs a specific release.
 
 ### Changed
 
-- Reports are about ten times faster with identical output: `daily` drops
-  from about 1.1s to 0.1s online and from 0.42s to 0.04s offline. Transcripts
-  are scanned without decoding unused text, files are parsed in parallel, and
-  online price lists download while usage loads, with parsed tables cached
-  between runs.
+- Reports are about ten times faster with identical output: `daily` drops from about 1.1s to 0.1s online and from 0.42s to 0.04s offline. Transcripts are scanned without decoding unused text, files are parsed in parallel, and online price lists download while usage loads, with parsed tables cached between runs.
 
 ## [v0.17.1] - 2026-09-26
 
 ### Fixed
 
-- Online reports no longer stall for several seconds while merging
-  models.dev pricing; `ccusage_go daily` drops from about 5s to under 1s.
+- Online reports no longer stall for several seconds while merging models.dev pricing; `ccusage_go daily` drops from about 5s to under 1s.
 
 ## [v0.17.0] - 2026-09-25
 
 ### Added
 
-- Shell completion for flag values: output formats, sort order, cost modes,
-  pricing tiers, weekdays, comma-separated `--sections`, statusline options,
-  `--token-limit max`, directory flags, and JSON `--config` files.
+- Shell completion for flag values: output formats, sort order, cost modes, pricing tiers, weekdays, comma-separated `--sections`, statusline options, `--token-limit max`, directory flags, and JSON `--config` files.
 
 ### Fixed
 
-- `ccusage_go completion <shell>` scripts now register for the installed
-  `ccusage_go` binary instead of `ccusage`; help output uses the same name.
+- `ccusage_go completion <shell>` scripts now register for the installed `ccusage_go` binary instead of `ccusage`; help output uses the same name.
 
 ## [v0.16.0] - 2026-09-25
 
 ### Added
 
-- ccusage-style terminal reports with rounded titles, blue headers, yellow
-  totals, multiline model lists, and agent/model breakdown rows.
-- Responsive column widths with Unicode-aware wrapping and truncation,
-  compact layouts below 100 columns, and reproducible sizing through `COLUMNS`.
-- Reference snapshots and terminal layout tests covering wide and narrow
-  output, Unicode, colors, exports, and distinct model identities.
+- ccusage-style terminal reports with rounded titles, blue headers, yellow totals, multiline model lists, and agent/model breakdown rows.
+- Responsive column widths with Unicode-aware wrapping and truncation, compact layouts below 100 columns, and reproducible sizing through `COLUMNS`.
+- Reference snapshots and terminal layout tests covering wide and narrow output, Unicode, colors, exports, and distinct model identities.
 
 ### Changed
 
-- Standard report tables show comma-separated token counts and two-decimal USD
-  totals. Separate API/CC/CR cost columns are omitted to match ccusage's layout;
-  compact tables hide cache metrics and total tokens. JSON/CSV schemas remain
-  unchanged.
-- Session detail tables respect terminal width and color settings, including
-  `NO_COLOR` and `FORCE_COLOR`.
+- Standard report tables show comma-separated token counts and two-decimal USD totals. Separate API/CC/CR cost columns are omitted to match ccusage's layout; compact tables hide cache metrics and total tokens. JSON/CSV schemas remain unchanged.
+- Session detail tables respect terminal width and color settings, including `NO_COLOR` and `FORCE_COLOR`.
 
 ### Fixed
 
-- Preserve available width for workspace paths, session filenames, and other
-  non-date identifiers instead of applying date-column limits.
-- Keep focused model breakdown labels in the Models column so regular and
-  fast variants remain distinguishable.
-- Preserve non-date model suffixes such as `kimi-k2-thinking` when shortening
-  model names.
+- Preserve available width for workspace paths, session filenames, and other non-date identifiers instead of applying date-column limits.
+- Keep focused model breakdown labels in the Models column so regular and fast variants remain distinguishable.
+- Preserve non-date model suffixes such as `kimi-k2-thinking` when shortening model names.
 - Keep terminal snapshot fixtures at LF line endings on Windows checkouts.
 
 ## [v0.15.0] - 2026-09-21
 
 ### Added
 
-- Public releases under `RedwindA/ccusage_go`, with Linux/macOS/Windows amd64
-  and arm64 archives, SHA-256 checksums, and a verified Linux/macOS installer.
+- Public releases under `RedwindA/ccusage_go`, with Linux/macOS/Windows amd64 and arm64 archives, SHA-256 checksums, and a verified Linux/macOS installer.
 - Tag-triggered release automation gated by tests on Linux, macOS, and Windows.
 
-- Unified daily, weekly, monthly and session commands, plus focused commands for
-  18 coding-agent sources from the local Rust-first ccusage reference.
-- Native JSON/JSONL, SQLite and Antigravity protobuf readers; model and workspace
-  reports for Claude, Codex and Droid.
-- Calendar-period filters, project/instance grouping, agent breakdowns, sections,
-  no-cost output, JSON configuration, custom pricing, named pi stores and Linux
-  all-users reports.
-- Claude statusline hook with context usage, cost source selection, burn rate and
-  cache invalidation; embedded LiteLLM and models.dev pricing with source rules.
+- Unified daily, weekly, monthly and session commands, plus focused commands for 18 coding-agent sources from the local Rust-first ccusage reference.
+- Native JSON/JSONL, SQLite and Antigravity protobuf readers; model and workspace reports for Claude, Codex and Droid.
+- Calendar-period filters, project/instance grouping, agent breakdowns, sections, no-cost output, JSON configuration, custom pricing, named pi stores and Linux all-users reports.
+- Claude statusline hook with context usage, cost source selection, burn rate and cache invalidation; embedded LiteLLM and models.dev pricing with source rules.
 
 ### Fixed
 
 - Windows SQLite file URI handling for native agent stores.
 
 - Consistent date filtering across table, JSON and CSV, including timezone/DST.
-- Claude streaming duplicate replacement, sidechain replay and advisor usage;
-  recursive incremental cache discovery and file truncation handling.
+- Claude streaming duplicate replacement, sidechain replay and advisor usage; recursive incremental cache discovery and file truncation handling.
 - Source-specific cached/reasoning token accounting and cumulative usage replay.
-- Clean blocks JSON, fractional billing windows, and propagation of pricing and
-  no-cost settings into live monitoring.
+- Clean blocks JSON, fractional billing windows, and propagation of pricing and no-cost settings into live monitoring.
 
 ## [v0.14.0] - 2026-05-08
 
