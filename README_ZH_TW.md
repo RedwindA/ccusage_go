@@ -48,7 +48,11 @@ ccusage_go --version
 ccusage_go daily --offline
 ```
 
-再次執行即可更新。指定版本或安裝目錄：
+執行 `ccusage_go update`（別名 `upgrade`）即可更新：從 GitHub 下載最新版本、
+驗證 SHA-256 後直接替換目前的執行檔。`ccusage_go update --check` 只檢查是否有新版，
+`ccusage_go update v0.18.0` 安裝指定版本。v0.18.0 之前的版本請重新執行安裝指令更新。
+
+指定版本或安裝目錄：
 
 ```sh
 curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.17.1/install.sh -o install.sh

@@ -12,7 +12,7 @@ func NewRootCommand(version string) *cobra.Command {
 	for _, kind := range []string{"daily", "weekly", "monthly", "session"} {
 		root.AddCommand(NewReportCommand(kind, ""))
 	}
-	root.AddCommand(NewBlocksCommand(), NewMonitorCommand(), NewStatuslineCommand())
+	root.AddCommand(NewBlocksCommand(), NewMonitorCommand(), NewStatuslineCommand(), NewUpdateCommand(version))
 	for _, name := range SourceNames() {
 		agent := NewReportCommand("daily", name)
 		agent.Use = name

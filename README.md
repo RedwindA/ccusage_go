@@ -50,7 +50,13 @@ ccusage_go --version
 ccusage_go daily --offline
 ```
 
-Run the same command to upgrade. To choose a version or installation directory:
+To upgrade, run `ccusage_go update` (alias `upgrade`). It downloads the latest
+release from GitHub, verifies its SHA-256 checksum, and replaces the running
+binary in place. `ccusage_go update --check` only reports whether a newer
+release exists, and `ccusage_go update v0.18.0` installs a specific version.
+Versions before v0.18.0 upgrade by re-running the install command.
+
+To choose a version or installation directory:
 
 ```sh
 curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.17.1/install.sh -o install.sh
