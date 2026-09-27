@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.18.0] - 2026-09-27
+
+### Added
+
+- `ccusage_go update` (alias `upgrade`) upgrades in place from GitHub
+  Releases: it verifies the archive's SHA-256 checksum and that the new binary
+  runs before replacing the current one. `--check` only reports whether an
+  update is available; `ccusage_go update vX.Y.Z` installs a specific release.
+
+### Changed
+
+- Reports are about ten times faster with identical output: `daily` drops
+  from about 1.1s to 0.1s online and from 0.42s to 0.04s offline. Transcripts
+  are scanned without decoding unused text, files are parsed in parallel, and
+  online price lists download while usage loads, with parsed tables cached
+  between runs.
+
 ## [v0.17.1] - 2026-09-26
 
 ### Fixed
