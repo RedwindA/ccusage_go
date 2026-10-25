@@ -441,3 +441,44 @@ func TestDamagedFilesReturnErrorsAlongsideUsableEntries(t *testing.T) {
 		}
 	})
 }
+
+// Ports upstream's dedupes_matching_codex_usage_events_from_distinct_sessions
+// and its tier cases: outside session views, two sessions' copies of one
+// usage event count once, the first keeping its session, and their tiers
+// merge as copies within a session do.
+func TestCodexMergesMatchingUsageFromDistinctSessions(t *testing.T) {
+	event := func(session, speed string) types.UsageEntry {
+		return types.UsageEntry{SessionID: session, Timestamp: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Model: "gpt-5", InputTokens: 90, CacheReadInputTokens: 10, OutputTokens: 50, TotalTokens: 150, Speed: speed}
+	}
+	for _, tc := range []struct{ first, second, want string }{{"", "", ""}, {"", "fast", "fast"}, {"fast", "", "fast"}, {"standard", "fast", "standard"}, {"fast", "standard", "standard"}} {
+		merged := MergeCodexCopies([]types.UsageEntry{event("session-a", tc.first), event("session-b", tc.second)})
+		if len(merged) != 1 || merged[0].SessionID != "session-a" || merged[0].Speed != tc.want {
+			t.Errorf("tiers %q then %q: %+v", tc.first, tc.second, merged)
+		}
+	}
+}
+
+// Ports upstream's dedupes_copied_branch_history_across_session_files: a
+// branch rollout that copied its parent's history without naming the parent
+// counts only its own usage outside session views.
+func TestCodexMergesCopiedBranchHistoryAcrossSessionFiles(t *testing.T) {
+	root := t.TempDir()
+	tokenCount := func(ts string, input, cached, output, reasoning, total int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d,"total_tokens":%d}}}}`, ts, input, cached, output, reasoning, total)
+	}
+	parent := `{"timestamp":"2026-05-12T08:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.2"}}` + "\n" + tokenCount("2026-05-12T08:01:00.000Z", 1000, 100, 200, 20, 1200)
+	fixture(t, root, "2026-05-12T08-00-00-parent.jsonl", parent)
+	fixture(t, root, "2026-05-12T08-02-00-branch.jsonl", parent+"\n"+tokenCount("2026-05-12T08:02:00.000Z", 1600, 300, 450, 40, 2050))
+	if entries := loadTest(t, "codex", root); len(entries) != 3 {
+		t.Fatalf("the session view keeps both copies: %+v", entries)
+	}
+	merged := MergeCodexCopies(loadTest(t, "codex", root))
+	if len(merged) != 2 || merged[0].SessionID != "2026-05-12T08-00-00-parent" || merged[1].SessionID != "2026-05-12T08-02-00-branch" {
+		t.Fatal(merged)
+	}
+	requireTokens(t, merged[0], 900, 200, 100, 0, 1200)
+	requireTokens(t, merged[1], 400, 250, 200, 0, 850)
+	if merged[0].ReasoningTokens != 20 || merged[1].ReasoningTokens != 20 {
+		t.Fatal(merged)
+	}
+}

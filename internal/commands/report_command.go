@@ -207,8 +207,10 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	sessions := agent == "" && slices.Contains(kinds, "session")
 	bounded := !sessions || len(kinds) > 1
 	// Upstream totals unified daily, weekly and monthly sections and claude
-	// daily from its Claude daily loader, which dedupes differently.
-	daily := agent == "" || agent == "claude" && kind == "daily"
+	// daily from its Claude daily loader, which dedupes differently, and
+	// counts a usage event that two Codex sessions record once outside its
+	// session reports.
+	daily := agent == "" || agent == "claude" && kind == "daily" || agent == "codex" && kind != "session"
 	scopes.price(prefetch)
 	entries, sessionEntries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded, daily, sessions)
 	if err != nil {

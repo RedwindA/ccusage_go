@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -191,6 +192,51 @@ func TestDroidIsPricedInDisplayMode(t *testing.T) {
 		}
 		if unpriced := fmt.Sprint(totals["unpricedModels"]); unpriced != "[unknown-droid-model]" {
 			t.Errorf("%v: unpricedModels %s", args, unpriced)
+		}
+	}
+}
+
+// A branch rollout that copied its parent's history without naming the
+// parent repeats the parent's usage. Upstream counts it once in daily,
+// weekly and monthly reports, unified ones included, and in a unified
+// session report bounded by date, which loads Codex as those do; the
+// session reports otherwise keep each session's own copy.
+func TestCodexCountsUsageCopiedAcrossSessionsOnce(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	tokenCount := func(ts string, input, cached, output, reasoning, total int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"output_tokens":%d,"reasoning_output_tokens":%d,"total_tokens":%d}}}}`, ts, input, cached, output, reasoning, total)
+	}
+	parent := `{"timestamp":"2026-05-12T08:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.2"}}` + "\n" + tokenCount("2026-05-12T08:01:00.000Z", 1000, 100, 200, 20, 1200)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/05/12/rollout-2026-05-12T08-00-00-parent.jsonl"), parent)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/05/12/rollout-2026-05-12T08-02-00-branch.jsonl"), parent+"\n"+tokenCount("2026-05-12T08:02:00.000Z", 1600, 300, 450, 40, 2050))
+	args := []string{"--json", "--offline", "--timezone", "UTC"}
+	for _, report := range [][]string{{"codex", "daily"}, {"codex", "weekly"}, {"codex", "monthly"}, {"daily"}, {"weekly"}, {"monthly"}, {"daily", "--since", "20260501"}} {
+		if totals := sourceCLIJSON(t, append(report, args...)...)["totals"].(map[string]any); totals["totalTokens"] != 2050.0 {
+			t.Errorf("%v: totals %v, want 2050 tokens", report, totals)
+		}
+	}
+	for _, tc := range []struct {
+		report []string
+		branch float64
+	}{{[]string{"codex", "session"}, 2050}, {[]string{"codex", "session", "--since", "20260501"}, 2050}, {[]string{"session"}, 2050}, {[]string{"session", "--since", "20260501"}, 850}} {
+		payload := sourceCLIJSON(t, append(tc.report, args...)...)
+		rows, _ := payload["sessions"].([]any)
+		if tc.report[0] == "session" {
+			rows, _ = payload["session"].([]any)
+		}
+		got := map[string]any{}
+		for _, row := range rows {
+			r := row.(map[string]any)
+			id, _ := r["sessionId"].(string)
+			if id == "" {
+				id, _ = r["period"].(string)
+			}
+			got[id] = r["totalTokens"]
+		}
+		if want := map[string]any{"2026/05/12/rollout-2026-05-12T08-00-00-parent": 1200.0, "2026/05/12/rollout-2026-05-12T08-02-00-branch": tc.branch}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: sessions %v, want %v", tc.report, got, want)
 		}
 	}
 }

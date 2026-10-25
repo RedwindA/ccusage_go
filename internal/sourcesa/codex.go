@@ -472,15 +472,33 @@ func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([
 			result = append(result, e)
 		}
 	}
-	// Copied sessions keep an explicit tier over an unclassified copy, and
-	// conflicting tiers resolve to Standard, then Fast, then Flex, whatever
-	// the file order. Copies of a compaction request share its response ID,
-	// and the first copy keeps its session, time and model.
+	return finalize(mergeCodexCopies(result, true), loc, false), errors.Join(loadErrors...)
+}
+
+// MergeCodexCopies counts a usage event that several sessions record once,
+// keeping the first copy's session. Upstream does so in every report but the
+// session one, so a branch rollout that copied its parent's history without
+// naming the parent does not bill that history twice.
+func MergeCodexCopies(entries []types.UsageEntry) []types.UsageEntry {
+	return mergeCodexCopies(entries, false)
+}
+
+// mergeCodexCopies merges the copies of each usage event, within a session
+// when bySession is set. Copied sessions keep an explicit tier over an
+// unclassified copy, and conflicting tiers resolve to Standard, then Fast,
+// then Flex, whatever the file order. Copies of a compaction request share
+// its response ID in any session, and the first copy keeps its session, time
+// and model.
+func mergeCodexCopies(entries []types.UsageEntry, bySession bool) []types.UsageEntry {
 	tierRank := map[string]int{"flex": 1, "fast": 2, "standard": 3}
 	indexes := map[[2]string]int{}
 	var merged []types.UsageEntry
-	for _, e := range result {
-		key := [2]string{"", signature(e, false)}
+	for _, e := range entries {
+		usage := e
+		if !bySession {
+			usage.SessionID = ""
+		}
+		key := [2]string{"", signature(usage, false)}
 		if id, ok := e.Raw["response_id"].(string); ok {
 			key = [2]string{id, ""}
 		}
@@ -493,5 +511,5 @@ func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([
 		indexes[key] = len(merged)
 		merged = append(merged, e)
 	}
-	return finalize(merged, loc, false), errors.Join(loadErrors...)
+	return merged
 }

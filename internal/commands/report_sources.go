@@ -38,10 +38,12 @@ type sourceJob struct {
 // source's --since, which lets Claude skip the sessions last written before
 // it; whole entries keep Claude's full history. daily dedupes bounded Claude
 // entries as upstream's daily loader does for daily, weekly and monthly
-// totals; whole entries always follow its entry loader. Only Claude is read
-// twice when both are asked for. detected names the agents with usage,
-// including Claude usage that only skipped files hold. The scopes must be
-// priced.
+// totals, and counts a usage event that several Codex sessions record once,
+// as upstream does outside session reports; whole entries always follow its
+// entry loader, and keep each Codex session's copy unless the Codex scope is
+// bounded by date. Only Claude is read twice when both are asked for.
+// detected names the agents with usage, including Claude usage that only
+// skipped files hold. The scopes must be priced.
 func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config, bounded, daily, whole bool) (boundedEntries, wholeEntries []types.UsageEntry, detected []string, err error) {
 	f := scopes[""].f
 	home, err := os.UserHomeDir()
@@ -166,6 +168,14 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			}
 		} else {
 			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
+			if job.name == "codex" && daily {
+				// A unified session report bounded by date reads Codex as
+				// the other reports do.
+				if whole && scope.since == "" && scope.until == "" {
+					history = entries
+				}
+				entries = sourcesa.MergeCodexCopies(entries)
+			}
 		}
 		fallbackSpeed := "standard"
 		if job.name == "codex" {
