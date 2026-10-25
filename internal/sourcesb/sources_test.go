@@ -384,6 +384,20 @@ func TestAntigravityDefaultRootsNeedConversationsDirectory(t *testing.T) {
 		t.Fatalf("%+v", entries)
 	}
 }
+func TestAntigravityDefaultRootsReadWholeConversationsTree(t *testing.T) {
+	home := t.TempDir()
+	conv := filepath.Join(home, ".gemini/antigravity/conversations")
+	antigravityDB(t, filepath.Join(conv, "a.db"), "gemini-3-pro", 0, "outer")
+	antigravityDB(t, filepath.Join(conv, "sub/c.db"), "gemini-3-pro", 0, "outer-sub")
+	antigravityDB(t, filepath.Join(conv, "conversations/b.db"), "gemini-3-pro", 0, "inner")
+	ids := map[string]bool{}
+	for _, e := range mustLoad(t, "antigravity", DefaultPathsForHome("antigravity", home)...) {
+		ids[e.ID] = true
+	}
+	if len(ids) != 3 || !ids["outer"] || !ids["outer-sub"] || !ids["inner"] {
+		t.Fatalf("%v", ids)
+	}
+}
 func TestAntigravityNewerModelIDs(t *testing.T) {
 	cases := []struct {
 		id                          int

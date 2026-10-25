@@ -36,12 +36,18 @@ func defaultPaths(name, home string, envEnabled bool) []string {
 			return roots
 		}
 	}
-	// Antigravity defaults name conversations/ itself: a root holding only
-	// conversation_summaries.db must not be read as a conversation database.
-	// ANTIGRAVITY_DATA_DIR roots keep the conversations/ fallback in LoadUntil.
-	rel := map[string][]string{"opencode": {".local/share/opencode"}, "codebuff": {".config/manicode", ".config/manicode-dev", ".config/manicode-staging"}, "hermes": {".hermes"}, "goose": {".local/share/goose/sessions", "Library/Application Support/goose/sessions", ".local/share/Block/goose/sessions"}, "kilo": {".local/share/kilo"}, "kimi": {".kimi", ".kimi-code"}, "copilot": {".copilot"}, "antigravity": {".gemini/antigravity/conversations", ".gemini/antigravity-cli/conversations", ".gemini/antigravity-ide/conversations", ".gemini/antigravity-backup/conversations", ".gemini/antigravity-acp/conversations", ".config/antigravity/conversations"}, "zcode": {".zcode"}}[name]
+	rel := map[string][]string{"opencode": {".local/share/opencode"}, "codebuff": {".config/manicode", ".config/manicode-dev", ".config/manicode-staging"}, "hermes": {".hermes"}, "goose": {".local/share/goose/sessions", "Library/Application Support/goose/sessions", ".local/share/Block/goose/sessions"}, "kilo": {".local/share/kilo"}, "kimi": {".kimi", ".kimi-code"}, "copilot": {".copilot"}, "antigravity": {".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide", ".gemini/antigravity-backup", ".gemini/antigravity-acp", ".config/antigravity"}, "zcode": {".zcode"}}[name]
 	for _, p := range rel {
-		roots = append(roots, filepath.Join(home, p))
+		p = filepath.Join(home, p)
+		// A default Antigravity root without conversations/ holds at most
+		// conversation_summaries.db, which is not a conversation database.
+		// ANTIGRAVITY_DATA_DIR roots keep the conversations/ fallback in LoadUntil.
+		if name == "antigravity" {
+			if i, e := os.Stat(filepath.Join(p, "conversations")); e != nil || !i.IsDir() {
+				continue
+			}
+		}
+		roots = append(roots, p)
 	}
 	if envEnabled && name == "opencode" && filepath.IsAbs(os.Getenv("XDG_DATA_HOME")) {
 		roots = []string{filepath.Join(os.Getenv("XDG_DATA_HOME"), "opencode")}
