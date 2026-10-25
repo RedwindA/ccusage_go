@@ -959,9 +959,6 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	}
 	if tier, ok := usage["service_tier"].(string); ok {
 		entry.Raw["service_tier"] = tier
-		if tier == "priority" || tier == "fast" {
-			entry.Speed = "fast"
-		}
 	}
 
 	// input_tokens is required (must be number, can be 0)

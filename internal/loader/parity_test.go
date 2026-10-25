@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -275,6 +276,29 @@ func TestClaudeSpeedBreaksEqualUsageTie(t *testing.T) {
 	entries := mustNative(t, p)
 	if len(entries) != 1 || entries[0].Speed != "fast" {
 		t.Fatal(entries)
+	}
+}
+
+// Upstream takes Claude's speed from usage.speed alone, so a Priority Tier
+// request (usage.service_tier "priority") is priced and named as standard.
+func TestClaudeSpeedComesFromUsageSpeedOnly(t *testing.T) {
+	record := func(request, speed, tier string) map[string]interface{} {
+		r := nativeRecord("s", "msg-"+request, request, 10, false)
+		usage := r["message"].(map[string]interface{})["usage"].(map[string]interface{})
+		if speed != "" {
+			usage["speed"] = speed
+		}
+		usage["service_tier"] = tier
+		return r
+	}
+	entries := mustNative(t, writeNative(t, t.TempDir(), "projects/p/s.jsonl",
+		record("a", "", "priority"), record("b", "fast", "standard"), record("c", "standard", "priority")))
+	got := map[string]string{}
+	for _, e := range entries {
+		got[e.Raw["request_id"].(string)] = e.Speed
+	}
+	if want := map[string]string{"a": "", "b": "fast", "c": "standard"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("speeds %v, want %v", got, want)
 	}
 }
 
