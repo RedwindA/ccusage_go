@@ -182,6 +182,7 @@ ccusage_go claude daily --project myproject --instances
 ccusage_go claude workspace --breakdown --since 2026-01-01
 ccusage_go codex model --speed fast --offline
 ccusage_go codex session --json
+ccusage_go codex session --id 019a7c3e-5f1d-7b20-9c4e-2d8f6a1b3c5e
 ccusage_go pi daily --pi-path /path/to/sessions,/archive/sessions
 ccusage_go blocks --json --offline
 ccusage_go statusline --cost-source both
@@ -192,6 +193,10 @@ pi-agent, Goose, OpenClaw, Kilo, Kimi, Qwen, GitHub Copilot CLI, Gemini CLI,
 Antigravity, Grok Build CLI, and ZCode. SQLite stores are read without a separate
 SQLite installation. Existing Go CSV output, session-name filters, and live
 monitoring remain available.
+
+Codex reports read both plain `.jsonl` and Zstandard-compressed `.jsonl.zst` rollouts under `sessions/` and `archived_sessions/`, counting a rollout stored both ways once. `--speed` (`auto`, `standard`, `flex`, or `fast`, or `"speed"` in config) sets the Codex pricing tier: `auto` uses the `service_tier` each rollout records, falling back to the one in Codex's `config.toml`, and Flex usage is priced with the model's Flex multiplier. `codex session --id` (`-i`) shows one session and accepts the full session ID, the rollout file name with or without `.jsonl` or `.jsonl.zst`, the trailing UUID, or a `codex://threads/<uuid>` link; with `--json` it prints that session's row on its own. An unknown or empty ID, or a UUID shared by several rollouts, is an error.
+
+Antigravity is read from the `conversations/` directory of `~/.gemini/antigravity`, `~/.gemini/antigravity-cli`, `~/.gemini/antigravity-ide`, `~/.gemini/antigravity-backup`, `~/.gemini/antigravity-acp` (ACP mode), and `~/.config/antigravity`; a default root without `conversations/` is skipped. `ANTIGRAVITY_DATA_DIR` or `--data-path` selects other roots.
 
 Daily, weekly, and monthly reports share inclusive `--since`/`--until` filters
 (YYYY-MM-DD or YYYYMMDD), timezone-aware grouping, `--last N`, sorting, compact
@@ -222,6 +227,8 @@ Custom per-model overrides are supported in JSON configuration. `--no-cost`
 removes cost columns and JSON fields, including nested breakdowns. `--jq` pipes
 JSON through an installed `jq` executable.
 
+In `--mode auto`, a JSON `modelBreakdowns` entry carries an optional `storedCost`: the part of its `cost` taken from costs the agent recorded (such as Claude's `costUSD`) rather than calculated from pricing. It is omitted when no recorded cost was used, never appears in calculate or display mode, and is removed by `--no-cost`.
+
 Configuration is discovered in `.ccusage/ccusage.json`, then the Claude config
 locations, or selected with `--config`. Explicit CLI arguments take precedence.
 For example:
@@ -230,9 +237,12 @@ For example:
 {
   "defaults": {"offline": true, "timezone": "UTC"},
   "commands": {"daily": {"breakdown": true}},
+  "codex": {"defaults": {"speed": "flex"}},
   "pi": {"stores": [{"name": "archive", "path": "/data/pi-archive"}]}
 }
 ```
+
+Source sections (`<source>.defaults`, `<source>.commands.<report>`, and `commands."<source>:<report>"`) apply to that source in unified reports as well as in `ccusage_go <source> <report>`, so each source can use its own date bounds, timezone, cost mode, offline setting, pricing overrides, Codex speed, and paths; explicit CLI arguments still win. `last`, `date`, `month`, `week`, `id`, and `sessionId` are read only from the command line, and a configured `project`, `instances`, or `projectAliases` applies only to `claude daily` (a configured `project` also filters the Claude rows of a unified daily report).
 
 Named pi stores contribute to unified reports and must not overlap other pi
 stores. On Linux, root can use `--all-users` to scan system accounts' default
@@ -273,7 +283,12 @@ make test
 
 # Run with profiling
 ENABLE_PROFILING=1 go test -v ./...
+
+# Refresh embedded pricing snapshots from an upstream ccusage checkout
+make update-pricing UPSTREAM=../ccusage
 ```
+
+`make update-pricing` runs `scripts/update_pricing.py`, which copies the models.dev pricing, its catalog rules, and the Fast and Flex multiplier overrides from the upstream ccusage checkout in `UPSTREAM` (default `../ccusage`) into `internal/pricing`, and downloads the LiteLLM table at the revision that checkout's `flake.lock` pins. `python3 -m unittest discover -s scripts -p 'test_*.py'` tests the script offline.
 
 ### Project Structure
 

@@ -214,7 +214,12 @@ make test
 
 # 啟用效能分析執行
 ENABLE_PROFILING=1 go test -v ./...
+
+# 從上游 ccusage 原始碼更新內嵌定價快照
+make update-pricing UPSTREAM=../ccusage
 ```
+
+`make update-pricing` 執行 `scripts/update_pricing.py`，從 `UPSTREAM`（預設 `../ccusage`）指定的上游 ccusage 原始碼複製 models.dev 定價、目錄規則以及 Fast 與 Flex 倍率覆寫至 `internal/pricing`，並依該原始碼 `flake.lock` 鎖定的版本下載 LiteLLM 定價表。`python3 -m unittest discover -s scripts -p 'test_*.py'` 可離線測試此腳本。
 
 ### 專案結構
 
@@ -287,6 +292,7 @@ ccusage daily --sections monthly,session --json --no-cost
 ccusage claude daily --instances --project myproject
 ccusage claude workspace --breakdown
 ccusage codex model --speed fast
+ccusage codex session --id 019a7c3e-5f1d-7b20-9c4e-2d8f6a1b3c5e
 ccusage blocks --json --offline
 ccusage statusline --cost-source both
 ```
@@ -295,3 +301,11 @@ ccusage statusline --cost-source both
 `--last N` 包含目前所在的曆日、週或月，不能與 `--since` / `--until` 同時使用。
 設定檔支援共用預設值、命令設定、自訂模型定價和具名 pi 儲存區，命令列參數優先。
 保留 Go 版 CSV、會話名稱篩選和即時監控。
+
+來源專屬設定（`<source>.defaults`、`<source>.commands.<report>` 與 `commands."<source>:<report>"`）除了 `ccusage <source> <report>` 之外，也套用於統一報表中的該來源，因此各來源可使用各自的日期範圍、時區、費用模式、離線設定、定價覆寫、Codex speed 與路徑；命令列參數仍然優先。`last`、`date`、`month`、`week`、`id` 與 `sessionId` 只從命令列讀取；設定檔中的 `project`、`instances` 與 `projectAliases` 只用於 `claude daily`（設定的 `project` 也會篩選統一日報中的 Claude 資料）。
+
+Codex 報表同時讀取 `sessions/` 與 `archived_sessions/` 下的一般 `.jsonl` 與 Zstandard 壓縮的 `.jsonl.zst` rollout，同一 rollout 兩種格式並存時只計算一次。`--speed`（`auto`、`standard`、`flex` 或 `fast`，設定檔中為 `"speed"`）指定 Codex 計價層級：`auto` 採用 rollout 記錄的 `service_tier`，沒有記錄時改用 Codex `config.toml` 的設定；Flex 用量以模型的 Flex 倍率計價。`codex session --id`（`-i`）只顯示單一會話，可接受完整 session ID、含或不含 `.jsonl`／`.jsonl.zst` 的 rollout 檔名、結尾的 UUID 或 `codex://threads/<uuid>` 連結；搭配 `--json` 時只輸出該會話。找不到或空白的 ID，以及對應多個 rollout 的 UUID 都會回報錯誤。
+
+Antigravity 從 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp`（ACP 模式）與 `~/.config/antigravity` 的 `conversations/` 目錄讀取；沒有 `conversations/` 的預設根目錄會略過。可用 `ANTIGRAVITY_DATA_DIR` 或 `--data-path` 指定其他根目錄。
+
+`--mode auto` 時，JSON `modelBreakdowns` 項目會多一個選用的 `storedCost` 欄位，表示 `cost` 中取自代理程式記錄成本（例如 Claude 的 `costUSD`）而非依定價計算的部分；未使用記錄成本時省略，calculate 與 display 模式不會輸出，`--no-cost` 也會移除。
