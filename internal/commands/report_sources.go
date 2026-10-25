@@ -31,20 +31,22 @@ type sourceJob struct {
 	paths             []string
 }
 
-// loadReportEntries loads every source the report reads. A bounded report
-// drops usage dated before each source's --since, which lets Claude skip the
-// sessions last written before it. detected names the agents with usage,
-// including Claude usage that only skipped files hold.
-func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config, bounded bool) ([]types.UsageEntry, []string, error) {
+// loadReportEntries loads every source the report reads into the views asked
+// for. Bounded entries serve sections that drop usage dated before each
+// source's --since, which lets Claude skip the sessions last written before
+// it; whole entries keep Claude's full history. Only Claude is read twice when
+// both are asked for. detected names the agents with usage, including Claude
+// usage that only skipped files hold.
+func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config, bounded, whole bool) (boundedEntries, wholeEntries []types.UsageEntry, detected []string, err error) {
 	f := scopes[""].f
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if f.dataPath != "" && !f.allUsers {
 		for _, path := range splitPaths(f.dataPath, home) {
 			if _, err := os.Stat(path); err != nil {
-				return nil, nil, fmt.Errorf("--data-path: %w", err)
+				return nil, nil, nil, fmt.Errorf("--data-path: %w", err)
 			}
 		}
 	}
@@ -55,14 +57,14 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	var jobs []sourceJob
 	if f.allUsers {
 		if agent != "" {
-			return nil, nil, fmt.Errorf("--all-users requires a unified report")
+			return nil, nil, nil, fmt.Errorf("--all-users requires a unified report")
 		}
 		if runtime.GOOS != "linux" || os.Geteuid() != 0 {
-			return nil, nil, fmt.Errorf("--all-users requires Linux root")
+			return nil, nil, nil, fmt.Errorf("--all-users requires Linux root")
 		}
 		users, err := systemUsers()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --all-users ignores source path environment variables, explicit paths and pi.stores")
 		for _, u := range users {
@@ -102,7 +104,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 				for _, p := range paths {
 					for _, q := range occupied {
 						if pathsOverlap(p, q) {
-							return nil, nil, fmt.Errorf("pi store %q overlaps another pi store: %s", store.Name, p)
+							return nil, nil, nil, fmt.Errorf("pi store %q overlaps another pi store: %s", store.Name, p)
 						}
 					}
 					occupied = append(occupied, p)
@@ -112,9 +114,9 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		}
 	}
 	type result struct {
-		entries  []types.UsageEntry
-		detected bool
-		err      error
+		entries, whole []types.UsageEntry
+		detected       bool
+		err            error
 	}
 	results := make([]result, len(jobs))
 	var wg sync.WaitGroup
@@ -130,7 +132,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		if job.label == "" {
 			scope = scopes.of(job.name)
 		}
-		var entries []types.UsageEntry
+		var entries, history []types.UsageEntry
 		var detected bool
 		var err error
 		if job.name == "copilot" && scope.until != "" {
@@ -148,6 +150,9 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 				since, _ = time.ParseInLocation("2006-01-02", scope.since, scope.loc)
 			}
 			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.f.debug, f.singleThread)
+			if whole && !since.IsZero() && err == nil {
+				history, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
+			}
 		} else {
 			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
 		}
@@ -155,24 +160,31 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		if job.name == "codex" {
 			fallbackSpeed = calculator.DetectCodexSpeed(job.paths)
 		}
-		for j := range entries {
-			if job.name == "codex" && entries[j].Speed == "" {
-				entries[j].Speed = fallbackSpeed
-			}
-			if entries[j].Agent == "" {
-				entries[j].Agent = job.name
-			}
-			if job.label != "" {
-				entries[j].Agent = job.label
-			}
-			if job.user != "" {
-				if entries[j].Raw == nil {
-					entries[j].Raw = map[string]any{}
+		tag := func(entries []types.UsageEntry) {
+			for j := range entries {
+				if job.name == "codex" && entries[j].Speed == "" {
+					entries[j].Speed = fallbackSpeed
 				}
-				entries[j].Raw["system_user"] = job.user
+				if entries[j].Agent == "" {
+					entries[j].Agent = job.name
+				}
+				if job.label != "" {
+					entries[j].Agent = job.label
+				}
+				if job.user != "" {
+					if entries[j].Raw == nil {
+						entries[j].Raw = map[string]any{}
+					}
+					entries[j].Raw["system_user"] = job.user
+				}
 			}
 		}
-		results[i] = result{entries, detected, err}
+		tag(entries)
+		tag(history)
+		if history == nil {
+			history = entries
+		}
+		results[i] = result{entries, history, detected, err}
 	}
 	for i := range jobs {
 		wg.Add(1)
@@ -183,8 +195,6 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		}
 	}
 	wg.Wait()
-	var all []types.UsageEntry
-	var detected []string
 	seen := map[string]bool{}
 	detect := func(agent string) {
 		if agent != "" && !seen[agent] {
@@ -195,14 +205,19 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	for i, res := range results {
 		if res.err != nil {
 			if errors.Is(res.err, context.Canceled) {
-				return nil, nil, res.err
+				return nil, nil, nil, res.err
 			}
 			if agent != "" {
-				return nil, nil, res.err
+				return nil, nil, nil, res.err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s %s: %v\n", jobs[i].user, jobs[i].name, res.err)
 		}
-		all = append(all, res.entries...)
+		if bounded {
+			boundedEntries = append(boundedEntries, res.entries...)
+		}
+		if whole {
+			wholeEntries = append(wholeEntries, res.whole...)
+		}
 		for _, entry := range res.entries {
 			detect(entry.Agent)
 		}
@@ -210,7 +225,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			detect(jobs[i].name)
 		}
 	}
-	return all, detected, cmd.Context().Err()
+	return boundedEntries, wholeEntries, detected, cmd.Context().Err()
 }
 
 func sourcePaths(name, home string, env bool) []string {

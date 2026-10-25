@@ -76,6 +76,26 @@ func pruneTotalCost(t *testing.T, output string) float64 {
 	return payload.Totals.Cost
 }
 
+// pruneSectionCost sums the cost of a unified report section's rows.
+func pruneSectionCost(t *testing.T, output, section string) float64 {
+	t.Helper()
+	var payload map[string]json.RawMessage
+	var rows []struct {
+		Cost float64 `json:"totalCost"`
+	}
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, output)
+	}
+	if err := json.Unmarshal(payload[section], &rows); err != nil {
+		t.Fatalf("no %s section: %v\n%s", section, err, output)
+	}
+	cost := 0.0
+	for _, row := range rows {
+		cost += row.Cost
+	}
+	return cost
+}
+
 func pruneTime(value string) time.Time {
 	at, _ := time.Parse(time.RFC3339, value)
 	return at
@@ -126,15 +146,33 @@ func TestDateBoundedReportsSkipFilesLastWrittenBeforeTheWindow(t *testing.T) {
 		{[]string{"claude", "model"}, 1},
 		{[]string{"daily"}, 1},
 		{[]string{"monthly", "--sections", "weekly"}, 1},
+		{[]string{"daily", "--sections", "session"}, 1},
 		// Unified sessions are dated by their latest activity and totaled
 		// whole, and blocks anchor on earlier entries.
 		{[]string{"session"}, 3},
-		{[]string{"daily", "--sections", "session"}, 3},
+		{[]string{"session", "--sections", "daily"}, 3},
 		{[]string{"claude", "blocks"}, 3},
 	} {
 		args := append(append(tc.args, boundedArgs...), "--json")
 		if got := pruneTotalCost(t, pruneRun(t, "", args...)); got != tc.want {
 			t.Errorf("%v: totalCost = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+	// A session section reads the misdated file; the sections beside it
+	// still skip it.
+	for _, tc := range []struct {
+		args     []string
+		sections map[string]float64
+	}{
+		{[]string{"daily", "--sections", "session"}, map[string]float64{"daily": 1, "session": 3}},
+		{[]string{"monthly", "--sections", "weekly,session"}, map[string]float64{"monthly": 1, "weekly": 1, "session": 3}},
+		{[]string{"session", "--sections", "daily"}, map[string]float64{"session": 3, "daily": 1}},
+	} {
+		output := pruneRun(t, "", append(append(tc.args, boundedArgs...), "--json")...)
+		for section, want := range tc.sections {
+			if got := pruneSectionCost(t, output, section); got != want {
+				t.Errorf("%v: %s cost = %v, want %v", tc.args, section, got, want)
+			}
 		}
 	}
 	if got := pruneTotalCost(t, pruneRun(t, "", "claude", "daily", "--timezone", "UTC", "--mode", "display", "--offline", "--json")); got != 3 {

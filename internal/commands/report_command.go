@@ -198,14 +198,20 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	}
 	prefetch := startPricing(cmd, scopes.offline())
 	// Unified sessions are dated by their latest activity and totaled whole,
-	// so they read usage from before --since.
-	bounded := agent != "" || !slices.Contains(kinds, "session")
-	entries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded)
+	// so they read Claude usage from before --since; the sections beside
+	// them still skip the Claude sessions last written before it.
+	sessions := agent == "" && slices.Contains(kinds, "session")
+	bounded := !sessions || len(kinds) > 1
+	entries, sessionEntries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded, sessions)
 	if err != nil {
 		return err
 	}
 	scopes.price(prefetch)
-	debugPricing(cmd, entries, f, scopes)
+	if sessions {
+		debugPricing(cmd, sessionEntries, f, scopes)
+	} else {
+		debugPricing(cmd, entries, f, scopes)
+	}
 	if agent == "claude" && kind == "session" && f.sessionID != "" {
 		for i := range entries {
 			if entries[i].Raw == nil {
@@ -218,9 +224,11 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			entries[i].Raw["recorded_cost"] = recorded
 		}
 	}
-	for i := range entries {
-		if _, err := scopes.of(entries[i].Agent).calc.CalculateCosts(cmd.Context(), entries[i:i+1]); err != nil {
-			return err
+	for _, view := range [][]types.UsageEntry{entries, sessionEntries} {
+		for i := range view {
+			if _, err := scopes.of(view[i].Agent).calc.CalculateCosts(cmd.Context(), view[i:i+1]); err != nil {
+				return err
+			}
 		}
 	}
 	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: unified.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows(), DetectedAgents: detected}
@@ -241,7 +249,11 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	payload := map[string]any{}
 	for _, k := range kinds {
 		o.Kind = k
-		rows := reports.Aggregate(entries, o)
+		view := entries
+		if k == "session" && sessions {
+			view = sessionEntries
+		}
+		rows := reports.Aggregate(view, o)
 		if f.projectAliases != "" && f.format != "json" {
 			var aliases map[string]string
 			if strings.HasPrefix(strings.TrimSpace(f.projectAliases), "{") {
