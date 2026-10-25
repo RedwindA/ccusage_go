@@ -350,8 +350,8 @@ func statuslineTranscriptContext(path, model string, service *pricing.Service) (
 		}
 		usage := v.Message.Usage
 		limit := 200000
-		if p, err := service.GetPricing(context.Background(), model, time.Time{}); err == nil && p.MaxInputTokens > 0 {
-			limit = p.MaxInputTokens
+		if n, ok := service.ContextLimit(context.Background(), model); ok {
+			limit = n
 		}
 		return usage.Input + usage.Read + usage.Create, limit, true
 	}

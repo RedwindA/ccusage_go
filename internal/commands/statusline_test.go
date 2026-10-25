@@ -106,6 +106,12 @@ invalid trailing record
 			t.Fatalf("%q: %d %d %v", model, input, limit, ok)
 		}
 	}
+	// Windows upstream's context_limit reports, offline.
+	for model, want := range map[string]int{"z-ai/glm-4.7": 200000, "glm-4.7:thinking": 200000, "novita/glm-5.1": 204800, "glm-4.7": 200000, "gpt-5.2": 272000, "azure/eu/gpt-4.1": 1047576, "claude-sonnet-4-5": 200000} {
+		if _, limit, _ := statuslineTranscriptContext(path, model, service); limit != want {
+			t.Errorf("%s: %d, want %d", model, limit, want)
+		}
+	}
 }
 func TestStatuslineStaleOutputWhileLivePIDUpdates(t *testing.T) {
 	now := time.Now()

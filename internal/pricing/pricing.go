@@ -439,13 +439,14 @@ func (s *Service) exactEntry(model string) (ModelPricing, bool) {
 
 // find looks model up in one table like upstream's find_entry_or_alias: the
 // id, its built-in alias, the exact-only id a separator spelling names and,
-// when fuzzy is set, the longest key matching it. The empty id names nothing,
-// though every key contains it: upstream's callers never price it.
-func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool) (ModelPricing, bool) {
+// when fuzzy is set, the longest key matching it, among the entries keep
+// accepts. The empty id names nothing, though every key contains it:
+// upstream's callers never price it.
+func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool, keep func(ModelPricing) bool) (ModelPricing, bool) {
 	if model == "" {
 		return ModelPricing{}, false
 	}
-	if p, ok := all[model]; ok {
+	if p, ok := all[model]; ok && keep(p) {
 		return p, true
 	}
 	names := []string{model}
@@ -453,19 +454,19 @@ func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool
 		names = []string{alias, model}
 	}
 	for _, name := range names {
-		if p, ok := all[name]; ok {
+		if p, ok := all[name]; ok && keep(p) {
 			return p, true
 		}
 		n := normalizer.Replace(name)
 		if id := idx.exactOnly[n]; id != "" {
-			return all[id], true
+			return all[id], keep(all[id])
 		}
 		if !fuzzy || hasKey(idx.exactOnly, n) {
 			continue
 		}
 		best := ""
 		for i, key := range idx.keys {
-			if len(key) > len(best) && !all[key].ExactOnly && pricingKeyMatches(key, idx.norm[i], name, n) {
+			if len(key) > len(best) && !all[key].ExactOnly && keep(all[key]) && pricingKeyMatches(key, idx.norm[i], name, n) {
 				best = key
 			}
 		}
@@ -475,6 +476,10 @@ func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool
 	}
 	return ModelPricing{}, false
 }
+
+func anyEntry(ModelPricing) bool { return true }
+
+func hasContextLimit(p ModelPricing) bool { return p.MaxInputTokens > 0 }
 
 // pricingKeyMatches reports whether one of key and model contains the other,
 // as written or with '.' and '@' read as '-'.
@@ -543,15 +548,58 @@ func (s *Service) lookup(model, resolved string) (ModelPricing, bool) {
 	for _, allow := range []bool{false, fuzzy} {
 		for _, name := range names {
 			if !ok {
-				p, ok = find(s.primary, s.primaryIndex(), name, allow)
+				p, ok = find(s.primary, s.primaryIndex(), name, allow, anyEntry)
 			}
 		}
 	}
 	if !ok {
-		p, ok = find(s.models, s.index(), resolved, fuzzy)
+		p, ok = find(s.models, s.index(), resolved, fuzzy, anyEntry)
 	}
 	s.memo[key] = lookupResult{p, ok}
 	return p, ok
+}
+
+// builtinContextLimits are upstream's last-resort context windows, which
+// count only once LiteLLM and models.dev publish none.
+var builtinContextLimits = map[string]ModelPricing{"gpt-5.6-sol": {MaxInputTokens: 1050000}, "gpt-5.6-terra": {MaxInputTokens: 1050000}, "gpt-5.6-luna": {MaxInputTokens: 1050000}}
+
+var builtinContextIndex = sync.OnceValue(func() *priceIndex { return newPriceIndex(builtinContextLimits) })
+
+// ContextLimit is upstream's PricingMap::context_limit: the context window of
+// the entry lookup would price model from, counting only entries that publish
+// one (an override's maxInputTokens among them), and then the built-in
+// last-resort limits.
+func (s *Service) ContextLimit(ctx context.Context, model string) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resolved := ResolveModelName(model)
+	s.refreshFor(ctx, model, resolved)
+	names := []string{model}
+	if resolved != model {
+		names = append(names, resolved)
+	}
+	fuzzy := !s.requiresExact(model) && !s.requiresExact(resolved)
+	for _, allow := range []bool{false, fuzzy} {
+		for _, name := range names {
+			for _, key := range []string{name, canonical(name)} {
+				if limit := s.overrides[key].MaxInputTokens; limit != nil {
+					return *limit, true
+				}
+			}
+			if p, ok := find(s.primary, s.primaryIndex(), name, allow, hasContextLimit); ok {
+				return p.MaxInputTokens, true
+			}
+		}
+	}
+	if p, ok := find(s.models, s.index(), resolved, fuzzy, hasContextLimit); ok {
+		return p.MaxInputTokens, true
+	}
+	for _, name := range names {
+		if p, ok := find(builtinContextLimits, builtinContextIndex(), name, fuzzy, hasContextLimit); ok {
+			return p.MaxInputTokens, true
+		}
+	}
+	return 0, false
 }
 
 const liteURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"

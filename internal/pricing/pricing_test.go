@@ -318,3 +318,52 @@ func TestHermesNormalizesBillingProviders(t *testing.T) {
 		}
 	}
 }
+
+// Ported from the context_limit halves of upstream's
+// exact_only_fallback_beats_a_fuzzy_primary_match,
+// configured_alias_of_an_exact_only_tier_beats_a_fuzzy_match_on_the_alias and
+// builtin_gpt_5_6_fallbacks_preserve_source_precedence: the context window
+// comes from the entry lookup would price from, skipping entries that publish
+// none, and the built-in gpt-5.6 limits come last.
+func TestContextLimitComesFromEntriesThatPublishOne(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"claude-opus-5-turbo":"claude-opus-5-fast"}`)
+	s := tableService(map[string]ModelPricing{"claude-opus-5": {InputCostPerToken: 1e-6, MaxInputTokens: 123456}, "glm-4.7": {InputCostPerToken: 1e-6}})
+	s.models = map[string]ModelPricing{"claude-opus-5": {MaxInputTokens: 234567}, "claude-opus-5-fast": {ExactOnly: true, MaxInputTokens: 765432}, "z-ai/glm-4.7": {MaxInputTokens: 200000}, "glm-4.7": {MaxInputTokens: 204800}}
+	for model, want := range map[string]int{"claude-opus-5-fast": 765432, "claude-opus-5-turbo": 765432, "claude-opus-5": 123456, "z-ai/glm-4.7": 200000} {
+		if limit, ok := s.ContextLimit(ctx, model); !ok || limit != want {
+			t.Errorf("%s: %d %v, want %d", model, limit, ok, want)
+		}
+	}
+	s.models = map[string]ModelPricing{"claude-opus-5-fast": {ExactOnly: true}}
+	if limit, ok := s.ContextLimit(ctx, "claude-opus-5-turbo"); ok {
+		t.Errorf("an exact-only alias without a limit took %d from a fuzzy match", limit)
+	}
+	for _, tc := range []struct {
+		primary, models, want int
+	}{{654321, 777777, 654321}, {0, 777777, 777777}, {0, 0, 1050000}} {
+		s := tableService(map[string]ModelPricing{"gpt-5.6-sol": {InputCostPerToken: 4e-6, MaxInputTokens: tc.primary}})
+		s.models = map[string]ModelPricing{"gpt-5.6-sol": {MaxInputTokens: tc.models}}
+		if limit, ok := s.ContextLimit(ctx, "gpt-5.6-sol"); !ok || limit != tc.want {
+			t.Errorf("%+v: %d %v", tc, limit, ok)
+		}
+	}
+}
+
+// Ported from the context_limit halves of upstream's pricing_lookup_resolves_model_aliases,
+// embedded_pricing_includes_gpt_5_5_for_offline_codex_reports,
+// full_override_creates_new_model, exact_override_wins_over_gpt_5_6_alias
+// and missing_max_input_tokens_does_not_clobber_existing_limit.
+func TestContextLimitFollowsAliasesAndOverrides(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"private-gpt-55":"gpt-5.5"}`)
+	s := NewService()
+	s.SetOffline(true)
+	input, custom, gpt56 := 1e-6, 123456, 654321
+	s.SetOverrides(map[string]Override{"custom-model": {InputCostPerToken: &input, MaxInputTokens: &custom}, "gpt-5.6": {InputCostPerToken: &input, MaxInputTokens: &gpt56}, "gpt-5.5": {InputCostPerToken: &input}})
+	for model, want := range map[string]int{"gpt-5.5": 1050000, "private-gpt-55": 1050000, "custom-model": 123456, "gpt-5.6": 654321} {
+		if limit, ok := s.ContextLimit(ctx, model); !ok || limit != want {
+			t.Errorf("%s: %d %v, want %d", model, limit, ok, want)
+		}
+	}
+}

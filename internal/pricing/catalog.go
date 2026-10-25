@@ -158,7 +158,8 @@ func primaryPricing(fallback map[string]ModelPricing) map[string]ModelPricing {
 		p, exists := primary[name]
 		force := name == "gpt-5.1-codex" || name == "gpt-5.2-codex" || name == "gpt-5.2"
 		if !exists || force {
-			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), cacheReadExplicit: true, cacheCreateExplicit: true, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest}
+			// Rates only: the snapshot's context limit still stands.
+			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), cacheReadExplicit: true, cacheCreateExplicit: true, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest, MaxInputTokens: p.MaxInputTokens}
 			if name == "claude-sonnet-4" {
 				i, o, c, r := 6e-6, 22.5e-6, 7.5e-6, .6e-6
 				p.InputAbove = &i
@@ -177,24 +178,21 @@ func primaryPricing(fallback map[string]ModelPricing) map[string]ModelPricing {
 				p.cacheCreateExplicit = true
 			}
 		}
-		if p.MaxInputTokens == 0 {
-			if strings.HasPrefix(name, "claude-") {
-				p.MaxInputTokens = 200000
-			}
-			if strings.HasPrefix(name, "gpt-5.4") || strings.HasPrefix(name, "gpt-5.5") || strings.HasPrefix(name, "gpt-5.6") {
-				p.MaxInputTokens = 1050000
-			}
-			if contains([]string{"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}, name) {
-				p.MaxInputTokens = 1000000
-			}
-			if strings.HasPrefix(name, "moonshot/") {
-				p.MaxInputTokens = 262144
-			}
-			if name == "grok-4.3" {
-				p.MaxInputTokens = 1000000
-			}
-		}
 		primary[name] = p
+	}
+	// Upstream's built-in context limits replace the snapshot's for these
+	// models; gpt-5.6's are builtinContextLimits, a last resort.
+	for limit, names := range map[int][]string{
+		1050000: {"gpt-5.5", "gpt-5.4"},
+		1000000: {"grok-4.3", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"},
+		262144:  {"moonshot/kimi-k2.5", "moonshot/kimi-k2.6"},
+		200000:  {"claude-opus-4-5", "claude-haiku-4-5", "claude-opus-4", "claude-sonnet-4", "claude-3-5-haiku", "claude-3-5-haiku-20241022", "claude-3-opus", "claude-3-sonnet", "claude-3-haiku"},
+	} {
+		for _, name := range names {
+			p := primary[name]
+			p.MaxInputTokens = limit
+			primary[name] = p
+		}
 	}
 	patchContextTiers(primary, fallback)
 	return primary
@@ -227,9 +225,6 @@ func patchContextTiers(primary, fallback map[string]ModelPricing) {
 			p.OutputAbove = tier.OutputAbove
 			p.CacheCreateAbove = tier.CacheCreateAbove
 			p.CacheReadAbove = tier.CacheReadAbove
-		}
-		if p.MaxInputTokens == 0 && ok {
-			p.MaxInputTokens = tier.MaxInputTokens
 		}
 		primary[name] = p
 	}
