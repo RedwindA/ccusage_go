@@ -1317,7 +1317,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 	output.WriteString("\n")
 	output.WriteString(" ╭───────────────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                               │\n")
-	output.WriteString(" │  Claude Code Token Usage Report - Session Blocks (WITH GO)  │\n")
+	output.WriteString(" │   Claude Code Token Usage Report - Session Blocks (WITH GO)   │\n")
 	output.WriteString(" │                                                               │\n")
 	output.WriteString(" ╰───────────────────────────────────────────────────────────────╯\n\n")
 
@@ -1700,7 +1700,7 @@ func (f *TableWriterFormatter) formatEmptyBlocksReport() string {
 	output.WriteString("\n")
 	output.WriteString(" ╭───────────────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                               │\n")
-	output.WriteString(" │  Claude Code Token Usage Report - Session Blocks (WITH GO)  │\n")
+	output.WriteString(" │   Claude Code Token Usage Report - Session Blocks (WITH GO)   │\n")
 	output.WriteString(" │                                                               │\n")
 	output.WriteString(" ╰───────────────────────────────────────────────────────────────╯\n\n")
 

@@ -1,8 +1,10 @@
 package output
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/stretchr/testify/assert"
@@ -37,4 +39,22 @@ func TestBlocksReportContainsCostBreakdown(t *testing.T) {
 	assert.Contains(t, output, "API Cost", "Blocks report should have API Cost column")
 	assert.Contains(t, output, "Input", "Blocks report should have Input column")
 	assert.Contains(t, output, "Output", "Blocks report should have Output column")
+}
+
+// Every row of the blocks report's title box, with or without blocks, is
+// as wide as its borders.
+func TestBlocksReportTitleBoxIsAligned(t *testing.T) {
+	now := time.Now()
+	formatter := NewTableWriterFormatter(true)
+	for name, blocks := range map[string][]types.SessionBlock{
+		"empty":  nil,
+		"blocks": {{ID: now.Format(time.RFC3339), StartTime: now, EndTime: now.Add(5 * time.Hour)}},
+	} {
+		box := strings.Split(strings.TrimPrefix(formatter.FormatBlocksReport(blocks, 0), "\n"), "\n")[:5]
+		for _, line := range box {
+			if utf8.RuneCountInString(line) != utf8.RuneCountInString(box[0]) {
+				t.Fatalf("%s: title box rows differ in width:\n%s", name, strings.Join(box, "\n"))
+			}
+		}
+	}
 }
