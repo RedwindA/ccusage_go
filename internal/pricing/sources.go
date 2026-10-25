@@ -51,7 +51,8 @@ func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, pro
 	exactOnly := false
 	switch agent {
 	case "hermes":
-		if id := providerName + "/" + model; providerName != "" && providerName != "hermes" && s.hasExactPricing(ctx, id) {
+		providerName = hermesProvider(providerName, model)
+		if id := providerName + "/" + model; providerName != "hermes" && s.hasExactPricing(ctx, id) {
 			candidates = []string{id, model}
 		}
 	case "kilo":
@@ -188,4 +189,31 @@ func zcodeIsZai(model string, provider any) bool {
 func zcodeZaiProvider(name string) bool {
 	return contains([]string{"zai", "z.ai", "zai-coding-plan", "builtin:bigmodel-coding-plan"}, name) ||
 		strings.HasPrefix(name, "account:zai-") || strings.HasPrefix(name, "builtin:zai-")
+}
+
+// hermesProvider is upstream's Hermes normalize_provider: billing providers
+// compare case-insensitively with '_' for '-', a few spellings name one
+// vendor, and a missing provider is inferred from the model.
+func hermesProvider(provider, model string) string {
+	provider = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(provider)), "-", "_")
+	switch provider {
+	case "":
+		model = strings.ToLower(model)
+		switch {
+		case strings.HasPrefix(model, "claude-") || strings.HasPrefix(model, "claude/"):
+			return "anthropic"
+		case strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "chatgpt") || len(model) > 1 && model[0] == 'o' && isDigit(model[1]):
+			return "openai"
+		case strings.HasPrefix(model, "gemini-") || strings.HasPrefix(model, "gemini/"):
+			return "google"
+		}
+		return "hermes"
+	case "claude":
+		return "anthropic"
+	case "openai_codex":
+		return "openai"
+	case "google_ai", "gemini", "vertex", "vertex_ai":
+		return "google"
+	}
+	return provider
 }

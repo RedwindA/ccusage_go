@@ -235,3 +235,36 @@ func TestProviderQualifiedIDsNeedTheirOwnEntry(t *testing.T) {
 		}
 	}
 }
+
+// Hermes reads billing providers like upstream's normalize_provider before
+// qualifying the model, and infers a missing one from the model.
+func TestHermesNormalizesBillingProviders(t *testing.T) {
+	ctx := context.Background()
+	at, _ := time.Parse(time.RFC3339, "2026-08-17T01:00:00Z")
+	embedded := NewService()
+	embedded.SetOffline(true)
+	if p, err := embedded.GetSourcePricing(ctx, "deepseek-v4-flash", "hermes", "DeepSeek", at); err != nil || p.InputCostPerToken != embedded.models["deepseek/deepseek-v4-flash"].InputCostPerToken {
+		t.Errorf("DeepSeek provider: %+v %v", p, err)
+	}
+	s := tableService(map[string]ModelPricing{"gpt-x": {InputCostPerToken: 1}, "openai/gpt-x": {InputCostPerToken: 2}, "claude-x": {InputCostPerToken: 3}, "anthropic/claude-x": {InputCostPerToken: 4}, "gemini-x": {InputCostPerToken: 5}, "google/gemini-x": {InputCostPerToken: 6}, "o3": {InputCostPerToken: 7}, "openai/o3": {InputCostPerToken: 8}, "acme-x": {InputCostPerToken: 9}, "hermes/acme-x": {InputCostPerToken: 10}})
+	for _, tc := range []struct {
+		model    string
+		provider any
+		want     float64
+	}{
+		{"gpt-x", "OpenAI-Codex", 2},
+		{"gpt-x", nil, 2},
+		{"o3", "", 8},
+		{"claude-x", "Claude", 4},
+		{"claude-x", nil, 4},
+		{"gemini-x", " Vertex-AI ", 6},
+		{"gemini-x", "gemini", 6},
+		{"gemini-x", nil, 6},
+		{"acme-x", "Hermes", 9},
+		{"acme-x", nil, 9},
+	} {
+		if p, err := s.GetSourcePricing(ctx, tc.model, "hermes", tc.provider, time.Time{}); err != nil || p.InputCostPerToken != tc.want {
+			t.Errorf("%v/%s: %+v %v, want %v", tc.provider, tc.model, p, err, tc.want)
+		}
+	}
+}
