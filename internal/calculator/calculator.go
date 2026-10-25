@@ -53,6 +53,7 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 	recorded := entry.HasCost || entry.Cost != 0
 	if entry.Agent == "hermes" || entry.Agent == "opencode" {
 		if entry.Cost > 0 {
+			entry.UsesStoredCost = c.mode != "calculate" && c.mode != "display"
 			return
 		}
 		c.calculateSingleCost(ctx, entry)
@@ -65,6 +66,7 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 		return
 	}
 	if c.mode != "calculate" && recorded && !c.hasPiOverride(entry) {
+		entry.UsesStoredCost = true
 		return
 	}
 	c.calculateSingleCost(ctx, entry)

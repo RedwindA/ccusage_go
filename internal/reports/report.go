@@ -64,6 +64,9 @@ type Model struct {
 	Total           int     `json:"totalTokens"`
 	Cost            float64 `json:"cost"`
 	MissingPricing  bool    `json:"missingPricing,omitempty"`
+	// StoredCost is the part of Cost that auto mode took from recorded
+	// costs, nil when no entry used one.
+	StoredCost *float64 `json:"storedCost,omitempty"`
 }
 
 type accumulator struct {
@@ -410,6 +413,13 @@ func (a *accumulator) add(e types.UsageEntry) {
 	m.CacheReadCost += e.CacheReadCost
 	if missing, _ := e.Raw["missing_pricing"].(bool); missing {
 		m.MissingPricing = true
+	}
+	if e.UsesStoredCost {
+		stored := e.Cost
+		if m.StoredCost != nil {
+			stored += *m.StoredCost
+		}
+		m.StoredCost = &stored
 	}
 }
 

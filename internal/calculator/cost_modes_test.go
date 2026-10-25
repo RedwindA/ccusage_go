@@ -116,6 +116,41 @@ func TestHermesSkipsAProviderRateThatBillsNothing(t *testing.T) {
 		t.Errorf("free acme/private: %v %v", e.Cost, e.Raw)
 	}
 }
+
+// Only auto mode reports the recorded cost it billed as stored, following
+// each source's own rule for when a recorded cost wins.
+func TestAutoModeMarksTheRecordedCostItBills(t *testing.T) {
+	s := pricing.NewService()
+	s.SetOffline(true)
+	input := 0.001
+	s.SetOverrides(map[string]pricing.Override{"custom": {InputCostPerToken: &input}})
+	c := New(s)
+	for _, tc := range []struct {
+		name  string
+		entry types.UsageEntry
+		auto  bool
+	}{
+		{"claude costUSD", types.UsageEntry{Agent: "claude", Model: "claude-sonnet-4-20250514", InputTokens: 500, Cost: 0.5, HasCost: true}, true},
+		{"claude costUSD 0", types.UsageEntry{Agent: "claude", Model: "claude-sonnet-4-20250514", InputTokens: 500, HasCost: true}, true},
+		{"claude without costUSD", types.UsageEntry{Agent: "claude", Model: "claude-sonnet-4-20250514", InputTokens: 500}, false},
+		{"grok costUsdTicks", types.UsageEntry{Agent: "grok", Model: "grok-4.5-build", InputTokens: 18444, OutputTokens: 130, Cost: 0.0185192, HasCost: true}, true},
+		{"kilo cost 0", types.UsageEntry{Agent: "kilo", Model: "gpt-5", InputTokens: 100, HasCost: true}, true},
+		{"opencode cost", types.UsageEntry{Agent: "opencode", Model: "gpt-5", InputTokens: 100, Cost: 0.5, HasCost: true}, true},
+		{"opencode cost 0", types.UsageEntry{Agent: "opencode", Model: "gpt-5", InputTokens: 100, HasCost: true}, false},
+		{"hermes cost 0", types.UsageEntry{Agent: "hermes", Model: "gpt-5", InputTokens: 100, HasCost: true}, false},
+		{"pi cost", types.UsageEntry{Agent: "pi", Model: "gpt-5", InputTokens: 100, Cost: 0.5, HasCost: true, Raw: map[string]interface{}{"source_format": "pi"}}, true},
+		{"pi override", types.UsageEntry{Agent: "pi", Model: "custom", InputTokens: 100, Cost: 0.5, HasCost: true, Raw: map[string]interface{}{"source_format": "pi"}}, false},
+	} {
+		for _, mode := range []string{"auto", "calculate", "display"} {
+			c.SetMode(mode)
+			e := tc.entry
+			_ = c.CalculateCost(&e)
+			if want := tc.auto && mode == "auto"; e.UsesStoredCost != want {
+				t.Errorf("%s %s: UsesStoredCost = %v, want %v", tc.name, mode, e.UsesStoredCost, want)
+			}
+		}
+	}
+}
 func TestUnknownAndReasoning(t *testing.T) {
 	c := modernCalculator()
 	e := types.UsageEntry{Model: "not-a-real-model", InputTokens: 100}

@@ -198,6 +198,9 @@ func TestCopilotSessionCreditsCLI(t *testing.T) {
 			for _, model := range r["modelBreakdowns"].([]any) {
 				m := model.(map[string]any)
 				line += fmt.Sprintf(" %s=%.5f", m["modelName"], m["cost"])
+				if stored, ok := m["storedCost"]; ok {
+					line += fmt.Sprintf("/%.5f", stored)
+				}
 			}
 			out = append(out, line)
 		}
@@ -207,9 +210,9 @@ func TestCopilotSessionCreditsCLI(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"copilot", "daily"}, []string{"2026-02-03 50 2 unknown=0.06000 gpt-5.4=0.00025", "2026-02-04 0 <nil> unknown=0.02000"}},
+		{[]string{"copilot", "daily"}, []string{"2026-02-03 50 2 unknown=0.06000/0.06000 gpt-5.4=0.00025", "2026-02-04 0 <nil> unknown=0.02000/0.02000"}},
 		{[]string{"copilot", "daily", "--mode", "calculate"}, []string{"2026-02-03 50 2 gpt-5.4=0.00025 unknown=0.00000", "2026-02-04 0 <nil> unknown=0.00000"}},
-		{[]string{"daily"}, []string{"2026-02-03 50 2 unknown=0.06000 gpt-5.4=0.00025", "2026-02-04 0 0 unknown=0.02000"}},
+		{[]string{"daily"}, []string{"2026-02-03 50 2 unknown=0.06000/0.06000 gpt-5.4=0.00025", "2026-02-04 0 0 unknown=0.02000/0.02000"}},
 	} {
 		if got := rows(tc.args...); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%v: got %q, want %q", tc.args, got, tc.want)

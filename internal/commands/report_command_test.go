@@ -233,3 +233,44 @@ func TestClaudeReportsAgreeOnRequestlessDedupe(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoModeBreakdownsReportTheStoredPartOfCost(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/project-a/session-a/chat.jsonl"), strings.Join([]string{
+		`{"timestamp":"2026-09-15T12:00:00.000Z","sessionId":"session-a","requestId":"request-a","message":{"id":"message-a","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"output_tokens":100}}}`,
+		`{"timestamp":"2026-09-15T12:01:00.000Z","sessionId":"session-a","requestId":"request-b","costUSD":0.5,"message":{"id":"message-b","model":"claude-sonnet-4-20250514","usage":{"input_tokens":500,"output_tokens":10}}}`,
+	}, "\n"))
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	breakdown := func(args []string, key string, agent bool) map[string]any {
+		payload := sourceCLIJSON(t, append(args, "--json", "--offline", "--timezone", "UTC")...)
+		row := payload[key].([]any)[0].(map[string]any)
+		if agent {
+			row = row["agents"].([]any)[0].(map[string]any)
+		}
+		return row["modelBreakdowns"].([]any)[0].(map[string]any)
+	}
+	for _, tc := range []struct {
+		args  []string
+		key   string
+		agent bool
+	}{
+		{[]string{"claude", "daily"}, "daily", false},
+		{[]string{"claude", "session"}, "sessions", false},
+		{[]string{"claude", "monthly"}, "monthly", false},
+		{[]string{"daily", "--by-agent"}, "daily", true},
+	} {
+		auto := breakdown(tc.args, tc.key, tc.agent)
+		if cost, _ := auto["cost"].(float64); auto["storedCost"] != 0.5 || cost <= 0.5 {
+			t.Errorf("%v: %v", tc.args, auto)
+		}
+		for _, mode := range []string{"calculate", "display"} {
+			if other := breakdown(append(tc.args, "--mode", mode), tc.key, tc.agent); other["storedCost"] != nil {
+				t.Errorf("%v --mode %s: %v", tc.args, mode, other)
+			}
+		}
+		if stripped := breakdown(append(tc.args, "--no-cost"), tc.key, tc.agent); stripped["storedCost"] != nil {
+			t.Errorf("%v --no-cost: %v", tc.args, stripped)
+		}
+	}
+}

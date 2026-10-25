@@ -81,3 +81,60 @@ func TestWorkspaceAndInstanceIdentity(t *testing.T) {
 		t.Fatalf("bad project filter: %+v", rows)
 	}
 }
+
+func TestModelBreakdownsTrackStoredCost(t *testing.T) {
+	day := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	entry := func(at time.Time, model string, cost float64, stored bool) types.UsageEntry {
+		return types.UsageEntry{Agent: "claude", Timestamp: at, Model: model, InputTokens: 100, OutputTokens: 10, Cost: cost, UsesStoredCost: stored}
+	}
+	stored := entry(day, "claude-sonnet-4-20250514", 0.5, true)
+	entries := []types.UsageEntry{stored, entry(day.Add(time.Second), "claude-sonnet-4-20250514", 0.25, false), entry(day.Add(2*time.Second), "gpt-5", 0.125, false), stored}
+	storedCost := func(rows []*Row) map[string]any {
+		got := map[string]any{}
+		for _, m := range rows[0].Breakdowns {
+			got[m.Name] = nil
+			if m.StoredCost != nil {
+				got[m.Name] = *m.StoredCost
+			}
+		}
+		return got
+	}
+	daily := Aggregate(entries, Options{Kind: "daily", Location: time.UTC})
+	if got := storedCost(daily); daily[0].Breakdowns[0].Cost != 1.25 || got["claude-sonnet-4-20250514"] != 1.0 || got["gpt-5"] != nil {
+		t.Fatalf("daily stored costs %v in %+v", got, daily[0].Breakdowns)
+	}
+	entries = append(entries, entry(day.AddDate(0, 0, 1), "claude-sonnet-4-20250514", 0.25, true))
+	monthly := Aggregate(entries, Options{Kind: "monthly", Location: time.UTC})
+	if got := storedCost(monthly); got["claude-sonnet-4-20250514"] != 1.25 || got["gpt-5"] != nil {
+		t.Fatalf("monthly stored costs %v", got)
+	}
+
+	for _, o := range []Options{{Kind: "monthly", ByAgent: true}, {Kind: "monthly", Agent: "claude"}} {
+		o.Location = time.UTC
+		rows := Aggregate(entries, o)
+		b, _ := json.Marshal(FocusedJSONRows(rows, o))
+		var payload []struct {
+			Breakdowns []map[string]any `json:"modelBreakdowns"`
+			Agents     []struct {
+				Breakdowns []map[string]any `json:"modelBreakdowns"`
+			} `json:"agents"`
+		}
+		if err := json.Unmarshal(b, &payload); err != nil {
+			t.Fatal(err)
+		}
+		breakdowns := payload[0].Breakdowns
+		if o.ByAgent {
+			breakdowns = append(breakdowns, payload[0].Agents[0].Breakdowns...)
+		}
+		for _, m := range breakdowns {
+			stored, ok := m["storedCost"]
+			if want := m["modelName"] == "claude-sonnet-4-20250514"; ok != want || want && stored != 1.25 {
+				t.Errorf("%+v: %v", o, m)
+			}
+		}
+		o.NoCost = true
+		if b, _ := json.Marshal(FocusedJSONRows(rows, o)); strings.Contains(string(b), "storedCost") {
+			t.Errorf("--no-cost kept storedCost: %s", b)
+		}
+	}
+}

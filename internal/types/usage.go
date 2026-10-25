@@ -16,6 +16,7 @@ type UsageEntry struct {
 	Workspace       string    `json:"workspace,omitempty"`
 	Speed           string    `json:"speed,omitempty"`
 	HasCost         bool      `json:"-"`
+	UsesStoredCost  bool      `json:"-"` // auto mode billed the recorded Cost
 	Credits         float64   `json:"credits,omitempty"`
 	ReasoningTokens int       `json:"reasoning_tokens,omitempty"`
 	ID              string    `json:"id"`
