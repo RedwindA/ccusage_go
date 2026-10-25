@@ -29,10 +29,12 @@ func (s *Service) hasPrimaryPricing(ctx context.Context, model string) bool {
 }
 
 // GetSourcePricing keeps source-specific naming and vendor billing policy out of
-// the adapters' token parsing. Exact raw overrides always take priority.
+// the adapters' token parsing. Overrides always take priority: first one the
+// "[agent] model" label names, directly or through its alias as upstream's
+// has_user_override reads it, then one on the raw model.
 func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, provider any, at time.Time) (ModelPricing, error) {
 	qualified := "[" + agent + "] " + model
-	if s.HasOverride(qualified) {
+	if s.HasOverride(qualified) || s.HasOverride(ResolveModelName(qualified)) {
 		p, err := s.GetPricing(ctx, qualified, at)
 		if agent == "zcode" && zcodeIsZai(model, provider) {
 			p = zcodePricing(p)

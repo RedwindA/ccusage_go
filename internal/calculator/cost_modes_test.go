@@ -69,6 +69,28 @@ func TestPiAutoOverrideResolvesConfiguredModelAliases(t *testing.T) {
 		}
 	}
 }
+
+// An override reached through an alias of the store-prefixed label prices
+// the record, as upstream's find on the "[pi] model" label does, instead of
+// only making auto mode drop the recorded cost.
+func TestPiOverrideThroughAnAliasOfTheStoreLabel(t *testing.T) {
+	s := pricing.NewService()
+	s.SetOffline(true)
+	input, output := 0.001, 0.002
+	s.SetOverrides(map[string]pricing.Override{"custom": {InputCostPerToken: &input, OutputCostPerToken: &output}})
+	c := New(s)
+	for _, agent := range []string{"pi", "omp"} {
+		t.Setenv("CCUSAGE_MODEL_ALIASES", `{"[`+agent+`] private":"custom"}`)
+		for _, mode := range []string{"auto", "calculate"} {
+			c.SetMode(mode)
+			e := types.UsageEntry{Agent: agent, Model: "private", InputTokens: 1000, OutputTokens: 2000, Cost: 1.5, HasCost: true, Raw: map[string]interface{}{"source_format": "pi"}}
+			_ = c.CalculateCost(&e)
+			if math.Abs(e.Cost-5) > 1e-12 || e.Raw["missing_pricing"] != nil {
+				t.Errorf("%s %s: %v %v", agent, mode, e.Cost, e.Raw)
+			}
+		}
+	}
+}
 func TestUnknownAndReasoning(t *testing.T) {
 	c := modernCalculator()
 	e := types.UsageEntry{Model: "not-a-real-model", InputTokens: 100}
