@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,46 @@ func TestClaudeRequestlessReplayDoesNotMergeParents(t *testing.T) {
 	entries := mustNative(t, replay, parents)
 	if len(entries) != 2 || entries[0].OutputTokens != 2 || entries[1].OutputTokens != 1000 || entries[0].IsSidechain || entries[1].IsSidechain {
 		t.Fatal(entries)
+	}
+}
+
+// A replaced survivor leaves its old exact key in the index. Upstream
+// re-checks the entry now in that slot, so a later entry under the old key
+// is matched like any other new entry instead of merging into the survivor.
+func TestClaudeExactDedupeMatchesOnlyTheCurrentSurvivor(t *testing.T) {
+	later := nativeRecord("s2", "m", "r2", 100, true)
+	later["timestamp"] = "2026-09-12T04:48:42.296Z"
+	for _, tc := range []struct {
+		name    string
+		records []map[string]interface{}
+		total   int
+	}{
+		// The parent replaces the sidechain, whose (m, r2) key stays behind.
+		{"request", []map[string]interface{}{
+			nativeRecord("s1", "m", "r2", 1, true),
+			nativeRecord("s1", "m", "r1", 10, false),
+			later,
+		}, 12 + 102},
+		// The requestless sidechain's key stays behind the same way.
+		{"requestless", []map[string]interface{}{
+			requestlessRecord("2026-09-12T04:38:42.296Z", "s", "g", 1, true),
+			nativeRecord("s", "g", "r1", 10, false),
+			requestlessRecord("2026-09-12T04:38:42.296Z", "s", "g", 100, false),
+		}, 12 + 200},
+	} {
+		root := t.TempDir()
+		var paths []string
+		for i, r := range tc.records {
+			paths = append(paths, writeNative(t, root, fmt.Sprintf("projects/p/%c.jsonl", 'a'+i), r))
+		}
+		entries := mustNative(t, paths...)
+		total := 0
+		for _, e := range entries {
+			total += e.TotalTokens
+		}
+		if len(entries) != 2 || total != tc.total || entries[0].IsSidechain || entries[0].Raw["request_id"] != "r1" {
+			t.Errorf("%s: %d entries, %d tokens: %+v", tc.name, len(entries), total, entries)
+		}
 	}
 }
 func TestClaudeSpeedBreaksEqualUsageTie(t *testing.T) {

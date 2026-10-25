@@ -45,12 +45,14 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			out = append(out, e)
 			continue
 		}
-		exactKey := key(message, request)
-		if request == "" {
-			exactKey = requestlessKey(message, e.SessionID, e.Timestamp)
-		}
+		exactKey := exactDedupeKey(&e)
 		sideKey := key(message, e.SessionID)
 		i, found := exact[exactKey]
+		// A replaced survivor stays indexed under its old keys, so only
+		// match the entry now in that slot.
+		if found && exactDedupeKey(&out[i]) != exactKey {
+			found = false
+		}
 		if !found {
 			route := sidechains
 			if e.IsSidechain {
@@ -105,6 +107,17 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		}
 	}
 	return out
+}
+
+// exactDedupeKey identifies one response by its message and request IDs,
+// or by requestlessKey when it has no request ID.
+func exactDedupeKey(e *types.UsageEntry) string {
+	message, _ := e.Raw["message_id"].(string)
+	request, _ := e.Raw["request_id"].(string)
+	if request == "" {
+		return requestlessKey(message, e.SessionID, e.Timestamp)
+	}
+	return dedupeKey(message, request)
 }
 
 // requestlessKey scopes an entry without a request ID to its session and
