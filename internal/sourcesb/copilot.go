@@ -324,10 +324,16 @@ func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.
 			lastIdentity[e.ID] = i
 		}
 	}
-	shutdowns, calls, otelSessions := map[string][]types.UsageEntry{}, map[string][]time.Time{}, map[string]bool{}
+	// Calls are counted once per ID, as the report keeps them: a span can be
+	// exported twice, or copied to another file under otel/.
+	shutdowns, calls, otelSessions, counted := map[string][]types.UsageEntry{}, map[string][]time.Time{}, map[string]bool{}, map[string]bool{}
 	for i, e := range all {
 		key := e.SessionID + ":" + e.Model
 		if e.Raw["shutdown"] != true {
+			if counted[e.ID] {
+				continue
+			}
+			counted[e.ID] = true
 			calls[key] = append(calls[key], e.Timestamp)
 			otelSessions[e.SessionID] = true
 		} else if lastIdentity[e.ID] == i {

@@ -109,6 +109,13 @@ func copilotRows(t *testing.T, shutdowns, calls []string, until time.Time) []str
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "session-state/session-1/events.jsonl"), strings.Join(shutdowns, "\n"))
 	write(t, filepath.Join(dir, "otel/otel.jsonl"), strings.Join(calls, "\n"))
+	return copilotDirRows(t, dir, until)
+}
+
+// copilotDirRows loads the Copilot home dir and returns "timestamp input" per
+// entry.
+func copilotDirRows(t *testing.T, dir string, until time.Time) []string {
+	t.Helper()
 	entries, err := LoadUntil(context.Background(), "copilot", []string{dir}, time.UTC, until)
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +212,32 @@ func TestCopilotOtelReplacesShutdownsMissingCalls(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCopilotOtelReplacementCountsEachSpanOnce(t *testing.T) {
+	// The report keeps one row per span ID, so a span exported twice, or a
+	// copy of the export under another otel/ path, is one call: OTel holds
+	// as many calls as the shutdowns report.
+	calls := []string{
+		copilotCall("first-1", "2026-01-02T09:00:00Z"),
+		copilotCall("first-2", "2026-01-02T09:30:00Z"),
+		copilotCall("second-1", "2026-01-03T09:00:00Z"),
+	}
+	want := []string{"2026-01-02T10:00:00Z 200", "2026-01-03T10:00:00Z 100"}
+	t.Run("span exported twice", func(t *testing.T) {
+		if got := copilotRows(t, copilotCrashedShutdowns, append(append([]string{}, calls...), calls...), time.Time{}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("copy of the export", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "session-state/session-1/events.jsonl"), strings.Join(copilotCrashedShutdowns, "\n"))
+		write(t, filepath.Join(dir, "otel/otel.jsonl"), strings.Join(calls, "\n"))
+		write(t, filepath.Join(dir, "otel/archive/otel.jsonl"), strings.Join(calls, "\n"))
+		if got := copilotDirRows(t, dir, time.Time{}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
 }
 
 func TestCopilotOtelReplacementIgnoresUntil(t *testing.T) {
