@@ -41,10 +41,24 @@ func codexAutoReview(t time.Time) string {
 }
 
 type codexSession struct {
-	entries    []types.UsageEntry
-	usages     []codexUsage
-	id, parent string
-	fork       time.Time
+	entries []types.UsageEntry
+	usages  []codexUsage
+	// compactions are kept apart from entries so they never align with a
+	// parent's replayed usage. compacted dates every compaction request the
+	// session paired, including those its cumulative counts already covered.
+	compactions []types.UsageEntry
+	compacted   map[string]time.Time
+	id, parent  string
+	fork        time.Time
+}
+
+// codexRequest pairs a compaction request's token_usage_record with the
+// compacted line naming it; Codex writes the two in either order.
+type codexRequest struct {
+	entry                        types.UsageEntry
+	usage                        codexUsage
+	thread                       object
+	recorded, compacted, counted bool
 }
 
 // codexRowKeys are the top-level row fields parseCodex reads, except
@@ -56,12 +70,14 @@ var codexRowKeys = map[string]bool{
 }
 
 // codexPayloadKeys are the payload fields parseCodex reads: the session
-// header's identity, model fields and event details. Session headers carry
-// the full instructions and messages carry their text; both are skipped.
+// header's identity, model fields, event details and compaction usage.
+// Session headers carry the full instructions, messages carry their text and
+// compacted lines the replacement history; all are skipped.
 var codexPayloadKeys = map[string]bool{
 	"id": true, "forked_from_id": true, "source": true, "cwd": true,
 	"model": true, "model_name": true, "metadata": true,
 	"type": true, "thread_settings": true, "info": true,
+	"response_id": true, "usage": true, "thread_token_usage": true, "compaction_response_id": true,
 }
 
 func decodeCodexPayload(payload []byte) (interface{}, error) {
@@ -162,7 +178,7 @@ func readCodexRows(path string) ([]object, string, error) {
 		}
 		if payload != nil {
 			switch str(row["type"]) {
-			case "session_meta", "turn_context", "event_msg":
+			case "session_meta", "turn_context", "event_msg", "token_usage_record", "compacted":
 				if row["payload"], err = decodeCodexPayload(payload); err != nil {
 					continue
 				}
@@ -199,6 +215,34 @@ func parseCodex(p string) (codexSession, error) {
 	if s.id == "" {
 		s.id = session
 	}
+	newEntry := func(model string, fallback bool, t time.Time, usage codexUsage, speed string) types.UsageEntry {
+		e := entry(p, "codex", session, project, model, t)
+		if model == "codex-auto-review" {
+			e.Model, fallback = codexAutoReview(t), true
+		}
+		e.InputTokens = usage[0] - usage[1] - usage[2]
+		e.CacheReadInputTokens = usage[1]
+		e.CacheCreationInputTokens = usage[2]
+		e.OutputTokens = usage[3]
+		e.ReasoningTokens = usage[4]
+		e.TotalTokens = max(usage[5], usage[0]+usage[3])
+		e.Speed = speed
+		e.Raw["is_fallback"] = fallback
+		e.Raw["session_uuid"] = s.id
+		if s.parent != "" {
+			e.IsSidechain = true
+			e.Raw["parent_session_id"] = s.parent
+		}
+		return e
+	}
+	requests := map[string]*codexRequest{}
+	request := func(id string) *codexRequest {
+		if requests[id] == nil {
+			requests[id] = &codexRequest{}
+		}
+		return requests[id]
+	}
+	latest := "" // the last valid usage record's response ID
 	currentModel, speed := "", ""
 	fallbackModel := false
 	previous := codexUsage{}
@@ -214,6 +258,43 @@ func parseCodex(p string) (codexSession, error) {
 			continue
 		}
 		t := timestamp(r["timestamp"])
+		// A token_usage_record carries one request's usage apart from the
+		// cumulative token counts, which omit remote compactions. It counts
+		// only when a compacted line names its response.
+		switch typ {
+		case "compacted":
+			id := str(payload["compaction_response_id"])
+			if id == "" {
+				continue
+			}
+			req := request(id)
+			req.compacted = true
+			if req.recorded && !req.counted {
+				req.counted = true
+				s.compactions = append(s.compactions, req.entry)
+			}
+			continue
+		case "token_usage_record":
+			id := str(payload["response_id"])
+			usage := parseCodexUsage(obj(payload["usage"]))
+			if id == "" || t.IsZero() || usage == (codexUsage{}) || requests[id] != nil && requests[id].counted {
+				continue
+			}
+			req := request(id)
+			if !req.recorded {
+				// The request's own model does not change the turn's.
+				parsed := codexModel(payload)
+				req.entry = newEntry(first(parsed, currentModel, "gpt-5"), parsed == "", t, usage, speed)
+				req.entry.Raw["response_id"] = id
+				req.usage, req.thread, req.recorded = usage, obj(payload["thread_token_usage"]), true
+			}
+			latest = id
+			if req.compacted {
+				req.counted = true
+				s.compactions = append(s.compactions, req.entry)
+			}
+			continue
+		}
 		var usage codexUsage
 		parsedModel := ""
 		eventSpeed := ""
@@ -242,7 +323,8 @@ func parseCodex(p string) (codexSession, error) {
 				continue
 			}
 			curr := parseCodexUsage(totals)
-			if last != nil && (totals == nil || !hasPrevious || curr != previous) {
+			advanced := totals == nil || !hasPrevious || curr != previous
+			if last != nil && advanced {
 				usage = parseCodexUsage(last)
 			} else if totals != nil {
 				for i := range usage {
@@ -257,6 +339,13 @@ func parseCodex(p string) (codexSession, error) {
 			}
 			if usage[0]+usage[1]+usage[2]+usage[3]+usage[4] == 0 {
 				continue
+			}
+			// Local compaction advances the cumulative counts between the
+			// usage record and its marker, so they already include it; remote
+			// compaction does not. Matching only the latest record keeps an
+			// unrelated request with the same counts from consuming it.
+			if req := requests[latest]; advanced && req != nil && !req.counted && (req.usage == usage || req.thread != nil && totals != nil && parseCodexUsage(req.thread) == curr) {
+				req.counted = true
 			}
 			parsedModel = first(codexModel(payload), codexModel(info))
 			eventSpeed = speed
@@ -292,26 +381,16 @@ func parseCodex(p string) (codexSession, error) {
 			currentModel = "gpt-5"
 			fallbackModel = true
 		}
-		model := currentModel
-		if model == "codex-auto-review" {
-			model = codexAutoReview(t)
-		}
-		e := entry(p, "codex", session, project, model, t)
-		e.InputTokens = usage[0] - usage[1] - usage[2]
-		e.CacheReadInputTokens = usage[1]
-		e.CacheCreationInputTokens = usage[2]
-		e.OutputTokens = usage[3]
-		e.ReasoningTokens = usage[4]
-		e.TotalTokens = max(usage[5], usage[0]+usage[3])
-		e.Speed = eventSpeed
-		e.Raw["is_fallback"] = fallbackModel || currentModel == "codex-auto-review"
-		e.Raw["session_uuid"] = s.id
-		if s.parent != "" {
-			e.IsSidechain = true
-			e.Raw["parent_session_id"] = s.parent
-		}
-		s.entries = append(s.entries, e)
+		s.entries = append(s.entries, newEntry(currentModel, fallbackModel, t, usage, eventSpeed))
 		s.usages = append(s.usages, usage)
+	}
+	for id, req := range requests {
+		if req.recorded && req.compacted {
+			if s.compacted == nil {
+				s.compacted = map[string]time.Time{}
+			}
+			s.compacted[id] = req.entry.Timestamp
+		}
 	}
 	return s, nil
 }
@@ -336,9 +415,11 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 	var result []types.UsageEntry
 	for _, s := range sessions {
 		skip := 0
+		var replayed map[string]time.Time
 		if s.parent != "" {
 			if j, ok := byID[s.parent]; ok {
 				parent := sessions[j]
+				replayed = parent.compacted
 				for skip < len(s.usages) && skip < len(parent.usages) {
 					if !s.fork.IsZero() && parent.entries[skip].Timestamp.After(s.fork) {
 						break
@@ -364,12 +445,25 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 			}
 		}
 		result = append(result, s.entries[skip:]...)
+		for _, e := range s.compactions {
+			// The parent's compactions up to the fork were replayed, even
+			// when the parent's cumulative counts covered them.
+			if at, ok := replayed[e.Raw["response_id"].(string)]; ok && (s.fork.IsZero() || !at.After(s.fork)) {
+				continue
+			}
+			result = append(result, e)
+		}
 	}
-	// Copied sessions with different tier metadata retain the conservative explicit tier.
-	indexes := map[string]int{}
+	// Copied sessions with different tier metadata retain the conservative
+	// explicit tier. Copies of a compaction request share its response ID,
+	// and the first copy keeps its session, time and model.
+	indexes := map[[2]string]int{}
 	var merged []types.UsageEntry
 	for _, e := range result {
-		key := signature(e, false)
+		key := [2]string{"", signature(e, false)}
+		if id, ok := e.Raw["response_id"].(string); ok {
+			key = [2]string{id, ""}
+		}
 		if i, ok := indexes[key]; ok {
 			old := merged[i].Speed
 			if old == "" || (old == "fast" && e.Speed == "standard") {

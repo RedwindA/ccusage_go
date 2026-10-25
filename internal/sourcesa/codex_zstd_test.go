@@ -223,3 +223,13 @@ func TestCodexCompressedRolloutsMatchPlain(t *testing.T) {
 		t.Fatalf("plain=%+v\ncompressed=%+v", plain, compressed)
 	}
 }
+
+func TestCodexCountsCompactionRecordsInCompressedArchiveOnce(t *testing.T) {
+	root := t.TempDir()
+	record := `{"timestamp":"2026-10-14T00:00:02Z","type":"token_usage_record","payload":{"response_id":"compaction-1","usage":{"input_tokens":500,"output_tokens":20}}}`
+	marker := `{"type":"compacted","payload":{"compaction_response_id":"compaction-1"}}`
+	compressedFixture(t, root, "archived_sessions/session.jsonl.zst", strings.Join([]string{codexUsageLog("2026-10-14T00:00:01Z", 100), record, marker, record, marker}, "\n"))
+	if entries := loadTest(t, "codex", root); len(entries) != 2 || entries[0].TotalTokens+entries[1].TotalTokens != 640 {
+		t.Fatal(entries)
+	}
+}

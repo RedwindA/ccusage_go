@@ -33,7 +33,7 @@ func projectCodexRows(t *testing.T, path string) []object {
 		}
 		if payload, ok := row["payload"]; ok {
 			switch str(row["type"]) {
-			case "session_meta", "turn_context", "event_msg":
+			case "session_meta", "turn_context", "event_msg", "token_usage_record", "compacted":
 				if fields, ok := payload.(object); ok {
 					projected := object{}
 					for k, v := range fields {
@@ -74,6 +74,8 @@ func TestReadCodexRowsMatchesReadLines(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"token_count"},"payload":{"type":"thread_settings_applied"}}`,
 		`{"type":"event_msg","payload":[1e999]}`,
 		`{"type":"event_msg","payload":{"type":"agent_message","message":"long text [1e999 is fine in a string]","info":null}}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","type":"token_usage_record","payload":{"response_id":"r","usage":{"input_tokens":3},"thread_token_usage":{"input_tokens":9},"output":"skipped"}}`,
+		`{"type":"compacted","payload":{"message":"summary","replacement_history":[{"type":"message","content":"skipped"}],"compaction_response_id":"r"}}`,
 		`{"type":"session_meta","payload":{"id":"s2","instructions":"skipped","source":{"subagent":{"thread_spawn":{"parent_thread_id":"p"}}}}}`,
 		`{"type":"event_msg","payload":{"type":"x","junk":1e999}}`,
 		`{"type":"event_msg","payload":"not an object"}`,
