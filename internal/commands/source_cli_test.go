@@ -160,6 +160,22 @@ func TestSourceCLIErrorsKeepStdoutEmpty(t *testing.T) {
 	}
 }
 
+// Upstream loads every source of a unified report and fails it on the first
+// source that fails, so other sources' usage is not reported without it.
+func TestUnifiedReportsFailOnASourceThatFails(t *testing.T) {
+	home := isolateSourceHomes(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", fixtureReport(t))
+	antigravity := filepath.Join(home, "antigravity")
+	t.Setenv("ANTIGRAVITY_DATA_DIR", antigravity)
+	sourceCLIDB(t, filepath.Join(antigravity, "conversations/acp.db"), `CREATE TABLE other(x INTEGER); INSERT INTO other VALUES(1);`)
+	for _, kind := range []string{"daily", "weekly", "monthly", "session"} {
+		stdout, _, err := sourceCLIRun(kind, "--offline", "--json")
+		if err == nil || !strings.Contains(err.Error(), "gen_metadata") || stdout != "" {
+			t.Fatalf("%s: error=%v stdout=%q", kind, err, stdout)
+		}
+	}
+}
+
 func TestNativeSourceExtraReasoningIsBilled(t *testing.T) {
 	isolateSourceHomes(t)
 	root := t.TempDir()

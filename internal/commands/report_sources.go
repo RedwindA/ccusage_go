@@ -204,10 +204,10 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	}
 	for i, res := range results {
 		if res.err != nil {
-			if errors.Is(res.err, context.Canceled) {
-				return nil, nil, nil, res.err
-			}
-			if agent != "" {
+			// As upstream, the first source that fails fails the report;
+			// --all-users, which upstream lacks, skips a user's failing
+			// source instead.
+			if !f.allUsers || errors.Is(res.err, context.Canceled) {
 				return nil, nil, nil, res.err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s %s: %v\n", jobs[i].user, jobs[i].name, res.err)
