@@ -18,7 +18,8 @@ import (
 // Callers pass each file's entries in line order, and one pass over them in
 // file path order matches upstream: ties keep the first candidate and a
 // replay's match depends on earlier entries, so deduping each file first or
-// going by timestamp picks other survivors.
+// going by timestamp picks other survivors. The survivors are returned in
+// time order, which callers such as the monitor's recent activity rely on.
 func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	// Sort indexes rather than the (large) entries themselves.
 	order := make([]int, len(entries))
@@ -28,7 +29,8 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	sort.SliceStable(order, func(i, j int) bool {
 		return entries[order[i]].SourceFile < entries[order[j]].SourceFile
 	})
-	out := make([]types.UsageEntry, 0, len(entries))
+	// survivors[i] is the index of the entry now in slot i.
+	survivors := make([]int, 0, len(entries))
 	exact := map[string]int{}
 	// Sidechain replays are routed by message and session. A replay needs a
 	// sidechain on at least one side, so parent candidates only look through
@@ -53,7 +55,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		message, _ := e.Raw["message_id"].(string)
 		request, _ := e.Raw["request_id"].(string)
 		if message == "" {
-			out = append(out, e)
+			survivors = append(survivors, k)
 			continue
 		}
 		exactKey := exactDedupeKey(&e)
@@ -61,7 +63,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		i, found := exact[exactKey]
 		// A replaced survivor stays indexed under its old keys, so only
 		// match the entry now in that slot.
-		if found && exactDedupeKey(&out[i]) != exactKey {
+		if found && exactDedupeKey(&entries[survivors[i]]) != exactKey {
 			found = false
 		}
 		if !found {
@@ -70,7 +72,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				route = replays
 			}
 			for _, r := range route[sideKey] {
-				old := out[r.index]
+				old := &entries[survivors[r.index]]
 				session := r.session
 				if session == "" {
 					session = old.SessionID
@@ -86,15 +88,15 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			}
 		}
 		if !found {
-			i = len(out)
-			out = append(out, e)
+			i = len(survivors)
+			survivors = append(survivors, k)
 			exact[exactKey] = i
 			replays[sideKey] = append(replays[sideKey], routeEntry{index: i})
 			if e.IsSidechain {
 				sidechains[sideKey] = append(sidechains[sideKey], routeEntry{index: i})
 			}
 		} else {
-			old := out[i]
+			old := &entries[survivors[i]]
 			if e.SessionID != old.SessionID {
 				// Cross-session copies can become the survivor, so keep
 				// both sessions' routes for later sidechain replays.
@@ -116,7 +118,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			// replay's own timestamp would otherwise pull the next response
 			// at that instant into the parent it matched.
 			if replace {
-				out[i] = e
+				survivors[i] = k
 				exact[exactKey] = i
 				// Route the new survivor under its own session and
 				// sidechain flag, as if it were a new entry.
@@ -128,6 +130,13 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				}
 			}
 		}
+	}
+	sort.SliceStable(survivors, func(i, j int) bool {
+		return entries[survivors[i]].Timestamp.Before(entries[survivors[j]].Timestamp)
+	})
+	out := make([]types.UsageEntry, len(survivors))
+	for i, k := range survivors {
+		out[i] = entries[k]
 	}
 	return out
 }
