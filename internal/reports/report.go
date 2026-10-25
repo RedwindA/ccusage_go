@@ -219,7 +219,11 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 	if loc == nil {
 		loc = time.Local
 	}
-	for _, e := range Filter(entries, o) {
+	entries = Filter(entries, o)
+	if o.Agent == "" && (o.Kind == "daily" || o.Kind == "weekly" || o.Kind == "monthly") {
+		entries = dropEmptyAgentDays(entries, o, loc)
+	}
+	for _, e := range entries {
 		e.Model = displayModel(e)
 		t := e.Timestamp.In(loc)
 		var period string
@@ -315,6 +319,41 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 	return rows
 }
 
+// Unified daily, weekly and monthly reports merge each agent's daily usage,
+// and upstream drops an agent's day with neither tokens nor cost before
+// merging. A Copilot credit row that --mode calculate prices at $0 must not
+// list Copilot or its unknown model on a day another agent used.
+func dropEmptyAgentDays(entries []types.UsageEntry, o Options, loc *time.Location) []types.UsageEntry {
+	key := func(e types.UsageEntry) string {
+		user, _ := e.Raw["system_user"].(string)
+		k := e.Timestamp.In(loc).Format("2006-01-02") + "\x00" + user + "\x00" + e.Agent
+		if o.Instances {
+			k += "\x00" + e.ProjectPath
+		}
+		return k
+	}
+	used := map[string]bool{}
+	for _, e := range entries {
+		if entryTokens(e) != 0 || e.Cost != 0 {
+			used[key(e)] = true
+		}
+	}
+	out := make([]types.UsageEntry, 0, len(entries))
+	for _, e := range entries {
+		if used[key(e)] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func entryTokens(e types.UsageEntry) int {
+	if e.TotalTokens != 0 {
+		return e.TotalTokens
+	}
+	return e.InputTokens + e.OutputTokens + e.CacheCreationInputTokens + e.CacheReadInputTokens
+}
+
 func (a *accumulator) add(e types.UsageEntry) {
 	r := &a.row
 	r.Input += e.InputTokens
@@ -322,10 +361,7 @@ func (a *accumulator) add(e types.UsageEntry) {
 	r.Reasoning += e.ReasoningTokens
 	r.CacheCreate += e.CacheCreationInputTokens
 	r.CacheRead += e.CacheReadInputTokens
-	total := e.TotalTokens
-	if total == 0 {
-		total = e.InputTokens + e.OutputTokens + e.CacheCreationInputTokens + e.CacheReadInputTokens
-	}
+	total := entryTokens(e)
 	r.Total += total
 	r.Cost += e.Cost
 	r.APICost += e.APICost

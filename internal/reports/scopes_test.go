@@ -1,6 +1,8 @@
 package reports
 
 import (
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -131,5 +133,41 @@ func TestAgentBreakdownInheritsPeriodAndUser(t *testing.T) {
 	sub := rows[0].Agents[0]
 	if sub.Period != "2026-01-01" || sub.User != "alice" {
 		t.Fatal(sub)
+	}
+}
+
+// Unified daily-family reports merge each agent's daily summary and drop one
+// with neither tokens nor cost first, like a Copilot credit row that --mode
+// calculate prices at $0.
+func TestUnifiedDropsAgentDaysWithoutTokensOrCost(t *testing.T) {
+	credit := reportEntry("copilot", "c", "p", "2026-02-04T01:00:00Z", 0)
+	credit.Model = ""
+	credit.Raw = map[string]any{"request_count": 0}
+	entries := []types.UsageEntry{reportEntry("copilot", "c", "p", "2026-02-03T02:00:00Z", 50), credit, reportEntry("claude", "s", "p", "2026-02-04T05:00:00Z", 150)}
+	entries[0].Model = "gpt-5.4"
+	for _, tc := range []struct {
+		kind string
+		want []string
+	}{
+		{"daily", []string{"2026-02-03 [copilot] [gpt-5.4] copilot=[gpt-5.4]", "2026-02-04 [claude] [model] claude=[model]"}},
+		{"weekly", []string{"2026-02-01 [claude copilot] [gpt-5.4 model] claude=[model] copilot=[gpt-5.4]"}},
+		{"monthly", []string{"2026-02 [claude copilot] [gpt-5.4 model] claude=[model] copilot=[gpt-5.4]"}},
+	} {
+		var got []string
+		for _, r := range Aggregate(entries, Options{Kind: tc.kind, ByAgent: true, Location: time.UTC}) {
+			line := fmt.Sprintf("%s %v %v", r.Period, r.Metadata["agents"], r.Models)
+			for _, a := range r.Agents {
+				line += fmt.Sprintf(" %s=%v", a.Agent, a.Models)
+			}
+			got = append(got, line)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: got %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+	credit.Cost = .02
+	rows := Aggregate([]types.UsageEntry{credit, entries[2]}, Options{Kind: "daily", Location: time.UTC})
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0].Models, []string{"model", "unknown"}) || rows[0].Cost != .02 {
+		t.Fatalf("cost-only credit row dropped: %+v", rows)
 	}
 }
