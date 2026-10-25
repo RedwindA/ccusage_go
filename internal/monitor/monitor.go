@@ -178,13 +178,14 @@ func (m model) View() string {
 	// Recent entries
 	if len(m.recentEntries) > 0 {
 		content += "Recent Activity:\n"
-		for i, entry := range m.recentEntries {
-			if i >= 5 { // Show only last 5
-				break
-			}
+		recent := m.recentEntries
+		if len(recent) > 5 { // Show only last 5
+			recent = recent[len(recent)-5:]
+		}
+		for _, entry := range recent {
 			content += fmt.Sprintf(
 				"%s - %s - $%.4f\n",
-				entry.Timestamp.Format("15:04:05"),
+				entry.Timestamp.Local().Format("15:04:05"),
 				entry.Model,
 				entry.Cost,
 			)
