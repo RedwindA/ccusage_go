@@ -49,7 +49,7 @@ func sumTokens(t *testing.T, root string) (int, map[string]int) {
 
 func TestCodexLoadsCompressedRolloutWithPlainSessionID(t *testing.T) {
 	root := t.TempDir()
-	compressedFixture(t, root, "sessions/2026/10/14/rollout.jsonl.zst", `{"timestamp":"2026-10-14T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5"}}
+	compressedFixture(t, root, "2026/10/14/rollout.jsonl.zst", `{"timestamp":"2026-10-14T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5"}}
 {"timestamp":"2026-10-14T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}`)
 	entries := loadTest(t, "codex", root)
 	if len(entries) != 1 {
@@ -86,10 +86,11 @@ func TestCodexDedupesRolloutsAcrossEncodingsAndSessionDirectories(t *testing.T) 
 	} {
 		fixture(t, root, p, "")
 	}
-	files, err := discover(context.Background(), "codex", []string{root})
+	files, dirs, err := discover(context.Background(), "codex", []string{root})
 	want := []string{filepath.Join(root, "sessions/both.jsonl"), filepath.Join(root, "sessions/compressed.jsonl.zst"), filepath.Join(root, "archived_sessions/archived.jsonl.zst")}
-	if err != nil || !reflect.DeepEqual(files, want) {
-		t.Fatalf("files=%v err=%v", files, err)
+	wantDirs := []string{filepath.Join(root, "sessions"), filepath.Join(root, "sessions"), filepath.Join(root, "archived_sessions")}
+	if err != nil || !reflect.DeepEqual(files, want) || !reflect.DeepEqual(dirs, wantDirs) {
+		t.Fatalf("files=%v dirs=%v err=%v", files, dirs, err)
 	}
 }
 
@@ -165,7 +166,7 @@ func TestCodexReadsOtherEncodingWhenCodexMigratesAfterDiscovery(t *testing.T) {
 				return fixture(t, root, path, log)
 			}
 			discovered := write(tc.discovered)
-			files, err := discover(context.Background(), "codex", []string{root})
+			files, dirs, err := discover(context.Background(), "codex", []string{root})
 			if err != nil || !reflect.DeepEqual(files, []string{discovered}) {
 				t.Fatalf("files=%v err=%v", files, err)
 			}
@@ -173,7 +174,7 @@ func TestCodexReadsOtherEncodingWhenCodexMigratesAfterDiscovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			write(tc.migrated)
-			entries, err := loadCodex(context.Background(), files, time.UTC)
+			entries, err := loadCodex(context.Background(), files, dirs, time.UTC)
 			if err != nil || len(entries) != 1 || entries[0].SessionID != "session" || entries[0].TotalTokens != 120 {
 				t.Fatalf("entries=%+v err=%v", entries, err)
 			}
@@ -185,7 +186,7 @@ func TestCodexDatesHeadlessUsageFromEncodingOpenedAfterMigration(t *testing.T) {
 	root := t.TempDir()
 	headless := `{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}`
 	plain := fixture(t, root, "run.jsonl", headless)
-	files, err := discover(context.Background(), "codex", []string{root})
+	files, dirs, err := discover(context.Background(), "codex", []string{root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func TestCodexDatesHeadlessUsageFromEncodingOpenedAfterMigration(t *testing.T) {
 	if err := os.Chtimes(compressedFixture(t, root, "run.jsonl.zst", headless), modified, modified); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := loadCodex(context.Background(), files, time.UTC)
+	entries, err := loadCodex(context.Background(), files, dirs, time.UTC)
 	if err != nil || len(entries) != 1 || !entries[0].Timestamp.Equal(modified) {
 		t.Fatalf("entries=%+v err=%v", entries, err)
 	}

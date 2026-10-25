@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +245,25 @@ func TestCodexHeadlessAliasesAndAutoReviewFallback(t *testing.T) {
 		t.Fatal(entries)
 	}
 }
+func TestCodexSessionIDIsPathUnderScannedDirectory(t *testing.T) {
+	// A home without sessions/ is scanned itself, so rollouts sharing a name
+	// stay apart; a sessions directory above the home is not the scanned one,
+	// and a rollout given directly is found in its own directory.
+	flat := t.TempDir()
+	file := fixture(t, flat, "2026/10/14/run.jsonl", codexUsageLog("2026-10-14T00:00:00Z", 100))
+	fixture(t, flat, "2026/10/15/run.jsonl", codexUsageLog("2026-10-15T00:00:00Z", 100))
+	nested := filepath.Join(t.TempDir(), "sessions", "home")
+	fixture(t, nested, "sessions/2026/10/14/run.jsonl", codexUsageLog("2026-10-14T00:00:00Z", 100))
+	for root, want := range map[string]map[string]int{
+		flat:   {"2026/10/14/run": 120, "2026/10/15/run": 120},
+		nested: {"2026/10/14/run": 120},
+		file:   {"run": 120},
+	} {
+		if _, bySession := sumTokens(t, root); !reflect.DeepEqual(bySession, want) {
+			t.Errorf("%s: %v, want %v", root, bySession, want)
+		}
+	}
+}
 func codexLine(t *testing.T, ts string, input int) string {
 	t.Helper()
 	b, err := json.Marshal(object{"type": "event_msg", "timestamp": ts, "payload": object{"type": "token_count", "info": object{"last_token_usage": object{"input_tokens": input, "output_tokens": 1}}}})
@@ -415,7 +435,7 @@ func TestDamagedFilesReturnErrorsAlongsideUsableEntries(t *testing.T) {
 	})
 	t.Run("unreadable Codex file", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "missing.jsonl")
-		_, err := loadCodex(context.Background(), []string{missing}, time.UTC)
+		_, err := loadCodex(context.Background(), []string{missing}, []string{filepath.Dir(missing)}, time.UTC)
 		if err == nil || !strings.Contains(err.Error(), missing) {
 			t.Fatal(err)
 		}

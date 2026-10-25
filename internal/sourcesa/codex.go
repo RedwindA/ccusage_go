@@ -210,21 +210,16 @@ func readCodexRows(path string) ([]object, string, error) {
 	return rows, opened, nil
 }
 
-func parseCodex(p string) (codexSession, error) {
+func parseCodex(p, dir string) (codexSession, error) {
 	rows, opened, err := readCodexRows(p)
 	s := codexSession{}
 	if err != nil {
 		return s, err
 	}
-	plain := codexPlainPath(p)
-	session := stem(plain)
-	parts := strings.Split(filepath.ToSlash(plain), "/")
-	for i, part := range parts {
-		if (part == "sessions" || part == "archived_sessions") && i+1 < len(parts) {
-			session = strings.TrimSuffix(strings.Join(parts[i+1:], "/"), ".jsonl")
-			break
-		}
-	}
+	// A session is its rollout's path under the scanned directory, so
+	// rollouts sharing a name in different date folders stay apart.
+	rel, _ := filepath.Rel(dir, codexPlainPath(p))
+	session := strings.TrimSuffix(filepath.ToSlash(rel), ".jsonl")
 	project := "unknown"
 	if len(rows) > 0 && str(rows[0]["type"]) == "session_meta" {
 		h := obj(rows[0]["payload"])
@@ -425,13 +420,13 @@ func parseCodex(p string) (codexSession, error) {
 	}
 	return s, nil
 }
-func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types.UsageEntry, error) {
+func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([]types.UsageEntry, error) {
 	sessions := make([]codexSession, len(files))
 	var loadErrors []error
 	byID := map[string]int{}
 	parseErrors := make([]error, len(files))
 	if err := parallelEach(ctx, files, func(i int) {
-		sessions[i], parseErrors[i] = parseCodex(files[i])
+		sessions[i], parseErrors[i] = parseCodex(files[i], dirs[i])
 	}); err != nil {
 		return nil, err
 	}

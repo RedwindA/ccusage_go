@@ -113,6 +113,22 @@ func TestCodexSessionIDLookupErrors(t *testing.T) {
 	}
 }
 
+func TestCodexSessionIDMatchesRolloutsOutsideSessionsDirectory(t *testing.T) {
+	isolateSourceHomes(t)
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	sourceCLIWrite(t, filepath.Join(home, "2026/10/14/run.jsonl"), codexSessionUsage("2026-10-14T00:00:00.000Z", 100, 20))
+	sourceCLIWrite(t, filepath.Join(home, "2026/10/15/run.jsonl"), codexSessionUsage("2026-10-15T00:00:00.000Z", 200, 20))
+	session := sourceCLIJSON(t, "codex", "session", "--id", "2026/10/14/run", "--json", "--offline", "--timezone", "UTC")
+	if session["sessionId"] != "2026/10/14/run" || session["totalTokens"] != 120.0 {
+		t.Fatalf("session: %#v", session)
+	}
+	out, _, err := sourceCLIRun("codex", "session", "--id", "run", "--offline")
+	if want := "Codex session ID 'run' is ambiguous and matches 2 sessions."; err == nil || err.Error() != want || out != "" {
+		t.Fatalf("err=%v stdout=%s", err, out)
+	}
+}
+
 func TestCodexSessionIDAcceptsCompressedRolloutName(t *testing.T) {
 	home := codexSessionFixture(t, codexOtherUUID)
 	enc, err := zstd.NewWriter(nil)

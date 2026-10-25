@@ -81,12 +81,12 @@ func LoadWithMode(ctx context.Context, name string, paths []string, loc *time.Lo
 		h, _ := os.UserHomeDir()
 		paths = DefaultPaths(name, h)
 	}
-	files, discoveryErr := discover(ctx, name, paths)
+	files, dirs, discoveryErr := discover(ctx, name, paths)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if name == "codex" {
-		entries, err := loadCodex(ctx, files, loc)
+		entries, err := loadCodex(ctx, files, dirs, loc)
 		return entries, errors.Join(discoveryErr, err)
 	}
 	if name == "pi" {
@@ -141,8 +141,11 @@ func LoadWithMode(ctx context.Context, name string, paths []string, loc *time.Lo
 	}
 	return finalize(result, loc, name != "amp" && name != "droid" && name != "openclaw" && name != "grok"), errors.Join(loadErrors...)
 }
-func discover(ctx context.Context, name string, paths []string) ([]string, error) {
-	var files []string
+
+// discover also returns the directory each file was found under; a file given
+// directly is found in its own directory.
+func discover(ctx context.Context, name string, paths []string) ([]string, []string, error) {
+	var files, dirs []string
 	var discoveryErrors []error
 	seen := map[string]bool{}
 	archive := map[string]bool{}
@@ -185,6 +188,10 @@ func discover(ctx context.Context, name string, paths []string) ([]string, error
 			}
 		}
 		for _, r := range roots {
+			dir := r
+			if !st.IsDir() {
+				dir = filepath.Dir(r)
+			}
 			e := filepath.WalkDir(r, func(p string, d fs.DirEntry, e error) error {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -242,19 +249,20 @@ func discover(ctx context.Context, name string, paths []string) ([]string, error
 					}
 					seen[id] = true
 					files = append(files, p)
+					dirs = append(dirs, dir)
 				}
 				return nil
 			})
 			if e != nil {
 				if ctx.Err() != nil {
-					return files, ctx.Err()
+					return files, dirs, ctx.Err()
 				}
 				discoveryErrors = append(discoveryErrors, fmt.Errorf("%s source %s: %w", name, r, e))
 			}
 		}
 	}
 	// Preserve root order and active-before-archive ordering; WalkDir is lexical.
-	return files, errors.Join(discoveryErrors...)
+	return files, dirs, errors.Join(discoveryErrors...)
 }
 func readObject(path string) (object, error) {
 	b, e := os.ReadFile(path)
