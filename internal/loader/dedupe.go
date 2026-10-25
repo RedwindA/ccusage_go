@@ -3,9 +3,11 @@ package loader
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/RedwindA/ccusage_go/internal/types"
@@ -28,7 +30,12 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	})
 	out := make([]types.UsageEntry, 0, len(entries))
 	exact := map[string]int{}
-	aliases := map[string][]int{}
+	// Sidechain replays are routed by message and session. A replay needs a
+	// sidechain on at least one side, so parent candidates only look through
+	// sidechain entries; gateways that reuse one message ID for every
+	// response then do not rescan every earlier entry.
+	replays := map[string][]int{}
+	sidechains := map[string][]int{}
 	key := dedupeKey
 	for _, k := range order {
 		e := entries[k]
@@ -40,14 +47,22 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		}
 		exactKey := key(message, request)
 		if request == "" {
-			exactKey = key(message, "", e.SessionID)
+			exactKey = requestlessKey(message, e.SessionID, e.Timestamp)
 		}
 		sideKey := key(message, e.SessionID)
 		i, found := exact[exactKey]
 		if !found {
-			for _, candidate := range aliases[sideKey] {
+			route := sidechains
+			if e.IsSidechain {
+				route = replays
+			}
+			for _, candidate := range route[sideKey] {
 				old := out[candidate]
-				if e.Timestamp.Equal(old.Timestamp) && (e.IsSidechain || old.IsSidechain) {
+				oldRequest, _ := old.Raw["request_id"].(string)
+				// Requestless replays match across timestamps; replays with
+				// a new request ID need the parent's timestamp.
+				requestless := request == "" && oldRequest == ""
+				if (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
 					i, found = candidate, true
 					break
 				}
@@ -56,8 +71,22 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		if !found {
 			i = len(out)
 			out = append(out, e)
+			exact[exactKey] = i
+			replays[sideKey] = append(replays[sideKey], i)
+			if e.IsSidechain {
+				sidechains[sideKey] = append(sidechains[sideKey], i)
+			}
 		} else {
 			old := out[i]
+			if e.SessionID != old.SessionID {
+				// Cross-session copies can become the survivor, so keep
+				// this session's routes for later sidechain replays.
+				for _, route := range []map[string][]int{replays, sidechains} {
+					if !slices.Contains(route[sideKey], i) {
+						route[sideKey] = append(route[sideKey], i)
+					}
+				}
+			}
 			replace := false
 			if e.IsSidechain != old.IsSidechain {
 				replace = old.IsSidechain
@@ -66,20 +95,29 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			} else {
 				replace = e.Speed != "" && old.Speed == ""
 			}
+			// Register the key only when this entry survives: a requestless
+			// replay's own timestamp would otherwise pull the next response
+			// at that instant into the parent it matched.
 			if replace {
 				out[i] = e
+				exact[exactKey] = i
 			}
-		}
-		exact[exactKey] = i
-		exists := false
-		for _, v := range aliases[sideKey] {
-			exists = exists || v == i
-		}
-		if !exists {
-			aliases[sideKey] = append(aliases[sideKey], i)
 		}
 	}
 	return out
+}
+
+// requestlessKey scopes an entry without a request ID to its session and
+// timestamp: gateways can reuse one message ID for every response, while
+// repeated writes of one response share a timestamp. Anthropic (msg_) and
+// OpenAI Responses (resp_) IDs are unique per response, and Claude Code
+// writes one line per content block at distinct timestamps, so those
+// collapse across timestamps within the session.
+func requestlessKey(message, session string, timestamp time.Time) string {
+	if strings.HasPrefix(message, "msg_") || strings.HasPrefix(message, "resp_") {
+		return dedupeKey(message, "", session)
+	}
+	return dedupeKey(message, "", session, strconv.FormatInt(timestamp.UnixNano(), 10))
 }
 
 // dedupeKey joins parts into a map key. Keys were once json.Marshal(parts),

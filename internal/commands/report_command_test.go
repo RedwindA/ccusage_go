@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,5 +173,63 @@ func TestRootSessionIDUsesClaudeDetails(t *testing.T) {
 	}
 	if _, err := executeReport("session", "--id", "one", "--all-users", "--offline"); err == nil {
 		t.Fatal("accepted incompatible --all-users")
+	}
+}
+
+// Requestless entries must be counted alike by every Claude report.
+func TestClaudeReportsAgreeOnRequestlessDedupe(t *testing.T) {
+	line := func(timestamp, session, message string, input, output, cacheRead int, side bool) string {
+		return fmt.Sprintf(`{"timestamp":%q,"sessionId":%q,"isSidechain":%t,"message":{"id":%q,"model":"claude-sonnet-4-20250514","usage":{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":%d}}}`, timestamp, session, side, message, input, output, cacheRead)
+	}
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		total float64
+	}{
+		{"sidechain replay", map[string]string{
+			"session-a.jsonl": line("2026-09-11T12:00:00.000Z", "session-a", "msg-parent", 10, 2, 20, false),
+			// The /btw replay repeats the parent message, and its cache read, minutes later.
+			"session-a/subagents/agent-a.jsonl": line("2026-09-11T12:05:00.000Z", "session-a", "msg-parent", 10, 2, 50000, true),
+		}, 32},
+		// A relay that answers every response with the same message ID and
+		// no request ID; each timestamp is a separate API call.
+		{"gateway reusing one message ID", map[string]string{"session-a.jsonl": strings.Join([]string{
+			line("2026-09-11T12:00:00.000Z", "session-a", "ocgo", 100, 2, 0, false),
+			line("2026-09-12T12:01:00.000Z", "session-a", "ocgo", 100, 2, 0, false),
+			line("2026-09-13T12:02:00.000Z", "session-a", "ocgo", 100, 2, 0, false),
+		}, "\n")}, 306},
+		// Claude Code writes one line per content block with the same real
+		// message ID, no request ID, and distinct timestamps.
+		{"Anthropic content blocks", map[string]string{"session-a.jsonl": strings.Join([]string{
+			line("2026-09-11T12:00:00.000Z", "session-a", "msg_01AbC2DeF3", 100, 2, 0, false),
+			line("2026-09-11T12:00:00.500Z", "session-a", "msg_01AbC2DeF3", 100, 2, 0, false),
+		}, "\n")}, 102},
+		{"OpenAI Responses content blocks", map[string]string{"session-a.jsonl": strings.Join([]string{
+			line("2026-09-11T12:00:00.000Z", "session-a", "resp_0123456789abcdef", 100, 2, 0, false),
+			line("2026-09-11T12:00:00.500Z", "session-a", "resp_0123456789abcdef", 100, 2, 0, false),
+		}, "\n")}, 102},
+		// Content blocks of one streamed response straddle midnight with
+		// growing output, so only the final, largest line counts; the same
+		// ID in another session is a separate copy and stays counted.
+		{"Anthropic ID across days and sessions", map[string]string{
+			"session-a.jsonl": strings.Join([]string{
+				line("2026-09-11T23:59:59.900Z", "session-a", "msg_01AbC2DeF3", 100, 5, 0, false),
+				line("2026-09-12T00:00:00.100Z", "session-a", "msg_01AbC2DeF3", 100, 50, 0, false),
+			}, "\n"),
+			"session-b.jsonl": line("2026-09-12T01:00:00.000Z", "session-b", "msg_01AbC2DeF3", 100, 5, 0, false),
+		}, 150 + 105},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, data := range tc.files {
+				sourceCLIWrite(t, filepath.Join(root, "projects", "project-a", name), data)
+			}
+			for _, report := range []string{"daily", "weekly", "monthly", "session"} {
+				payload := sourceCLIJSON(t, "claude", report, "--data-path", root, "--since", "20260901", "--until", "20260930", "--timezone", "UTC", "--mode", "display", "--offline", "--json")
+				if got := payload["totals"].(map[string]any)["totalTokens"]; got != tc.total {
+					t.Errorf("claude %s: totalTokens = %v, want %v", report, got, tc.total)
+				}
+			}
+		})
 	}
 }

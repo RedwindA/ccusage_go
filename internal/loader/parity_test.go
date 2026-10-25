@@ -84,6 +84,58 @@ func TestClaudeRequestlessDedupeIsSessionScoped(t *testing.T) {
 		t.Fatal(entries)
 	}
 }
+func requestlessRecord(timestamp, session, message string, output int, side bool) map[string]interface{} {
+	r := nativeRecord(session, message, "", 100, side)
+	r["timestamp"] = timestamp
+	r["message"].(map[string]interface{})["usage"].(map[string]interface{})["output_tokens"] = output
+	return r
+}
+
+// Gateways can reuse one message ID for every response, so only repeated
+// writes at one timestamp collapse, unless the ID is a real Anthropic or
+// OpenAI Responses ID, whose content blocks are written at distinct timestamps.
+func TestClaudeRequestlessDedupeIsTimestampScoped(t *testing.T) {
+	for _, tc := range []struct {
+		message, second string
+		entries, output int
+		cost            float64
+	}{
+		{"gateway_123", "2025-01-10T10:00:01.000Z", 2, 275, 0.011},
+		{"gateway_123", "2025-01-10T10:00:00.000Z", 1, 250, 0.01},
+		{"msg_123", "2025-01-10T10:00:01.000Z", 1, 250, 0.01},
+		{"resp_0123456789abcdef", "2025-01-10T10:00:00.500Z", 1, 250, 0.01},
+	} {
+		first := requestlessRecord("2025-01-10T10:00:00.000Z", "s", tc.message, 25, false)
+		first["costUSD"] = 0.001
+		second := requestlessRecord(tc.second, "s", tc.message, 250, false)
+		second["costUSD"] = 0.01
+		second["message"].(map[string]interface{})["usage"].(map[string]interface{})["speed"] = "standard"
+		entries := mustNative(t, writeNative(t, t.TempDir(), "projects/p/s.jsonl", first, second))
+		output, cost := 0, 0.0
+		for _, e := range entries {
+			output += e.OutputTokens
+			cost += e.Cost
+		}
+		if len(entries) != tc.entries || output != tc.output || cost != tc.cost {
+			t.Errorf("%s then %s: %d entries, %d output tokens, cost %v", tc.message, tc.second, len(entries), output, cost)
+		}
+	}
+}
+
+// A requestless replay matches its parent across timestamps, but its own
+// timestamp must not then pull a later response at that instant into the
+// parent: the two parents are separate gateway calls.
+func TestClaudeRequestlessReplayDoesNotMergeParents(t *testing.T) {
+	root := t.TempDir()
+	replay := writeNative(t, root, "projects/p/a-side.jsonl", requestlessRecord("2026-09-11T12:05:00.000Z", "s", "g", 2, true))
+	parents := writeNative(t, root, "projects/p/b-main.jsonl",
+		requestlessRecord("2026-09-11T12:00:00.000Z", "s", "g", 2, false),
+		requestlessRecord("2026-09-11T12:05:00.000Z", "s", "g", 1000, false))
+	entries := mustNative(t, replay, parents)
+	if len(entries) != 2 || entries[0].OutputTokens != 2 || entries[1].OutputTokens != 1000 || entries[0].IsSidechain || entries[1].IsSidechain {
+		t.Fatal(entries)
+	}
+}
 func TestClaudeSpeedBreaksEqualUsageTie(t *testing.T) {
 	root := t.TempDir()
 	plain := nativeRecord("s", "m", "r", 10, false)
@@ -124,6 +176,17 @@ func TestClaudeFileSessionAndWorkspaceFallback(t *testing.T) {
 	entries := mustNative(t, p)
 	if len(entries) != 1 || entries[0].SessionID != "session" || entries[0].Workspace != "/actual/project" {
 		t.Fatal(entries)
+	}
+}
+func TestIncrementalCacheKeepsRequestlessGatewayResponses(t *testing.T) {
+	root := t.TempDir()
+	writeNative(t, root, "projects/p/s.jsonl",
+		requestlessRecord("2026-09-11T12:00:00.000Z", "s", "ocgo", 2, false),
+		requestlessRecord("2026-09-12T12:01:00.000Z", "s", "ocgo", 2, false),
+		requestlessRecord("2026-09-13T12:02:00.000Z", "s", "ocgo", 2, false))
+	entries, _, err := NewIncrementalCache().Update(New(), nil, root, 0)
+	if err != nil || len(entries) != 3 {
+		t.Fatal(entries, err)
 	}
 }
 func TestIncrementalRereadReplacesChangedNativeUsage(t *testing.T) {
