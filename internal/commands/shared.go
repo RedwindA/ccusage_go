@@ -60,14 +60,14 @@ func filterEntriesBySessionName(entries []types.UsageEntry, sessionName string) 
 
 func filterEntriesByDate(entries []types.UsageEntry, since, until string) []types.UsageEntry {
 	var filtered []types.UsageEntry
-	
+
 	for _, entry := range entries {
 		// Use DateKey if available, otherwise format timestamp
 		dateStr := entry.DateKey
 		if dateStr == "" {
 			dateStr = entry.Timestamp.Format("2006-01-02")
 		}
-		
+
 		// Apply date filter
 		if since != "" && dateStr < since {
 			continue
@@ -75,9 +75,9 @@ func filterEntriesByDate(entries []types.UsageEntry, since, until string) []type
 		if until != "" && dateStr > until {
 			continue
 		}
-		
+
 		filtered = append(filtered, entry)
 	}
-	
+
 	return filtered
 }

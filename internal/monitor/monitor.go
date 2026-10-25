@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/loader"
 	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/types"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type Monitor struct {

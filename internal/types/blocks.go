@@ -6,28 +6,28 @@ import (
 
 // TokenCounts represents aggregated token counts for different token types
 type TokenCounts struct {
-	InputTokens               int `json:"input_tokens"`
-	OutputTokens              int `json:"output_tokens"`
-	CacheCreationInputTokens  int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens      int `json:"cache_read_input_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 // SessionBlock represents a session block (typically 5-hour billing period) with usage data
 type SessionBlock struct {
-	ID                   string      `json:"id"`                      // ISO string of block start time
-	StartTime            time.Time   `json:"start_time"`               // Block start time
-	EndTime              time.Time   `json:"end_time"`                 // Block end time (startTime + 5 hours for normal blocks)
-	ActualEndTime        *time.Time  `json:"actual_end_time,omitempty"` // Last activity in block
-	IsActive             bool        `json:"is_active"`                // Whether this block is currently active
-	IsGap                bool        `json:"is_gap"`                   // True if this is a gap block
-	Entries              []UsageEntry `json:"entries"`                  // Usage entries in this block
-	TokenCounts          TokenCounts `json:"token_counts"`             // Aggregated token counts
-	CostUSD              float64     `json:"cost_usd"`                 // Total cost in USD
-	APICostUSD           float64     `json:"api_cost_usd"`             // Input + output cost only
-	CacheCreateCostUSD   float64     `json:"cache_create_cost_usd"`    // Cache creation cost
-	CacheReadCostUSD     float64     `json:"cache_read_cost_usd"`      // Cache read cost
-	Models               []string    `json:"models"`                   // Unique models used
-	UsageLimitResetTime  *time.Time  `json:"usage_limit_reset_time,omitempty"` // Claude API usage limit reset time
+	ID                  string       `json:"id"`                               // ISO string of block start time
+	StartTime           time.Time    `json:"start_time"`                       // Block start time
+	EndTime             time.Time    `json:"end_time"`                         // Block end time (startTime + 5 hours for normal blocks)
+	ActualEndTime       *time.Time   `json:"actual_end_time,omitempty"`        // Last activity in block
+	IsActive            bool         `json:"is_active"`                        // Whether this block is currently active
+	IsGap               bool         `json:"is_gap"`                           // True if this is a gap block
+	Entries             []UsageEntry `json:"entries"`                          // Usage entries in this block
+	TokenCounts         TokenCounts  `json:"token_counts"`                     // Aggregated token counts
+	CostUSD             float64      `json:"cost_usd"`                         // Total cost in USD
+	APICostUSD          float64      `json:"api_cost_usd"`                     // Input + output cost only
+	CacheCreateCostUSD  float64      `json:"cache_create_cost_usd"`            // Cache creation cost
+	CacheReadCostUSD    float64      `json:"cache_read_cost_usd"`              // Cache read cost
+	Models              []string     `json:"models"`                           // Unique models used
+	UsageLimitResetTime *time.Time   `json:"usage_limit_reset_time,omitempty"` // Claude API usage limit reset time
 }
 
 // BurnRate represents usage burn rate calculations

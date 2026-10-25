@@ -12,15 +12,15 @@ import (
 func TestSessionReportShowsSessionName(t *testing.T) {
 	sessions := []types.SessionInfo{
 		{
-			SessionID:   "/path/projects/test-project",
-			SessionName: "feature-login",
-			SessionIDs:  []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1"},
-			ProjectPath: "/path/projects/test-project",
-			StartTime:   time.Now().Add(-time.Hour),
-			EndTime:     time.Now(),
+			SessionID:    "/path/projects/test-project",
+			SessionName:  "feature-login",
+			SessionIDs:   []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1"},
+			ProjectPath:  "/path/projects/test-project",
+			StartTime:    time.Now().Add(-time.Hour),
+			EndTime:      time.Now(),
 			LastActivity: time.Now(),
-			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
-			ModelsUsed:  []string{"claude-sonnet-4-5-20250514"},
+			InputTokens:  100, OutputTokens: 50, TotalTokens: 150,
+			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},
 	}
 
@@ -46,7 +46,7 @@ func TestSessionReportShowsFilesColumn(t *testing.T) {
 			EndTime:      time.Now(),
 			LastActivity: time.Now(),
 			InputTokens:  100, OutputTokens: 50, TotalTokens: 150,
-			ModelsUsed:   []string{"claude-sonnet-4-5-20250514"},
+			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},
 	}
 
@@ -60,15 +60,15 @@ func TestSessionReportShowsFilesColumn(t *testing.T) {
 func TestSessionReportShowsSessionIDs(t *testing.T) {
 	sessions := []types.SessionInfo{
 		{
-			SessionID:   "/path/projects/test-project",
-			SessionName: "feature-login",
-			SessionIDs:  []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1", "deadbeef-1234-5678-abcd-ef0123456789"},
-			ProjectPath: "/path/projects/test-project",
-			StartTime:   time.Now().Add(-time.Hour),
-			EndTime:     time.Now(),
+			SessionID:    "/path/projects/test-project",
+			SessionName:  "feature-login",
+			SessionIDs:   []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1", "deadbeef-1234-5678-abcd-ef0123456789"},
+			ProjectPath:  "/path/projects/test-project",
+			StartTime:    time.Now().Add(-time.Hour),
+			EndTime:      time.Now(),
 			LastActivity: time.Now(),
-			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
-			ModelsUsed:  []string{"claude-sonnet-4-5-20250514"},
+			InputTokens:  100, OutputTokens: 50, TotalTokens: 150,
+			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},
 	}
 
@@ -82,14 +82,14 @@ func TestSessionReportShowsSessionIDs(t *testing.T) {
 func TestSessionReportWithoutSessionName(t *testing.T) {
 	sessions := []types.SessionInfo{
 		{
-			SessionID:   "/path/projects/test-project",
-			SessionName: "",
-			ProjectPath: "/path/projects/test-project",
-			StartTime:   time.Now().Add(-time.Hour),
-			EndTime:     time.Now(),
+			SessionID:    "/path/projects/test-project",
+			SessionName:  "",
+			ProjectPath:  "/path/projects/test-project",
+			StartTime:    time.Now().Add(-time.Hour),
+			EndTime:      time.Now(),
 			LastActivity: time.Now(),
-			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
-			ModelsUsed:  []string{"claude-sonnet-4-5-20250514"},
+			InputTokens:  100, OutputTokens: 50, TotalTokens: 150,
+			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},
 	}
 
@@ -162,15 +162,15 @@ func TestDailyReportContainsSessionsColumn(t *testing.T) {
 func TestFormatSessionDetailReport(t *testing.T) {
 	sessions := []types.SessionInfo{
 		{
-			SessionID:   "/path/projects/test-project",
-			SessionName: "feature-login",
-			SessionIDs:  []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1"},
-			ProjectPath: "/path/projects/test-project",
-			StartTime:   time.Now().Add(-time.Hour),
-			EndTime:     time.Now(),
+			SessionID:    "/path/projects/test-project",
+			SessionName:  "feature-login",
+			SessionIDs:   []string{"ca81db6e-cb9b-4b53-995b-f5d58b0e52f1"},
+			ProjectPath:  "/path/projects/test-project",
+			StartTime:    time.Now().Add(-time.Hour),
+			EndTime:      time.Now(),
 			LastActivity: time.Now(),
-			InputTokens: 300, OutputTokens: 150, TotalTokens: 450,
-			ModelsUsed:  []string{"claude-sonnet-4-5-20250514"},
+			InputTokens:  300, OutputTokens: 150, TotalTokens: 450,
+			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},
 	}
 
@@ -224,7 +224,7 @@ func TestSessionDetailReportContainsAPICost(t *testing.T) {
 			SessionID: "/path/test", SessionName: "feat",
 			SessionIDs: []string{"uuid-1"}, SourceFiles: []string{"/data/main.jsonl"},
 			ProjectPath: "/path/test",
-			StartTime: time.Now().Add(-time.Hour), EndTime: time.Now(), LastActivity: time.Now(),
+			StartTime:   time.Now().Add(-time.Hour), EndTime: time.Now(), LastActivity: time.Now(),
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			TotalCost: 4.0, TotalAPICost: 2.5,
 			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
@@ -232,10 +232,10 @@ func TestSessionDetailReportContainsAPICost(t *testing.T) {
 	}
 	fileStats := []types.SourceFileStat{
 		{
-			FilePath: "/data/main.jsonl",
+			FilePath:    "/data/main.jsonl",
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			Cost: 4.0, APICost: 2.5, EntryCount: 1,
-			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
+			ModelsUsed:   []string{"claude-sonnet-4-5-20250514"},
 			LastActivity: time.Now(),
 		},
 	}
@@ -250,9 +250,9 @@ func TestLastActivityHeaderContainsLocaltime(t *testing.T) {
 	sessions := []types.SessionInfo{
 		{
 			SessionID: "/path/test", SessionName: "feat",
-			SessionIDs: []string{"uuid-1"},
+			SessionIDs:  []string{"uuid-1"},
 			ProjectPath: "/path/test",
-			StartTime: time.Now().Add(-time.Hour), EndTime: time.Now(), LastActivity: time.Now(),
+			StartTime:   time.Now().Add(-time.Hour), EndTime: time.Now(), LastActivity: time.Now(),
 			InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
 			ModelsUsed: []string{"claude-sonnet-4-5-20250514"},
 		},

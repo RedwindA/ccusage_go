@@ -16,9 +16,9 @@ import (
 // flat cache_creation_input_tokens field.
 func nestedCacheLine(ts time.Time, ephemeral1h, ephemeral5m, cacheRead int) string {
 	usage := map[string]any{
-		"input_tokens":             4,
-		"output_tokens":            10,
-		"cache_read_input_tokens":  cacheRead,
+		"input_tokens":            4,
+		"output_tokens":           10,
+		"cache_read_input_tokens": cacheRead,
 		"cache_creation": map[string]any{
 			"ephemeral_1h_input_tokens": ephemeral1h,
 			"ephemeral_5m_input_tokens": ephemeral5m,

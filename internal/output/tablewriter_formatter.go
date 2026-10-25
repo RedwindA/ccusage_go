@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/calculator"
+	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
-	"github.com/RedwindA/ccusage_go/internal/calculator"
-	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 // TableWriterFormatter uses tablewriter for better table formatting
@@ -58,13 +58,13 @@ func (f *TableWriterFormatter) FormatMonthlyReport(entries []types.UsageEntry) s
 func (f *TableWriterFormatter) FormatDailyReportWithFilter(entries []types.UsageEntry, since, until string) string {
 	// Group entries by date
 	dailyGroups := f.groupByDate(entries)
-	
+
 	if len(dailyGroups) == 0 {
 		return f.formatEmptyReport()
 	}
 
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString("\n")
 	output.WriteString(" ╭────────────────────────────────────────────────────╮")
@@ -80,7 +80,7 @@ func (f *TableWriterFormatter) FormatDailyReportWithFilter(entries []types.Usage
 
 	// Create table buffer
 	var buf bytes.Buffer
-	
+
 	// Create table with tablewriter v1.0.9 API
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
@@ -93,7 +93,7 @@ func (f *TableWriterFormatter) FormatDailyReportWithFilter(entries []types.Usage
 		}),
 		tablewriter.WithHeaderAutoFormat(tw.Off), // Disable auto uppercase
 	)
-	
+
 	// Set headers with multi-line support
 	table.Header([]string{
 		"Date\n",
@@ -243,10 +243,10 @@ func (f *TableWriterFormatter) FormatDailyReportWithFilter(entries []types.Usage
 	tableOutput := buf.String()
 	if !f.noColor {
 		// Apply colors to table elements
-		gray := "\033[90m"     // Gray color for borders
-		cyan := "\033[36m"     // Cyan color for headers
-		yellow := "\033[33m"   // Yellow color for Total row
-		reset := "\033[0m"     // Reset color
+		gray := "\033[90m"   // Gray color for borders
+		cyan := "\033[36m"   // Cyan color for headers
+		yellow := "\033[33m" // Yellow color for Total row
+		reset := "\033[0m"   // Reset color
 
 		lines := strings.Split(tableOutput, "\n")
 		var coloredOutput strings.Builder
@@ -301,13 +301,13 @@ func (f *TableWriterFormatter) FormatDailyReportWithFilter(entries []types.Usage
 
 func (f *TableWriterFormatter) groupByDate(entries []types.UsageEntry) map[string][]types.UsageEntry {
 	groups := make(map[string][]types.UsageEntry)
-	
+
 	for _, entry := range entries {
 		// Skip invalid timestamps
 		if entry.Timestamp.IsZero() || entry.Timestamp.Year() < 2020 {
 			continue
 		}
-		
+
 		// Use pre-computed DateKey from loader (already converted to correct timezone)
 		// This matches TypeScript's approach where timezone conversion happens during data loading
 		dateKey := entry.DateKey
@@ -316,23 +316,23 @@ func (f *TableWriterFormatter) groupByDate(entries []types.UsageEntry) map[strin
 			timeInZone := entry.Timestamp.In(f.timezone)
 			dateKey = timeInZone.Format("2006-01-02")
 		}
-		
+
 		groups[dateKey] = append(groups[dateKey], entry)
 	}
-	
+
 	return groups
 }
 
 func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.UsageEntry, since, until string) string {
 	// Group entries by month
 	monthlyGroups := f.groupByMonth(entries)
-	
+
 	if len(monthlyGroups) == 0 {
 		return f.formatEmptyMonthlyReport()
 	}
 
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString(" ╭──────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                      │\n")
@@ -342,7 +342,7 @@ func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.Usa
 
 	// Create table buffer
 	var buf bytes.Buffer
-	
+
 	// Create table with tablewriter v1.0.9 API
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
@@ -355,7 +355,7 @@ func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.Usa
 		}),
 		tablewriter.WithHeaderAutoFormat(tw.Off), // Disable auto uppercase
 	)
-	
+
 	// Set headers with multi-line support
 	table.Header([]string{
 		"Month\n",
@@ -492,20 +492,20 @@ func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.Usa
 	// Apply color styling if enabled (same as daily format)
 	if !f.noColor {
 		// Apply colors to table elements
-		gray := "\033[90m"     // Gray color for borders
-		cyan := "\033[36m"     // Cyan color for headers
-		yellow := "\033[33m"   // Yellow color for Total row
-		reset := "\033[0m"     // Reset color
-		
+		gray := "\033[90m"   // Gray color for borders
+		cyan := "\033[36m"   // Cyan color for headers
+		yellow := "\033[33m" // Yellow color for Total row
+		reset := "\033[0m"   // Reset color
+
 		lines := strings.Split(tableOutput, "\n")
 		var coloredOutput strings.Builder
-		
+
 		for i, line := range lines {
 			if line == "" {
 				coloredOutput.WriteString("\n")
 				continue
 			}
-			
+
 			// Check if this is a pure border line (no data)
 			if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "├") || strings.HasPrefix(line, "└") {
 				// Pure border line - all gray
@@ -517,7 +517,7 @@ func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.Usa
 					if j > 0 {
 						coloredOutput.WriteString(gray + "│" + reset)
 					}
-					
+
 					// Check content type
 					if i <= 2 && strings.TrimSpace(part) != "" {
 						// Header rows - use cyan
@@ -534,29 +534,29 @@ func (f *TableWriterFormatter) FormatMonthlyReportWithFilter(entries []types.Usa
 				// Other lines
 				coloredOutput.WriteString(line)
 			}
-			
+
 			if i < len(lines)-1 {
 				coloredOutput.WriteString("\n")
 			}
 		}
-		
+
 		output.WriteString(coloredOutput.String())
 	} else {
 		output.WriteString(tableOutput)
 	}
-	
+
 	return output.String()
 }
 
 func (f *TableWriterFormatter) groupByMonth(entries []types.UsageEntry) map[string][]types.UsageEntry {
 	groups := make(map[string][]types.UsageEntry)
-	
+
 	for _, entry := range entries {
 		// Skip invalid timestamps
 		if entry.Timestamp.IsZero() || entry.Timestamp.Year() < 2020 {
 			continue
 		}
-		
+
 		// Use pre-computed DateKey from loader (already converted to correct timezone)
 		// Extract month (YYYY-MM) from DateKey (YYYY-MM-DD)
 		monthKey := ""
@@ -567,31 +567,31 @@ func (f *TableWriterFormatter) groupByMonth(entries []types.UsageEntry) map[stri
 			timeInZone := entry.Timestamp.In(f.timezone)
 			monthKey = timeInZone.Format("2006-01")
 		}
-		
+
 		groups[monthKey] = append(groups[monthKey], entry)
 	}
-	
+
 	return groups
 }
 
 func (f *TableWriterFormatter) formatEmptyMonthlyReport() string {
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString(" ╭──────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                      │\n")
 	output.WriteString(" │  Claude Code Token Usage Report - Monthly (WITH GO) │\n")
 	output.WriteString(" │                                                      │\n")
 	output.WriteString(" ╰──────────────────────────────────────────────────────╯\n\n")
-	
+
 	output.WriteString("No usage data found for the specified criteria.\n")
-	
+
 	return output.String()
 }
 
 func (f *TableWriterFormatter) formatEmptyReport() string {
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString("\n")
 	output.WriteString(" ╭────────────────────────────────────────────────────╮")
@@ -605,7 +605,7 @@ func (f *TableWriterFormatter) formatEmptyReport() string {
 	output.WriteString(" ╰────────────────────────────────────────────────────╯")
 	output.WriteString("\n\n")
 	output.WriteString("No usage data found for the specified period.\n")
-	
+
 	return output.String()
 }
 
@@ -622,7 +622,7 @@ func ShortenModelName(model string) string {
 	// 首先嘗試匹配帶小版本號的格式: claude-{type}-{major}-{minor}-{date}
 	re := regexp.MustCompile(`^claude-(\w+)-(\d+)-(\d+)-\d{8}`)
 	if matches := re.FindStringSubmatch(model); matches != nil {
-		modelType := strings.Title(strings.ToLower(matches[1]))  // 首字母大寫
+		modelType := strings.Title(strings.ToLower(matches[1])) // 首字母大寫
 		majorVersion := matches[2]
 		minorVersion := matches[3]
 		return fmt.Sprintf("%s-%s.%s", modelType, majorVersion, minorVersion)
@@ -631,7 +631,7 @@ func ShortenModelName(model string) string {
 	// 然後嘗試匹配標準格式: claude-{type}-{version}-{date}
 	re = regexp.MustCompile(`^claude-(\w+)-(\d+)-\d{8}`)
 	if matches := re.FindStringSubmatch(model); matches != nil {
-		modelType := strings.Title(strings.ToLower(matches[1]))  // 首字母大寫
+		modelType := strings.Title(strings.ToLower(matches[1])) // 首字母大寫
 		version := matches[2]
 		return fmt.Sprintf("%s-%s", modelType, version)
 	}
@@ -657,11 +657,11 @@ func ShortenModelName(model string) string {
 		"gpt-4":         "gpt-4",
 		"gpt-3.5-turbo": "gpt-3.5",
 	}
-	
+
 	if short, ok := knownModels[model]; ok {
 		return short
 	}
-	
+
 	// If no pattern matches, return truncated version
 	if len(model) > 12 {
 		return model[:12]
@@ -680,13 +680,13 @@ func (f *TableWriterFormatter) formatLargeNumber(n int) string {
 	if n == 0 {
 		return "-"
 	}
-	
+
 	// Format with comma separators
 	s := fmt.Sprintf("%d", n)
 	if len(s) <= 3 {
 		return s
 	}
-	
+
 	var result []rune
 	for i, r := range s {
 		if i > 0 && (len(s)-i)%3 == 0 {
@@ -694,7 +694,7 @@ func (f *TableWriterFormatter) formatLargeNumber(n int) string {
 		}
 		result = append(result, r)
 	}
-	
+
 	return string(result)
 }
 
@@ -937,7 +937,7 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 	}
 
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString(" ╭──────────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                          │\n")
@@ -947,7 +947,7 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 
 	// Create table buffer
 	var buf bytes.Buffer
-	
+
 	// Create table with tablewriter v1.0.9 API
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
@@ -960,7 +960,7 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 		}),
 		tablewriter.WithHeaderAutoFormat(tw.Off), // Disable auto uppercase
 	)
-	
+
 	// Set headers with multi-line support
 	table.Header([]string{
 		"Session\n",
@@ -1079,20 +1079,20 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 	tableOutput := buf.String()
 	if !f.noColor {
 		// Apply colors to table elements (same as daily format)
-		gray := "\033[90m"     // Gray color for borders
-		cyan := "\033[36m"     // Cyan color for headers
-		yellow := "\033[33m"   // Yellow color for Total row
-		reset := "\033[0m"     // Reset color
-		
+		gray := "\033[90m"   // Gray color for borders
+		cyan := "\033[36m"   // Cyan color for headers
+		yellow := "\033[33m" // Yellow color for Total row
+		reset := "\033[0m"   // Reset color
+
 		lines := strings.Split(tableOutput, "\n")
 		var coloredOutput strings.Builder
-		
+
 		for i, line := range lines {
 			if line == "" {
 				coloredOutput.WriteString("\n")
 				continue
 			}
-			
+
 			// Check if this is a pure border line (no data)
 			if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "├") || strings.HasPrefix(line, "└") {
 				// Pure border line - all gray
@@ -1104,7 +1104,7 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 					if j > 0 {
 						coloredOutput.WriteString(gray + "│" + reset)
 					}
-					
+
 					// Check content type
 					if i <= 2 && strings.TrimSpace(part) != "" {
 						// Header rows - use cyan
@@ -1121,17 +1121,17 @@ func (f *TableWriterFormatter) FormatSessionReportWithFilter(sessions []types.Se
 				// Other lines
 				coloredOutput.WriteString(line)
 			}
-			
+
 			if i < len(lines)-1 {
 				coloredOutput.WriteString("\n")
 			}
 		}
-		
+
 		output.WriteString(coloredOutput.String())
 	} else {
 		output.WriteString(tableOutput)
 	}
-	
+
 	return output.String()
 }
 
@@ -1139,14 +1139,14 @@ func (f *TableWriterFormatter) extractSessionDisplayName(sessionID, projectPath 
 	// sessionID is now the project path itself
 	// Project paths look like: /path/to/projects/project-name
 	// We need to extract just the meaningful project name part
-	
+
 	if sessionID == "unknown" || sessionID == "" {
 		return "unknown"
 	}
-	
+
 	// First check if this is a path containing "projects" directory
 	parts := strings.Split(sessionID, string(os.PathSeparator))
-	
+
 	// Find the "projects" directory
 	projectName := ""
 	for i, part := range parts {
@@ -1156,50 +1156,50 @@ func (f *TableWriterFormatter) extractSessionDisplayName(sessionID, projectPath 
 			break
 		}
 	}
-	
+
 	// If no projects directory found, use the last part
 	if projectName == "" {
 		projectName = parts[len(parts)-1]
 	}
-	
+
 	// Clean up the project name
 	projectName = strings.TrimPrefix(projectName, "-")
-	
+
 	// Use regex to extract meaningful project name patterns
 	// Pattern 1: Match src-ProjectName or similar patterns
 	srcProjectRe := regexp.MustCompile(`(?:^|-)(?:go_)?(?:src|react_src|python_src)[_-]([A-Za-z][A-Za-z0-9_-]+)`)
 	if matches := srcProjectRe.FindStringSubmatch(projectName); len(matches) > 1 {
 		return "src-" + matches[1]
 	}
-	
+
 	// Pattern 2: Match blog-category-name pattern (e.g., blog-tech-news)
 	blogRe := regexp.MustCompile(`blog-([a-z]+)-([a-z]+)`)
 	if matches := blogRe.FindStringSubmatch(projectName); len(matches) > 2 {
 		return "blog-" + matches[1] + "-" + matches[2]
 	}
-	
+
 	// Pattern 3: Extract last meaningful segment that looks like a project name
 	// Skip common path segments and volume identifiers
 	segments := strings.Split(projectName, "-")
-	
+
 	// Filter out system/path segments using regex
 	systemSegmentRe := regexp.MustCompile(`^(Volumes?|Users?|home|var|tmp|opt|usr|bin|lib|etc|[A-Z0-9]+_[A-Z0-9]+|^\d+[A-Z]+$)$`)
 	userNameRe := regexp.MustCompile(`^[a-z]+$`) // Simple lowercase words are often usernames
-	
+
 	var meaningfulSegments []string
 	foundSrc := false
-	
+
 	for i, segment := range segments {
 		// Skip system directories and volume identifiers
 		if systemSegmentRe.MatchString(segment) {
 			continue
 		}
-		
+
 		// Skip single lowercase words (often usernames) unless they're after "src"
 		if userNameRe.MatchString(segment) && !foundSrc && len(segment) < 8 {
 			continue
 		}
-		
+
 		// Track if we found "src" or similar
 		if segment == "src" || strings.HasSuffix(segment, "_src") {
 			foundSrc = true
@@ -1208,13 +1208,13 @@ func (f *TableWriterFormatter) extractSessionDisplayName(sessionID, projectPath 
 				return "src-" + segments[i+1]
 			}
 		}
-		
+
 		// Collect meaningful segments
 		if len(segment) > 2 && !systemSegmentRe.MatchString(segment) {
 			meaningfulSegments = append(meaningfulSegments, segment)
 		}
 	}
-	
+
 	// Return the last meaningful segment(s)
 	if len(meaningfulSegments) > 0 {
 		// If we have multiple meaningful segments, check for common patterns
@@ -1228,12 +1228,12 @@ func (f *TableWriterFormatter) extractSessionDisplayName(sessionID, projectPath 
 		// Return the last meaningful segment
 		return meaningfulSegments[len(meaningfulSegments)-1]
 	}
-	
+
 	// Final fallback: if nothing meaningful found, return a shortened version
 	if len(segments) > 0 {
 		return segments[len(segments)-1]
 	}
-	
+
 	return "unknown"
 }
 
@@ -1253,7 +1253,7 @@ func isDateLike(s string) bool {
 func isSystemDirectory(name string) bool {
 	// Common system directories to skip
 	systemDirs := map[string]bool{
-		"home": true, "Users": true, "usr": true, "var": true, 
+		"home": true, "Users": true, "usr": true, "var": true,
 		"tmp": true, "opt": true, "etc": true, "lib": true,
 		"bin": true, "sbin": true, "dev": true, "proc": true,
 		"sys": true, "root": true, "mnt": true, "media": true,
@@ -1292,16 +1292,16 @@ func isTimestampLike(s string) bool {
 
 func (f *TableWriterFormatter) formatEmptySessionReport() string {
 	var output strings.Builder
-	
+
 	// Title - use default white color
 	output.WriteString(" ╭────────────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                          │\n")
 	output.WriteString(" │  Claude Code Token Usage Report - By Session (WITH GO)  │\n")
 	output.WriteString(" │                                                          │\n")
 	output.WriteString(" ╰────────────────────────────────────────────────────────────╯\n\n")
-	
+
 	output.WriteString("No session data found for the specified criteria.\n")
-	
+
 	return output.String()
 }
 
@@ -1312,7 +1312,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 	}
 
 	var output strings.Builder
-	
+
 	// Title box
 	output.WriteString("\n")
 	output.WriteString(" ╭───────────────────────────────────────────────────────────────╮\n")
@@ -1323,7 +1323,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 
 	// Create table buffer
 	var buf bytes.Buffer
-	
+
 	// Create table with tablewriter v1.0.9 API
 	table := tablewriter.NewTable(&buf,
 		tablewriter.WithRenderer(renderer.NewBlueprint(tw.Rendition{
@@ -1336,7 +1336,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 		}),
 		tablewriter.WithHeaderAutoFormat(tw.Off), // Disable auto uppercase
 	)
-	
+
 	// Build headers dynamically
 	headers := []string{
 		"Block Start",
@@ -1354,9 +1354,9 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 		headers = append(headers, "%")
 	}
 	headers = append(headers, "API Cost\n(USD)", "Cost\n(USD)")
-	
+
 	table.Header(headers)
-	
+
 	// Process each block
 	for _, block := range blocks {
 		if block.IsGap {
@@ -1370,15 +1370,15 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 				row = append(row, "-")
 			}
 			row = append(row, "-", "-")
-			
+
 			// Add gray coloring in post-processing
 			table.Append(row)
 		} else {
 			totalTokens := block.TokenCounts.GetTotal()
-			
+
 			// Format time
 			timeStr := f.formatBlockTime(block, false)
-			
+
 			// Status/Duration
 			var statusStr string
 			if block.IsActive {
@@ -1386,7 +1386,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 			} else {
 				statusStr = ""
 			}
-			
+
 			// Format models
 			modelsStr := f.formatBlockModels(block.Models)
 
@@ -1412,9 +1412,9 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 			}
 
 			row = append(row, apiCostStr, costStr)
-			
+
 			table.Append(row)
-			
+
 			// Add REMAINING and PROJECTED rows for active blocks
 			if block.IsActive {
 				// REMAINING row - only show if token limit is set
@@ -1424,9 +1424,9 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 					if remainingTokens < 0 {
 						remainingTokens = 0
 					}
-					
+
 					remainingPercent := float64(remainingTokens) / float64(tokenLimit) * 100
-					
+
 					remainingRow := []string{
 						fmt.Sprintf("(assuming %s token limit)", formatNumberWithCommas(tokenLimit)),
 						"REMAINING", // Will be colored blue
@@ -1437,7 +1437,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 					}
 					table.Append(remainingRow)
 				}
-				
+
 				// PROJECTED row
 				if projection := calculator.ProjectBlockUsage(block); projection != nil {
 					projectedRow := []string{
@@ -1458,16 +1458,16 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 			}
 		}
 	}
-	
+
 	// Render the table
 	table.Render()
 	tableOutput := buf.String()
-	
+
 	// Apply coloring if not disabled
 	if !f.noColor {
 		var coloredOutput strings.Builder
 		lines := strings.Split(tableOutput, "\n")
-		
+
 		// ANSI color codes
 		gray := "\033[90m"
 		cyan := "\033[36m"
@@ -1476,14 +1476,14 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 		blue := "\033[34m"
 		red := "\033[31m"
 		reset := "\033[0m"
-		
+
 		for i, line := range lines {
 			// Check if this is a pure border line
 			if strings.HasPrefix(line, "┌") || strings.HasPrefix(line, "├") || strings.HasPrefix(line, "└") {
 				coloredOutput.WriteString(gray + line + reset)
 			} else if strings.Contains(line, "│") {
 				// Line with data and borders
-				
+
 				// Check for special rows
 				if strings.Contains(line, "(inactive)") {
 					// Gap row - all gray
@@ -1495,7 +1495,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 						if j > 0 {
 							coloredOutput.WriteString(gray + "│" + reset)
 						}
-						
+
 						if strings.Contains(part, "ACTIVE") {
 							// Replace ACTIVE with green colored version
 							colored := strings.Replace(part, "ACTIVE", green+"ACTIVE"+reset, 1)
@@ -1514,7 +1514,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 						if j > 0 {
 							coloredOutput.WriteString(gray + "│" + reset)
 						}
-						
+
 						if strings.Contains(part, "REMAINING") {
 							colored := strings.Replace(part, "REMAINING", blue+"REMAINING"+reset, 1)
 							coloredOutput.WriteString(colored)
@@ -1531,7 +1531,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 						if j > 0 {
 							coloredOutput.WriteString(gray + "│" + reset)
 						}
-						
+
 						if strings.Contains(part, "PROJECTED") {
 							colored := strings.Replace(part, "PROJECTED", yellow+"PROJECTED"+reset, 1)
 							coloredOutput.WriteString(colored)
@@ -1560,7 +1560,7 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 						if j > 0 {
 							coloredOutput.WriteString(gray + "│" + reset)
 						}
-						
+
 						if i <= 2 && strings.TrimSpace(part) != "" {
 							// Header rows - use cyan
 							coloredOutput.WriteString(cyan + part + reset)
@@ -1583,28 +1583,28 @@ func (f *TableWriterFormatter) FormatBlocksReport(blocks []types.SessionBlock, t
 			} else {
 				coloredOutput.WriteString(line)
 			}
-			
+
 			if i < len(lines)-1 {
 				coloredOutput.WriteString("\n")
 			}
 		}
-		
+
 		output.WriteString(coloredOutput.String())
 	} else {
 		output.WriteString(tableOutput)
 	}
-	
+
 	return output.String()
 }
 
 func (f *TableWriterFormatter) formatBlockTime(block types.SessionBlock, compact bool) string {
 	start := block.StartTime.In(f.timezone)
-	
+
 	if block.IsGap {
 		end := block.EndTime.In(f.timezone)
 		duration := end.Sub(start)
 		hours := int(duration.Hours())
-		
+
 		if compact {
 			return fmt.Sprintf("%s - %s\n(%dh gap)",
 				start.Format("01/02, 3:04 PM"),
@@ -1616,7 +1616,7 @@ func (f *TableWriterFormatter) formatBlockTime(block types.SessionBlock, compact
 			end.Format("2006-01-02, 3:04:05 PM"),
 			hours)
 	}
-	
+
 	// For non-gap blocks
 	var duration time.Duration
 	if block.ActualEndTime != nil {
@@ -1624,20 +1624,20 @@ func (f *TableWriterFormatter) formatBlockTime(block types.SessionBlock, compact
 	} else {
 		duration = time.Since(block.StartTime)
 	}
-	
+
 	hours := int(duration.Hours())
 	minutes := int(duration.Minutes()) % 60
-	
+
 	if block.IsActive {
 		now := time.Now()
 		elapsed := now.Sub(block.StartTime)
 		remaining := block.EndTime.Sub(now)
-		
+
 		elapsedHours := int(elapsed.Hours())
 		elapsedMins := int(elapsed.Minutes()) % 60
 		remainingHours := int(remaining.Hours())
 		remainingMins := int(remaining.Minutes()) % 60
-		
+
 		if compact {
 			return fmt.Sprintf("%s\n(%dh%dm/%dh%dm)",
 				start.Format("01/02, 3:04 PM"),
@@ -1649,7 +1649,7 @@ func (f *TableWriterFormatter) formatBlockTime(block types.SessionBlock, compact
 			elapsedHours, elapsedMins,
 			remainingHours, remainingMins)
 	}
-	
+
 	if compact {
 		if hours > 0 {
 			return fmt.Sprintf("%s (%dh %dm)",
@@ -1660,7 +1660,7 @@ func (f *TableWriterFormatter) formatBlockTime(block types.SessionBlock, compact
 			start.Format("01/02, 3:04 PM"),
 			minutes)
 	}
-	
+
 	if hours > 0 {
 		return fmt.Sprintf("%s (%dh %dm)",
 			start.Format("2006-01-02, 3:00:00 PM"),
@@ -1675,36 +1675,36 @@ func (f *TableWriterFormatter) formatBlockModels(models []string) string {
 	if len(models) == 0 {
 		return "-"
 	}
-	
+
 	// Simplify model names
 	simplifiedModels := make(map[string]bool)
 	for _, model := range models {
 		shortModel := ShortenModelName(model)
 		simplifiedModels[shortModel] = true
 	}
-	
+
 	// Convert to sorted slice
 	var uniqueModels []string
 	for model := range simplifiedModels {
 		uniqueModels = append(uniqueModels, model)
 	}
 	sort.Strings(uniqueModels)
-	
+
 	// Format with bullet points like TypeScript version
 	return "- " + strings.Join(uniqueModels, "\n- ")
 }
 
 func (f *TableWriterFormatter) formatEmptyBlocksReport() string {
 	var output strings.Builder
-	
+
 	output.WriteString("\n")
 	output.WriteString(" ╭───────────────────────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                                               │\n")
 	output.WriteString(" │  Claude Code Token Usage Report - Session Blocks (WITH GO)  │\n")
 	output.WriteString(" │                                                               │\n")
 	output.WriteString(" ╰───────────────────────────────────────────────────────────────╯\n\n")
-	
+
 	output.WriteString("No session blocks found for the specified criteria.\n")
-	
+
 	return output.String()
 }

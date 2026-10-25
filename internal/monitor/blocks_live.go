@@ -10,6 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/calculator"
+	"github.com/RedwindA/ccusage_go/internal/loader"
+	"github.com/RedwindA/ccusage_go/internal/output"
+	"github.com/RedwindA/ccusage_go/internal/pricing"
+	"github.com/RedwindA/ccusage_go/internal/types"
+	"github.com/RedwindA/ccusage_go/internal/usage"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lucasb-eyer/go-colorful"
@@ -17,12 +23,6 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/renderer"
 	"github.com/olekukonko/tablewriter/tw"
-	"github.com/RedwindA/ccusage_go/internal/calculator"
-	"github.com/RedwindA/ccusage_go/internal/loader"
-	"github.com/RedwindA/ccusage_go/internal/output"
-	"github.com/RedwindA/ccusage_go/internal/pricing"
-	"github.com/RedwindA/ccusage_go/internal/types"
-	"github.com/RedwindA/ccusage_go/internal/usage"
 )
 
 // Burn rate thresholds for indicators
