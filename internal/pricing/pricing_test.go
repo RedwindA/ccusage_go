@@ -58,7 +58,7 @@ func TestZeroAndPartialOverrides(t *testing.T) {
 
 // Like upstream's apply_override, an override builds only on the entry its
 // own key names: a gateway id that fuzzy-matches another model keeps none of
-// that model's cache, long-context or Fast rates.
+// that model's cache, long-context or service-tier rates.
 func TestOverrideOfAnUnpricedIDStartsFromNoRates(t *testing.T) {
 	s := NewService()
 	s.SetOffline(true)
@@ -69,7 +69,7 @@ func TestOverrideOfAnUnpricedIDStartsFromNoRates(t *testing.T) {
 		overrides[model] = Override{InputCostPerToken: &input, OutputCostPerToken: &output}
 	}
 	s.SetOverrides(overrides)
-	want := ModelPricing{InputCostPerToken: input, OutputCostPerToken: output, FastMultiplier: 1}
+	want := ModelPricing{InputCostPerToken: input, OutputCostPerToken: output, FastMultiplier: 1, FlexMultiplier: 1}
 	for _, model := range ids {
 		if p, err := s.GetPricing(context.Background(), model, time.Time{}); err != nil || p != want {
 			t.Errorf("%s: %+v %v", model, p, err)
