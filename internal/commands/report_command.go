@@ -378,14 +378,15 @@ func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {
 }
 
 // applyConfig sets each config option of the kind report of agent on flags
-// unless cmd's command line sets it. Upstream's config has no period
-// selectors, so --last, --date, --month and --week come only from the command
-// line. It reads project, instances and projectAliases only for claude daily,
-// and a unified daily report passes its project on to Claude.
+// unless cmd's command line sets it. Upstream's config has no period or
+// session selectors, so --last, --date, --month, --week, --id and
+// --session-id come only from the command line. It reads project, instances
+// and projectAliases only for claude daily, and a unified daily report passes
+// its project on to Claude.
 func applyConfig(cmd *cobra.Command, flags *pflag.FlagSet, kind, agent string, options map[string]any) error {
 	for name, value := range options {
 		switch name = optionFlag(name); name {
-		case "last", "date", "month", "week":
+		case "last", "date", "month", "week", "id", "session-id":
 			continue
 		case "project":
 			if kind != "daily" || agent != "claude" && agent != "" {

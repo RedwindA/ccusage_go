@@ -319,6 +319,29 @@ func TestUnifiedConfigProjectFiltersOnlyClaudeDaily(t *testing.T) {
 	}
 }
 
+// Upstream's config has no id or sessionId either: a configured one neither
+// looks up a session nor filters a report.
+func TestConfigSessionIDsAreIgnored(t *testing.T) {
+	sessions := map[string][2]float64{"session-a claude": {20, 0.02}, "session-b claude": {1000, 0.02}, "2026/01/04/before codex": {900, 0}, "2026/01/05/in codex": {1000, 0}}
+	for _, config := range []string{
+		`{"defaults": {"timezone": "UTC", "id": "session-a"}}`,
+		`{"defaults": {"timezone": "UTC"}, "commands": {"session": {"sessionId": "session-a"}}}`,
+		`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"id": "zzz"}}}`,
+		`{"defaults": {"timezone": "UTC"}, "commands": {"codex:session": {"id": "zzz"}}}`,
+	} {
+		_, cfg := sourceConfigFixture(t, config)
+		p := sourceCLIJSON(t, "session", "--json", "--offline", "--by-agent", "--config", cfg)
+		assertSourceRows(t, config+" session", sourceRows(p, "session"), sessions)
+		for _, args := range [][]string{{"claude", "session"}, {"codex", "session"}, {"claude", "daily"}} {
+			p := sourceCLIJSON(t, append(args, "--json", "--offline", "--config", cfg)...)
+			key := map[string]string{"session": "sessions", "daily": "daily"}[args[1]]
+			if rows, _ := p[key].([]any); len(rows) != 2 {
+				t.Errorf("%s %v: %d rows, want 2: %v", config, args, len(rows), p)
+			}
+		}
+	}
+}
+
 // Upstream reads a configured project, instances and projectAliases only for
 // claude daily, and a unified daily report gives its project to Claude; every
 // other report keeps all rows, not grouped or labeled by project.
