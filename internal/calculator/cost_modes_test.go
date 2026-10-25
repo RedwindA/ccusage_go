@@ -53,6 +53,22 @@ func TestCacheTTLAndRawModelOverride(t *testing.T) {
 		t.Fatal(e.Cost)
 	}
 }
+func TestPiAutoOverrideResolvesConfiguredModelAliases(t *testing.T) {
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"private-model":"custom-model"}`)
+	s := pricing.NewService()
+	s.SetOffline(true)
+	input := 0.001
+	s.SetOverrides(map[string]pricing.Override{"custom-model": {InputCostPerToken: &input}})
+	c := New(s)
+	c.SetMode("auto")
+	for model, want := range map[string]float64{"custom-model": 1, "private-model": 1, "unrelated-model": 1.5} {
+		e := types.UsageEntry{Agent: "pi", Model: model, InputTokens: 1000, Cost: 1.5, HasCost: true, Raw: map[string]interface{}{"source_format": "pi"}}
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-want) > 1e-12 {
+			t.Errorf("%s: %v, want %v", model, e.Cost, want)
+		}
+	}
+}
 func TestUnknownAndReasoning(t *testing.T) {
 	c := modernCalculator()
 	e := types.UsageEntry{Model: "not-a-real-model", InputTokens: 100}

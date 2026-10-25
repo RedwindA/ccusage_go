@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -53,6 +54,49 @@ func TestNamedPiStoreOverlapRejected(t *testing.T) {
 	}
 	if _, err := executeReport("daily", "--offline", "--json", "--config", cfg); err == nil {
 		t.Fatal("overlapping pi store accepted")
+	}
+}
+
+// Pi records a cost of 0 for custom models; an override naming the store's
+// prefixed label or the bare model must price the tokens in auto mode, while
+// display mode keeps showing the recorded cost.
+func TestPiPricingOverrideRecalculatesRecordedCostInAutoMode(t *testing.T) {
+	record := `{"type":"message","timestamp":"2026-01-02T00:00:00.000Z","message":{"role":"assistant","model":"my-custom-model","usage":{"input":1000,"output":2000,"cost":{"total":0}}}}`
+	for _, tc := range []struct {
+		key     string
+		pi, omp float64
+	}{{"[pi] my-custom-model", 5, 0}, {"[omp] my-custom-model", 0, 5}, {"my-custom-model", 5, 5}} {
+		home := isolateSourceHomes(t)
+		primary, omp := filepath.Join(home, "primary"), filepath.Join(home, "omp")
+		t.Setenv("PI_AGENT_DIR", primary)
+		sourceCLIWrite(t, filepath.Join(primary, "project-a/agent_session-a.jsonl"), record)
+		sourceCLIWrite(t, filepath.Join(omp, "project-a/agent_session-a.jsonl"), record)
+		cfg := filepath.Join(home, "config.json")
+		data, _ := json.Marshal(map[string]any{
+			"pi":       map[string]any{"stores": []map[string]string{{"name": "omp", "path": omp}}},
+			"defaults": map[string]any{"pricingOverrides": map[string]any{tc.key: map[string]float64{"inputCostPerToken": 0.001, "outputCostPerToken": 0.002}}},
+		})
+		sourceCLIWrite(t, cfg, string(data))
+		for _, mode := range []string{"auto", "display"} {
+			want := map[string]float64{"[pi] my-custom-model": tc.pi, "[omp] my-custom-model": tc.omp}
+			if mode == "display" {
+				want = map[string]float64{"[pi] my-custom-model": 0, "[omp] my-custom-model": 0}
+			}
+			p := sourceCLIJSON(t, "daily", "--json", "--offline", "--config", cfg, "--mode", mode)
+			got := map[string]float64{}
+			for _, b := range p["daily"].([]any)[0].(map[string]any)["modelBreakdowns"].([]any) {
+				model := b.(map[string]any)
+				if model["missingPricing"] != nil {
+					t.Errorf("%s %s: %v reported missing pricing", tc.key, mode, model["modelName"])
+				}
+				got[model["modelName"].(string)] = model["cost"].(float64)
+			}
+			for name, cost := range want {
+				if math.Abs(got[name]-cost) > 1e-9 {
+					t.Errorf("%s %s: %s cost %v, want %v", tc.key, mode, name, got[name], cost)
+				}
+			}
+		}
 	}
 }
 

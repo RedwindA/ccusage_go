@@ -63,10 +63,26 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 		}
 		return
 	}
-	if c.mode != "calculate" && recorded {
+	if c.mode != "calculate" && recorded && !c.hasPiOverride(entry) {
 		return
 	}
 	c.calculateSingleCost(ctx, entry)
+}
+
+// hasPiOverride reports whether a pricing override names a Pi record's
+// store-prefixed or bare model (or its alias). Auto mode then prices the
+// tokens instead of the cost Pi recorded, which is often 0 for custom models.
+func (c *Calculator) hasPiOverride(entry *types.UsageEntry) bool {
+	overrides, ok := c.pricingService.(interface{ HasOverride(string) bool })
+	if format, _ := entry.Raw["source_format"].(string); format != "pi" || !ok {
+		return false
+	}
+	for _, model := range []string{"[" + entry.Agent + "] " + entry.Model, entry.Model} {
+		if overrides.HasOverride(model) || overrides.HasOverride(pricing.ResolveModelName(model)) {
+			return true
+		}
+	}
+	return false
 }
 func number(v interface{}) float64 {
 	switch n := v.(type) {
