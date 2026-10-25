@@ -60,16 +60,20 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 		return
 	}
 	if c.mode == "display" {
-		// Upstream prices Codex usage in every mode; display only leaves
-		// out the models it cannot price.
-		if entry.Agent == "codex" {
+		switch entry.Agent {
+		case "droid", "codebuff", "goose":
+			// Upstream prices these agents in every mode, as in calculate.
+			c.calculateSingleCost(ctx, entry)
+		case "codex":
+			// Upstream prices Codex usage in every mode; display only leaves
+			// out the models it cannot price.
 			c.calculateSingleCost(ctx, entry)
 			delete(entry.Raw, "missing_pricing")
 			delete(entry.Raw, "missing_pricing_model")
-			return
-		}
-		if !recorded {
-			entry.Cost = 0
+		default:
+			if !recorded {
+				entry.Cost = 0
+			}
 		}
 		return
 	}

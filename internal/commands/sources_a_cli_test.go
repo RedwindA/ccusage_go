@@ -173,3 +173,24 @@ func TestCodexIsPricedInDisplayMode(t *testing.T) {
 		}
 	}
 }
+
+// Upstream's Droid adapter prices usage in every cost mode, display
+// included, and flags the models it cannot price.
+func TestDroidIsPricedInDisplayMode(t *testing.T) {
+	home := isolateSourceHomes(t)
+	droid := filepath.Join(home, "droid")
+	t.Setenv("DROID_SESSIONS_DIR", droid)
+	usage := `"providerLock":"anthropic","providerLockTimestamp":"2026-05-01T01:02:03.000Z","tokenUsage":{"inputTokens":100000,"outputTokens":50000,"cacheCreationTokens":20000,"cacheReadTokens":10000,"thinkingTokens":5000}}`
+	sourceCLIWrite(t, filepath.Join(droid, "work/session-a.settings.json"), `{"model":"Claude-Sonnet-4-[Anthropic]",`+usage)
+	sourceCLIWrite(t, filepath.Join(droid, "work/session-b.settings.json"), `{"model":"unknown-droid-model",`+usage)
+	for _, args := range [][]string{{"droid", "daily"}, {"droid", "session"}, {"daily"}, {"session"}} {
+		payload := sourceCLIJSON(t, append(args, "--mode", "display", "--json", "--offline", "--timezone", "UTC")...)
+		totals := payload["totals"].(map[string]any)
+		if cost, _ := totals["totalCost"].(float64); math.Abs(cost-1.203) > 1e-9 {
+			t.Errorf("%v: totals %v, want cost 1.203", args, totals)
+		}
+		if unpriced := fmt.Sprint(totals["unpricedModels"]); unpriced != "[unknown-droid-model]" {
+			t.Errorf("%v: unpricedModels %s", args, unpriced)
+		}
+	}
+}

@@ -249,6 +249,25 @@ func TestSourceSpecificCostPolicies(t *testing.T) {
 		t.Fatal("Codex speed changed Claude pricing")
 	}
 }
+
+// Upstream's Droid, Codebuff and Goose adapters price usage whatever the
+// cost mode and flag the models they cannot price.
+func TestAlwaysPricedSourcesInDisplayMode(t *testing.T) {
+	c := modernCalculator()
+	c.SetMode("display")
+	for _, agent := range []string{"droid", "codebuff", "goose"} {
+		e := types.UsageEntry{Agent: agent, Model: "gpt-5.5", InputTokens: 100}
+		_ = c.CalculateCost(&e)
+		if e.Cost <= 0 {
+			t.Errorf("%s display cost %v", agent, e.Cost)
+		}
+		e = types.UsageEntry{Agent: agent, Model: "unknown-model-x", InputTokens: 100}
+		_ = c.CalculateCost(&e)
+		if e.Raw["missing_pricing"] != true {
+			t.Errorf("%s display mode left an unknown model unflagged: %+v", agent, e)
+		}
+	}
+}
 func TestExtraOutputTokensPrecedeReasoningFallback(t *testing.T) {
 	c := modernCalculator()
 	a := types.UsageEntry{Model: "gpt-5.5", OutputTokens: 100}
