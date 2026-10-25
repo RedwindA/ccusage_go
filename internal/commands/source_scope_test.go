@@ -304,7 +304,7 @@ func TestUnifiedConfigProjectFiltersOnlyClaudeDaily(t *testing.T) {
 		want   map[string][2]float64
 	}{
 		{`{"defaults": {"timezone": "UTC"}, "commands": {"daily": {"project": "project-a"}}}`, []string{"daily"}, "daily", filtered},
-		{`{"commands": {"daily": {"project": "project-a"}}, "claude": {"defaults": {"timezone": "UTC"}}}`, []string{"daily"}, "daily", filtered},
+		{`{"defaults": {"timezone": "UTC"}, "commands": {"daily": {"project": "project-a"}}, "claude": {"defaults": {"timezone": "UTC"}}}`, []string{"daily"}, "daily", filtered},
 		{`{"defaults": {"timezone": "UTC"}, "commands": {"daily": {"project": "project-b"}}, "claude": {"commands": {"daily": {"project": "project-a"}}}}`, []string{"daily"}, "daily", filtered},
 		{`{"defaults": {"timezone": "UTC", "project": "project-a"}}`, []string{"daily", "--sections", "monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {20, 0.02}, "2026-01 codex": {1900, 0}}},
 		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"project": "project-a"}}}`, []string{"daily"}, "daily", map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}}},
