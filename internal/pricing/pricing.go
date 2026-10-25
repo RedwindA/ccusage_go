@@ -64,12 +64,13 @@ type lookupResult struct {
 	found bool
 }
 
-// Service prices models from two tables, like upstream: primary holds the
+// Service prices models from three tables, like upstream: primary holds the
 // LiteLLM snapshot (or its live refresh), the built-in rates and the
-// overrides, and models holds models.dev, which only prices what primary
-// misses.
+// overrides, live holds the live models.dev catalog, and models its embedded
+// snapshot; each prices only what the tables before it miss.
 type Service struct {
 	primary         map[string]ModelPricing
+	live            map[string]ModelPricing
 	models          map[string]ModelPricing
 	modelsAttempted bool
 	modelsFailed    bool
@@ -77,6 +78,7 @@ type Service struct {
 	memo            map[string]lookupResult
 	idx             *priceIndex
 	primaryIdx      *priceIndex
+	liveIdx         *priceIndex
 	prefetch        *Prefetch
 	// prefetchedModelsUsed records that refreshModels consumed prefetch.models.
 	prefetchedModelsUsed bool
@@ -109,15 +111,11 @@ func Preload() { go embeddedOnce.Do(initEmbedded) }
 
 func NewService() *Service {
 	embeddedOnce.Do(initEmbedded)
-	models := make(map[string]ModelPricing, len(snapshotPricing()))
 	primary := make(map[string]ModelPricing, len(embeddedPrimary))
-	for model, p := range snapshotPricing() {
-		models[model] = p
-	}
 	for model, p := range embeddedPrimary {
 		primary[model] = p
 	}
-	return &Service{client: &http.Client{Timeout: 10 * time.Second}, models: models, primary: primary, overrides: map[string]Override{}, memo: map[string]lookupResult{}}
+	return &Service{client: &http.Client{Timeout: 10 * time.Second}, models: snapshotPricing(), primary: primary, overrides: map[string]Override{}, memo: map[string]lookupResult{}}
 }
 func (s *Service) SetOffline(v bool) { s.mu.Lock(); defer s.mu.Unlock(); s.offline = v }
 func (s *Service) SetOverrides(v map[string]Override) {
@@ -413,8 +411,7 @@ func hasKey[V any](m map[string]V, key string) bool {
 	return ok
 }
 
-// index returns the priceIndex for s.models; callers hold s.mu, and code that
-// changes s.models resets s.idx.
+// index returns the priceIndex for s.models; callers hold s.mu.
 func (s *Service) index() *priceIndex {
 	if s.idx == nil {
 		s.idx = newPriceIndex(s.models)
@@ -430,13 +427,37 @@ func (s *Service) primaryIndex() *priceIndex {
 	return s.primaryIdx
 }
 
+// liveIndex is index for s.live, reset with s.liveIdx.
+func (s *Service) liveIndex() *priceIndex {
+	if s.liveIdx == nil {
+		s.liveIdx = newPriceIndex(s.live)
+	}
+	return s.liveIdx
+}
+
+// priceTable is one price table with its priceIndex.
+type priceTable struct {
+	all map[string]ModelPricing
+	idx *priceIndex
+}
+
+// fallbacks are the models.dev tables in the order they price what primary
+// misses: the live catalog, then the embedded snapshot. Callers hold s.mu.
+func (s *Service) fallbacks() []priceTable {
+	return []priceTable{{s.live, s.liveIndex()}, {s.models, s.index()}}
+}
+
 // requiresExact reports whether model, or the built-in alias it names, is
 // any separator spelling of an exact-only models.dev id such as the
 // claude-opus-5-fast tier, which a fuzzy match would bill at another model's
 // rate.
 func (s *Service) requiresExact(model string) bool {
-	exactOnly := s.index().exactOnly
-	return hasKey(exactOnly, normalizer.Replace(model)) || hasKey(exactOnly, normalizer.Replace(canonical(model)))
+	for _, table := range s.fallbacks() {
+		if hasKey(table.idx.exactOnly, normalizer.Replace(model)) || hasKey(table.idx.exactOnly, normalizer.Replace(canonical(model))) {
+			return true
+		}
+	}
+	return false
 }
 
 // exactEntry looks model up like upstream's find_exact_with_fallback, in
@@ -445,10 +466,7 @@ func (s *Service) requiresExact(model string) bool {
 // share names neither, so the next table answers. Callers hold s.mu.
 func (s *Service) exactEntry(model string) (ModelPricing, bool) {
 	n := normalizer.Replace(model)
-	for _, table := range []struct {
-		all map[string]ModelPricing
-		idx *priceIndex
-	}{{s.primary, s.primaryIndex()}, {s.models, s.index()}} {
+	for _, table := range append([]priceTable{{s.primary, s.primaryIndex()}}, s.fallbacks()...) {
 		if p, ok := table.all[model]; ok {
 			return p, true
 		}
@@ -574,8 +592,10 @@ func (s *Service) lookup(model, resolved string) (ModelPricing, bool) {
 			}
 		}
 	}
-	if !ok {
-		p, ok = find(s.models, s.index(), resolved, fuzzy, anyEntry)
+	for _, table := range s.fallbacks() {
+		if !ok {
+			p, ok = find(table.all, table.idx, resolved, fuzzy, anyEntry)
+		}
 	}
 	s.memo[key] = lookupResult{p, ok}
 	return p, ok
@@ -608,8 +628,10 @@ func (s *Service) ContextLimit(ctx context.Context, model string) (int, bool) {
 			}
 		}
 	}
-	if p, ok := find(s.models, s.index(), resolved, fuzzy, hasContextLimit); ok {
-		return p.MaxInputTokens, true
+	for _, table := range s.fallbacks() {
+		if p, ok := find(table.all, table.idx, resolved, fuzzy, hasContextLimit); ok {
+			return p.MaxInputTokens, true
+		}
 	}
 	for _, name := range names {
 		if p, ok := find(builtinContextLimits, builtinContextIndex(), name, fuzzy, hasContextLimit); ok {

@@ -112,3 +112,25 @@ func TestModelsDevTiersFillOnlyFlatLiteLLMRates(t *testing.T) {
 		t.Errorf("published tier replaced: %+v", p)
 	}
 }
+
+// Like upstream's find_with_fallbacks, the live models.dev catalog prices
+// what LiteLLM misses before the embedded snapshot does, so a snapshot id
+// live no longer lists loses to a live fuzzy match, and live's exact-only
+// ids still keep a fuzzy LiteLLM match off their tier
+// (live_exact_only_fallback_beats_a_fuzzy_primary_match).
+func TestLiveModelsDevPricesBeforeTheEmbeddedSnapshot(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	ctx := context.Background()
+	s := tableService(map[string]ModelPricing{"acme": {InputCostPerToken: 1e-6}})
+	s.offline = false
+	s.models = map[string]ModelPricing{"vendor/acme4-ft-31b": {InputCostPerToken: 2e-6, MaxInputTokens: 1000}, "acme5": {InputCostPerToken: 3e-6}}
+	s.client = &http.Client{Transport: &catalogTransport{lite: `{"x":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000001}}`, models: `{"openai":{"models":{"acme4":{"cost":{"input":5,"output":5},"limit":{"context":2000}},"acme-turbo":{"cost":{"input":7,"output":7}}}}}`}}
+	for model, want := range map[string]float64{"acme4-ft-31b": 5e-6, "acme5": 3e-6, "acme-turbo": 7e-6} {
+		if p, err := s.GetPricing(ctx, model, time.Time{}); err != nil || p.InputCostPerToken != want {
+			t.Errorf("%s: %+v %v, want %v", model, p, err, want)
+		}
+	}
+	if limit, ok := s.ContextLimit(ctx, "acme4-ft-31b"); !ok || limit != 2000 {
+		t.Errorf("context limit: %d %v, want 2000", limit, ok)
+	}
+}

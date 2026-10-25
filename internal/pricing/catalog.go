@@ -257,21 +257,9 @@ func (s *Service) refreshModels(ctx context.Context) {
 	}
 	s.modelsFailed = len(live) == 0
 	s.modelsRetryAt = time.Now().Add(time.Minute)
-	spellings := map[string][]string{}
-	for old := range s.models {
-		key := normalize(old)
-		spellings[key] = append(spellings[key], old)
-	}
-	for name, p := range live { // Replace an embedded spelling of the same logical model.
-		key := normalize(name)
-		for _, old := range spellings[key] {
-			delete(s.models, old)
-		}
-		spellings[key] = []string{name}
-		s.models[name] = p
-	}
+	s.live = live
+	s.liveIdx = nil
 	s.memo = map[string]lookupResult{}
-	s.idx = nil
 }
 
 // catalogKey reports whether parseModelsCatalog reads key from a provider
