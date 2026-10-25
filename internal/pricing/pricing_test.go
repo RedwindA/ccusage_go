@@ -397,6 +397,27 @@ func TestContextLimitComesFromEntriesThatPublishOne(t *testing.T) {
 	}
 }
 
+// Ported from the price halves of upstream's
+// configured_alias_of_an_exact_only_tier_beats_a_fuzzy_match_on_the_alias and
+// pricing_lookup_prefers_an_exact_alias_target_over_a_fuzzy_original_match:
+// an alias of an exact-only tier turns fuzzy matching off, and an exact hit
+// on the alias target beats a fuzzy hit on the recorded id, which would bill
+// the base claude-opus-5 rate.
+func TestAliasLookupPrefersTheExactAliasTarget(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"claude-opus-5-turbo":"claude-opus-5-fast"}`)
+	s := tableService(map[string]ModelPricing{"claude-opus-5": {InputCostPerToken: 1e-6, OutputCostPerToken: 2e-6}})
+	s.models = map[string]ModelPricing{"claude-opus-5": {InputCostPerToken: 3e-6, OutputCostPerToken: 4e-6}, "claude-opus-5-fast": {InputCostPerToken: 9e-6, OutputCostPerToken: 17e-6, ExactOnly: true}}
+	if p, err := s.GetPricing(ctx, "claude-opus-5-turbo", time.Time{}); err != nil || p.InputCostPerToken != 9e-6 || p.OutputCostPerToken != 17e-6 {
+		t.Errorf("alias of an exact-only tier: %+v %v", p, err)
+	}
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"claude-opus-5-turbo":"sentinel-exact-target"}`)
+	s = tableService(map[string]ModelPricing{"claude-opus-5": {InputCostPerToken: 1e-6, OutputCostPerToken: 2e-6}, "sentinel-exact-target": {InputCostPerToken: 9e-6, OutputCostPerToken: 17e-6}})
+	if p, err := s.GetPricing(ctx, "claude-opus-5-turbo", time.Time{}); err != nil || p.InputCostPerToken != 9e-6 || p.OutputCostPerToken != 17e-6 {
+		t.Errorf("exact alias target: %+v %v", p, err)
+	}
+}
+
 // Ported from the context_limit halves of upstream's pricing_lookup_resolves_model_aliases,
 // embedded_pricing_includes_gpt_5_5_for_offline_codex_reports,
 // full_override_creates_new_model, exact_override_wins_over_gpt_5_6_alias
