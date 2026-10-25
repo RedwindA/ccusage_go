@@ -81,7 +81,7 @@ $env:INSTALL_DIR = "$HOME\bin"
 ### 預編譯版本
 
 從 [GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) 下載。
-支援 Linux、macOS、Windows 的 amd64 與 arm64，附 `checksums.txt`。
+支援 Linux、macOS（12 Monterey 或更新版本）、Windows 的 amd64 與 arm64，附 `checksums.txt`。
 
 ### 從原始碼編譯
 
@@ -186,7 +186,7 @@ JSON 和 CSV 的資料格式維持不變。
 
 ## 技術堆疊
 
-- **程式語言**：Go 1.23+
+- **程式語言**：Go 1.25+
 - **CLI 框架**：[Cobra](https://github.com/spf13/cobra)
 - **TUI 框架**：[Bubble Tea](https://github.com/charmbracelet/bubbletea)
 - **表格渲染**：[tablewriter](https://github.com/olekukonko/tablewriter)
@@ -197,7 +197,7 @@ JSON 和 CSV 的資料格式維持不變。
 
 ### 先決條件
 
-- Go 1.23 或更高版本
+- Go 1.25 或更高版本
 - Make（選擇性，為了方便）
 
 ### 建置

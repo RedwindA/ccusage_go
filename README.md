@@ -84,8 +84,7 @@ Set `CCUSAGE_GO_NO_MODIFY_PATH=1` to leave PATH unchanged.
 
 ### Pre-built Binaries
 
-[GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) includes Linux,
-macOS, and Windows archives for amd64 and arm64, plus `checksums.txt`.
+[GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) includes Linux, macOS (12 Monterey or later), and Windows archives for amd64 and arm64, plus `checksums.txt`.
 
 ### From Source
 
@@ -242,7 +241,7 @@ stores grouped by username; this ignores custom source paths and named stores.
 
 ## Technical Stack
 
-- **Language**: Go 1.23+
+- **Language**: Go 1.25+
 - **CLI Framework**: [Cobra](https://github.com/spf13/cobra)
 - **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 - **Table Rendering**: [tablewriter](https://github.com/olekukonko/tablewriter)
@@ -257,7 +256,7 @@ See [RELEASING.md](docs/RELEASING.md) for the tag-based release process.
 
 ### Prerequisites
 
-- Go 1.23 or higher
+- Go 1.25 or higher
 - Make (optional, for convenience)
 
 ### Building
