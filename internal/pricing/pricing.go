@@ -178,11 +178,14 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 	if p.FastMultiplier == 0 {
 		p.FastMultiplier = 1
 	}
-	identity := normalize(resolved)
-	if !hasOverride && (identity == "deepseek-v4-flash" || identity == "deepseek-v4-pro") {
+	identity := deepseekV4Identity(model)
+	if identity == "" {
+		identity = deepseekV4Identity(resolved)
+	}
+	if !hasOverride && identity != "" {
 		override, hasOverride = s.overrides[identity]
 	}
-	if !at.IsZero() && (identity == "deepseek-v4-flash" || identity == "deepseek-v4-pro") {
+	if !at.IsZero() && identity != "" {
 		rates := []float64{.14, .28, .14, .0028}
 		if identity == "deepseek-v4-pro" {
 			rates = []float64{.435, .87, .435, .003625}
@@ -213,6 +216,16 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 		p = apply(p, override)
 	}
 	return p, nil
+}
+
+// deepseekV4Identity is upstream's deepseek_v4_model_identity: the direct
+// DeepSeek V4 id model spells, reading '.' and '@' as '-' but keeping case.
+func deepseekV4Identity(model string) string {
+	switch n := normalizer.Replace(model); n {
+	case "deepseek-v4-flash", "deepseek-v4-pro":
+		return n
+	}
+	return ""
 }
 func apply(p ModelPricing, o Override) ModelPricing {
 	if o.InputCostPerToken != nil {

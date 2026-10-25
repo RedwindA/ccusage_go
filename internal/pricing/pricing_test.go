@@ -85,6 +85,31 @@ func TestDeepSeekTimeSchedule(t *testing.T) {
 		}
 	}
 }
+
+// Ported from upstream's deepseek_v4_schedule_requires_exact_direct_model_names_*,
+// find_at_applies_deepseek_schedule_after_model_alias_resolution and
+// find_at_applies_deepseek_schedule_to_separator_spellings_of_direct_models:
+// the schedule covers the two direct ids in any separator spelling, but not
+// another letter case, and the recorded id before its alias.
+func TestDeepSeekScheduleNamesOnlyTheDirectIDs(t *testing.T) {
+	s := tableService(map[string]ModelPricing{"deepseek-v4-flash": {InputCostPerToken: .14e-6}, "deepseek-v4-pro": {InputCostPerToken: .435e-6}, "openrouter/deepseek-v4-flash": {InputCostPerToken: 9e-6}, "DeepSeek-V4-Flash": {InputCostPerToken: 5e-6}, "acme-x": {InputCostPerToken: 7e-6}})
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"deepseek-latest":"deepseek-v4-flash","deepseek-v4-pro":"acme-x"}`)
+	at, _ := time.Parse(time.RFC3339, "2026-08-17T01:00:00Z")
+	for model, want := range map[string]float64{
+		"deepseek-v4-flash":            .44e-6,
+		"deepseek.v4.flash":            .44e-6,
+		"deepseek@v4@flash":            .44e-6,
+		"deepseek-latest":              .44e-6,
+		"deepseek-v4-pro":              1.32e-6,
+		"openrouter/deepseek-v4-flash": 9e-6,
+		"openrouter/deepseek.v4.flash": 9e-6,
+		"DeepSeek-V4-Flash":            5e-6,
+	} {
+		if p, err := s.GetPricing(context.Background(), model, at); err != nil || math.Abs(p.InputCostPerToken-want) > 1e-15 {
+			t.Errorf("%s: %+v %v, want %v", model, p, err, want)
+		}
+	}
+}
 func TestSourceAliasesAndZcodeOverrides(t *testing.T) {
 	s := NewService()
 	s.SetOffline(true)
