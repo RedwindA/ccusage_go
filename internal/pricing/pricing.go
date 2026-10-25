@@ -133,20 +133,28 @@ func (s *Service) GetModelPrice(ctx context.Context, model string) (float64, flo
 	return p.InputCostPerToken, p.OutputCostPerToken, p.CacheCreationInputTokenCost, p.CacheReadInputTokenCost, p.WebSearchCostPerRequest, p.WebFetchCostPerRequest, err
 }
 func (s *Service) GetPricing(ctx context.Context, model string, at time.Time) (ModelPricing, error) {
+	return s.pricing(ctx, model, at, s.lookup)
+}
+
+// exactPricing is GetPricing for an id a fuzzy match would bill at another
+// model's rate, like upstream's Antigravity Flash tiers: model, and then its
+// CCUSAGE_MODEL_ALIASES target, only name an entry of their own (exactEntry).
+func (s *Service) exactPricing(ctx context.Context, model string, at time.Time) (ModelPricing, error) {
+	return s.pricing(ctx, model, at, func(model, resolved string) (ModelPricing, bool) {
+		p, ok := s.exactEntry(model)
+		if !ok && resolved != model {
+			p, ok = s.exactEntry(resolved)
+		}
+		return p, ok
+	})
+}
+
+func (s *Service) pricing(ctx context.Context, model string, at time.Time, lookup func(model, resolved string) (ModelPricing, bool)) (ModelPricing, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.offline && !s.attempted {
-		s.attempted = true
-		s.refresh(ctx)
-	}
 	resolved := ResolveModelName(model)
-	_, exactPrimary := s.primary[model]
-	_, aliasPrimary := s.primary[canonical(resolved)]
-	if !s.offline && (!s.modelsAttempted || (s.modelsFailed && time.Now().After(s.modelsRetryAt))) && !exactPrimary && !aliasPrimary {
-		s.modelsAttempted = true
-		s.refreshModels(ctx)
-	}
-	p, ok := s.lookup(model, resolved)
+	s.refreshFor(ctx, model, resolved)
+	p, ok := lookup(model, resolved)
 	override, hasOverride := s.overrides[model]
 	if !hasOverride {
 		override, hasOverride = s.overrides[resolved]
@@ -383,6 +391,26 @@ func (s *Service) requiresExact(model string) bool {
 	return hasKey(exactOnly, normalizer.Replace(model)) || hasKey(exactOnly, normalizer.Replace(canonical(model)))
 }
 
+// exactEntry looks model up like upstream's find_exact_with_fallback, in
+// LiteLLM and built-in rates before models.dev: the id as written, or the one
+// key its separator spelling names, case-sensitively. A spelling two keys
+// share names neither, so the next table answers. Callers hold s.mu.
+func (s *Service) exactEntry(model string) (ModelPricing, bool) {
+	n := normalizer.Replace(model)
+	for _, table := range []struct {
+		all map[string]ModelPricing
+		idx *priceIndex
+	}{{s.primary, s.primaryIndex()}, {s.models, s.index()}} {
+		if p, ok := table.all[model]; ok {
+			return p, true
+		}
+		if id := table.idx.byNorm[n]; id != "" {
+			return table.all[id], true
+		}
+	}
+	return ModelPricing{}, false
+}
+
 // find looks model up in one table like upstream's find_entry_or_alias: the
 // id, its built-in alias, the exact-only id a separator spelling names and,
 // when fuzzy is set, the longest key matching it.
@@ -516,7 +544,25 @@ func fetchLite(ctx context.Context, client *http.Client) map[string]ModelPricing
 	return live
 }
 
+// refreshFor fetches LiteLLM once, and models.dev unless LiteLLM or a
+// built-in rate names model or its alias exactly, again a minute after a
+// failed fetch; callers hold s.mu.
+func (s *Service) refreshFor(ctx context.Context, model, resolved string) {
+	s.refresh(ctx)
+	_, exactPrimary := s.primary[model]
+	_, aliasPrimary := s.primary[canonical(resolved)]
+	if !s.offline && (!s.modelsAttempted || (s.modelsFailed && time.Now().After(s.modelsRetryAt))) && !exactPrimary && !aliasPrimary {
+		s.modelsAttempted = true
+		s.refreshModels(ctx)
+	}
+}
+
+// refresh fetches LiteLLM on its first call unless offline.
 func (s *Service) refresh(ctx context.Context) {
+	if s.offline || s.attempted {
+		return
+	}
+	s.attempted = true
 	live, prefetched := s.prefetch.take(false)
 	if !prefetched {
 		live = fetchLite(ctx, s.client)

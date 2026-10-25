@@ -7,23 +7,25 @@ import (
 	"time"
 )
 
-func (s *Service) exactPricing(ctx context.Context, model string, at time.Time) (ModelPricing, error) {
-	p, err := s.GetPricing(ctx, model, at)
-	if err != nil {
-		return p, err
-	}
+// hasExactPricing reports whether model as written names an entry of its own
+// (exactEntry) or an override: upstream's find_exact_with_fallback, which
+// decides whether Hermes prices a provider-qualified id.
+func (s *Service) hasExactPricing(ctx context.Context, model string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.overrides[model]; ok {
-		return p, nil
-	}
-	for _, candidate := range []string{model, ResolveModelName(model)} {
-		n := normalizer.Replace(candidate)
-		if hasKey(s.primary, candidate) || hasKey(s.models, candidate) || s.primaryIndex().byNorm[n] != "" || s.index().byNorm[n] != "" {
-			return p, nil
-		}
-	}
-	return ModelPricing{}, fmt.Errorf("no exact pricing for %q", model)
+	s.refreshFor(ctx, model, model)
+	_, ok := s.exactEntry(model)
+	return ok || hasKey(s.overrides, model)
+}
+
+// hasPrimaryPricing reports whether LiteLLM, a built-in rate or an override
+// prices model as written: upstream's find_exact, which decides whether Kilo
+// prices a provider-qualified id.
+func (s *Service) hasPrimaryPricing(ctx context.Context, model string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refresh(ctx)
+	return hasKey(s.primary, model) || hasKey(s.overrides, model)
 }
 
 // GetSourcePricing keeps source-specific naming and vendor billing policy out of
@@ -48,11 +50,14 @@ func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, pro
 	candidates := []string{model}
 	exactOnly := false
 	switch agent {
-	case "hermes", "kilo":
-		if providerName != "" && providerName != "hermes" {
-			if p, err := s.exactPricing(ctx, providerName+"/"+model, at); err == nil {
-				return p, nil
-			}
+	case "hermes":
+		if id := providerName + "/" + model; providerName != "" && providerName != "hermes" && s.hasExactPricing(ctx, id) {
+			candidates = []string{id, model}
+		}
+	case "kilo":
+		providerName = strings.ReplaceAll(providerName, "-", "_")
+		if id := providerName + "/" + model; providerName != "" && providerName != "unknown" && providerName != "kilo" && s.hasPrimaryPricing(ctx, id) {
+			candidates = []string{id, model}
 		}
 	case "kimi":
 		candidates = []string{"moonshot/" + model, "kimi/" + model, model}

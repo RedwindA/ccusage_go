@@ -165,3 +165,73 @@ func TestModelsDevPricesOnlyWhatLiteLLMMisses(t *testing.T) {
 		t.Errorf("moonshotai/Kimi-K2.6 matched with case folded: %+v %v", kimi, err)
 	}
 }
+
+// Ported from upstream's exact_fallback_lookup_rejects_a_spelling_shared_by_two_entries
+// and find_exact_pricing_with_alias: an exact lookup prices the entry an id,
+// or else its alias, names, and never a fuzzy match.
+func TestExactPricingNamesOnlyAnEntryOfItsOwn(t *testing.T) {
+	ctx := context.Background()
+	s := tableService(map[string]ModelPricing{"acme-alpha-1.5": {InputCostPerToken: 1}, "acme.alpha@1.5": {InputCostPerToken: 2}, "acme-beta-2": {InputCostPerToken: 3}, "acme-beta-2-turbo": {InputCostPerToken: 4}, "acme-zeta-2.5": {InputCostPerToken: 5}, "acme.zeta@2.5": {InputCostPerToken: 6}})
+	s.models = map[string]ModelPricing{"acme.alpha.1.5": {InputCostPerToken: 7}, "acme-gamma": {InputCostPerToken: 8}, "acme-delta": {InputCostPerToken: 9}}
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"acme-tier-high":"acme.beta.2","acme-gamma":"acme-delta"}`)
+	for model, want := range map[string]float64{
+		"acme-alpha-1-5": 7, // two LiteLLM keys share the spelling, so models.dev answers
+		"acme-zeta-2-5":  0, // and with no models.dev entry nothing does
+		"acme-beta.2":    3, // not the longer acme-beta-2-turbo a fuzzy match picks
+		"acme-tier-high": 3,
+		"acme-gamma":     8, // the id's own entry before its alias
+		"Acme-Gamma":     0,
+	} {
+		p, err := s.exactPricing(ctx, model, time.Time{})
+		if want == 0 && err == nil || want != 0 && (err != nil || p.InputCostPerToken != want) {
+			t.Errorf("%s: %+v %v, want %v", model, p, err, want)
+		}
+	}
+}
+
+// Antigravity's Flash effort tiers keep models.dev's own gemini-3.6-flash
+// entry when an alias spells it with dashes or another case, as upstream does.
+func TestAntigravityFlashTierAliasesPriceExactly(t *testing.T) {
+	ctx := context.Background()
+	s := NewService()
+	s.SetOffline(true)
+	want := s.models["gemini-3.6-flash"]
+	for _, aliases := range []string{`{"gemini-3.6-flash-high":"gemini-3-6-flash"}`, `{"gemini-3.6-flash":"Gemini-3.6-Flash"}`} {
+		t.Setenv("CCUSAGE_MODEL_ALIASES", aliases)
+		p, err := s.GetSourcePricing(ctx, "gemini-3.6-flash-high", "antigravity", 3.0, time.Time{})
+		if err != nil || p.InputCostPerToken != want.InputCostPerToken || p.CacheCreationInputTokenCost != want.CacheCreationInputTokenCost {
+			t.Errorf("%s: %+v %v, want %+v", aliases, p, err, want)
+		}
+	}
+}
+
+// Ported from upstream's Kilo uses_raw_model_for_timestamped_pricing_when_provider_match_is_not_exact
+// and uses_exact_provider_qualified_pricing_when_available: Kilo prices a
+// provider-qualified id only when LiteLLM spells it exactly, and Hermes only
+// when the id itself, not its alias, has an entry.
+func TestProviderQualifiedIDsNeedTheirOwnEntry(t *testing.T) {
+	ctx := context.Background()
+	at, _ := time.Parse(time.RFC3339, "2026-08-17T01:00:00Z")
+	s := NewService()
+	s.SetOffline(true)
+	if p, err := s.GetSourcePricing(ctx, "deepseek-v4-flash", "kilo", "deepseek", at); err != nil || math.Abs(p.InputCostPerToken-.44e-6) > 1e-15 {
+		t.Errorf("Kilo took models.dev's deepseek/deepseek-v4-flash: %+v %v", p, err)
+	}
+	s = tableService(map[string]ModelPricing{"deepseek-v4-flash": {InputCostPerToken: 1}, "deepseek/deepseek-v4-flash": {InputCostPerToken: 2}, "vertex_ai/claude-x": {InputCostPerToken: 3}, "claude-x": {InputCostPerToken: 4}, "unknown/claude-x": {InputCostPerToken: 5}, "gpt-x": {InputCostPerToken: 6}})
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"acme/private":"gpt-x"}`)
+	for _, tc := range []struct {
+		model, agent, provider string
+		want                   float64
+	}{
+		{"deepseek-v4-flash", "kilo", "deepseek", 2},
+		{"claude-x", "kilo", "vertex-ai", 3},
+		{"claude-x", "kilo", "unknown", 4},
+		{"deepseek.v4.flash", "hermes", "deepseek", 2},
+		{"private", "hermes", "acme", 0},
+	} {
+		p, err := s.GetSourcePricing(ctx, tc.model, tc.agent, tc.provider, time.Time{})
+		if tc.want == 0 && err == nil || tc.want != 0 && (err != nil || p.InputCostPerToken != tc.want) {
+			t.Errorf("%s %s/%s: %+v %v, want %v", tc.agent, tc.provider, tc.model, p, err, tc.want)
+		}
+	}
+}
