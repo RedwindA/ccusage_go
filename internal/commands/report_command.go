@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -196,7 +197,10 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		}
 	}
 	prefetch := startPricing(cmd, scopes.offline())
-	entries, err := loadReportEntries(cmd, agent, scopes, cfg)
+	// Unified sessions are dated by their latest activity and totaled whole,
+	// so they read usage from before --since.
+	bounded := agent != "" || !slices.Contains(kinds, "session")
+	entries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded)
 	if err != nil {
 		return err
 	}
@@ -219,15 +223,8 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			return err
 		}
 	}
-	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: unified.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows()}
+	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: unified.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows(), DetectedAgents: detected}
 	configureTableOutput(cmd, f, &o)
-	detected := map[string]bool{}
-	for _, entry := range entries {
-		if entry.Agent != "" && !detected[entry.Agent] {
-			detected[entry.Agent] = true
-			o.DetectedAgents = append(o.DetectedAgents, entry.Agent)
-		}
-	}
 	if agent == "codex" && kind == "session" && (f.sessionID != "" || explicitReportOption(cmd, "id")) {
 		row, err := resolveCodexSession(entries, o, f.sessionID)
 		if err != nil {

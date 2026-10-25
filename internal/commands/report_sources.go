@@ -31,16 +31,20 @@ type sourceJob struct {
 	paths             []string
 }
 
-func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config) ([]types.UsageEntry, error) {
+// loadReportEntries loads every source the report reads. A bounded report
+// drops usage dated before each source's --since, which lets Claude skip the
+// sessions last written before it. detected names the agents with usage,
+// including Claude usage that only skipped files hold.
+func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config, bounded bool) ([]types.UsageEntry, []string, error) {
 	f := scopes[""].f
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if f.dataPath != "" && !f.allUsers {
 		for _, path := range splitPaths(f.dataPath, home) {
 			if _, err := os.Stat(path); err != nil {
-				return nil, fmt.Errorf("--data-path: %w", err)
+				return nil, nil, fmt.Errorf("--data-path: %w", err)
 			}
 		}
 	}
@@ -51,14 +55,14 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	var jobs []sourceJob
 	if f.allUsers {
 		if agent != "" {
-			return nil, fmt.Errorf("--all-users requires a unified report")
+			return nil, nil, fmt.Errorf("--all-users requires a unified report")
 		}
 		if runtime.GOOS != "linux" || os.Geteuid() != 0 {
-			return nil, fmt.Errorf("--all-users requires Linux root")
+			return nil, nil, fmt.Errorf("--all-users requires Linux root")
 		}
 		users, err := systemUsers()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --all-users ignores source path environment variables, explicit paths and pi.stores")
 		for _, u := range users {
@@ -98,7 +102,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 				for _, p := range paths {
 					for _, q := range occupied {
 						if pathsOverlap(p, q) {
-							return nil, fmt.Errorf("pi store %q overlaps another pi store: %s", store.Name, p)
+							return nil, nil, fmt.Errorf("pi store %q overlaps another pi store: %s", store.Name, p)
 						}
 					}
 					occupied = append(occupied, p)
@@ -108,8 +112,9 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		}
 	}
 	type result struct {
-		entries []types.UsageEntry
-		err     error
+		entries  []types.UsageEntry
+		detected bool
+		err      error
 	}
 	results := make([]result, len(jobs))
 	var wg sync.WaitGroup
@@ -126,6 +131,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			scope = scopes.of(job.name)
 		}
 		var entries []types.UsageEntry
+		var detected bool
 		var err error
 		if job.name == "copilot" && scope.until != "" {
 			bound, e := time.ParseInLocation("2006-01-02", scope.until, scope.loc)
@@ -136,6 +142,12 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			}
 		} else if job.name == "pi" {
 			entries, err = sourcesa.LoadWithMode(ctx, job.name, job.paths, scope.loc, scope.f.mode)
+		} else if job.name == "claude" {
+			var since time.Time
+			if bounded && scope.since != "" {
+				since, _ = time.ParseInLocation("2006-01-02", scope.since, scope.loc)
+			}
+			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.f.debug, f.singleThread)
 		} else {
 			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
 		}
@@ -160,7 +172,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 				entries[j].Raw["system_user"] = job.user
 			}
 		}
-		results[i] = result{entries, err}
+		results[i] = result{entries, detected, err}
 	}
 	for i := range jobs {
 		wg.Add(1)
@@ -172,19 +184,33 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	}
 	wg.Wait()
 	var all []types.UsageEntry
+	var detected []string
+	seen := map[string]bool{}
+	detect := func(agent string) {
+		if agent != "" && !seen[agent] {
+			seen[agent] = true
+			detected = append(detected, agent)
+		}
+	}
 	for i, res := range results {
 		if res.err != nil {
 			if errors.Is(res.err, context.Canceled) {
-				return nil, res.err
+				return nil, nil, res.err
 			}
 			if agent != "" {
-				return nil, res.err
+				return nil, nil, res.err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s %s: %v\n", jobs[i].user, jobs[i].name, res.err)
 		}
 		all = append(all, res.entries...)
+		for _, entry := range res.entries {
+			detect(entry.Agent)
+		}
+		if res.detected {
+			detect(jobs[i].name)
+		}
 	}
-	return all, cmd.Context().Err()
+	return all, detected, cmd.Context().Err()
 }
 
 func sourcePaths(name, home string, env bool) []string {
@@ -216,48 +242,8 @@ func sourcePaths(name, home string, env bool) []string {
 
 func loadSource(ctx context.Context, name string, paths []string, loc *time.Location, debug, singleThread bool) ([]types.UsageEntry, error) {
 	if name == "claude" {
-		l := loader.New()
-		l.SetTimezone(loc)
-		l.SetDebug(debug)
-		if !singleThread {
-			l.SetMaxWorkers(runtime.GOMAXPROCS(0))
-		}
-		// A single load across every root deduplicates repeated request/message IDs.
-		files := []string{}
-		seen := map[string]bool{}
-		for _, root := range paths {
-			root = filepath.Clean(root)
-			if info, err := os.Stat(filepath.Join(root, "projects")); err == nil && info.IsDir() {
-				root = filepath.Join(root, "projects")
-			}
-			if _, err := os.Stat(root); os.IsNotExist(err) {
-				continue
-			}
-			err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
-					abs, _ := filepath.Abs(path)
-					if !seen[abs] {
-						files = append(files, abs)
-						seen[abs] = true
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-		}
-		sort.Strings(files)
-		if len(files) == 0 {
-			return []types.UsageEntry{}, nil
-		}
-		return l.LoadParallel(ctx, files)
+		entries, _, err := loadClaude(ctx, paths, loc, time.Time{}, debug, singleThread)
+		return entries, err
 	}
 	for _, n := range sourcesa.Names() {
 		if n == name {
@@ -293,4 +279,81 @@ func pathsOverlap(a, b string) bool {
 	}
 	a, b = canonical(a), canonical(b)
 	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator))
+}
+
+// loadClaude loads Claude usage from paths in a single load across every
+// root, which deduplicates repeated request/message IDs. A nonzero since
+// skips the sessions loader.SplitFilesBeforeSince rules out, so entries dated
+// before since may be missing and callers must discard them. detected
+// reports whether any file, read or skipped, holds usage, as an unbounded
+// load would see it.
+func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, debug, singleThread bool) (entries []types.UsageEntry, detected bool, err error) {
+	files, err := claudeFiles(ctx, paths)
+	if err != nil {
+		return nil, false, err
+	}
+	kept, pruned := loader.SplitFilesBeforeSince(files, since, time.Now())
+	if debug && len(pruned) > 0 {
+		fmt.Fprintf(os.Stderr, "Debug: Skipped %d of %d JSONL files from sessions last written over a day before %s\n", len(pruned), len(files), since.Format("2006-01-02"))
+	}
+	l := loader.New()
+	l.SetTimezone(loc)
+	l.SetDebug(debug)
+	if !singleThread {
+		l.SetMaxWorkers(runtime.GOMAXPROCS(0))
+	}
+	entries = []types.UsageEntry{}
+	if len(kept) > 0 {
+		if entries, err = l.LoadParallel(ctx, kept); err != nil {
+			return nil, false, err
+		}
+	}
+	detected = len(entries) > 0
+	// Skipped sessions still hold usage; the first file with an entry
+	// settles it.
+	for _, file := range pruned {
+		if detected {
+			break
+		}
+		found, _ := l.LoadParallel(ctx, []string{file})
+		detected = len(found) > 0
+	}
+	return entries, detected, nil
+}
+
+// claudeFiles lists the JSONL transcripts under paths, sorted, reading each
+// root's projects directory when it has one.
+func claudeFiles(ctx context.Context, paths []string) ([]string, error) {
+	files := []string{}
+	seen := map[string]bool{}
+	for _, root := range paths {
+		root = filepath.Clean(root)
+		if info, err := os.Stat(filepath.Join(root, "projects")); err == nil && info.IsDir() {
+			root = filepath.Join(root, "projects")
+		}
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+				abs, _ := filepath.Abs(path)
+				if !seen[abs] {
+					files = append(files, abs)
+					seen[abs] = true
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }

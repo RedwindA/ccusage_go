@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -165,15 +166,25 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 	offline := f.offline && !f.noOffline
 	prefetch := startPricing(cmd, offline)
 	home, _ := os.UserHomeDir()
-	entries, loadErr := loadSource(cmd.Context(), "claude", sourcePaths("claude", home, true), loc, f.debug, false)
+	paths := sourcePaths("claude", home, true)
 	service := newPricingService(offline, prefetch)
 	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
 	calc := calculator.New(service)
+	var entries []types.UsageEntry
+	var block *types.SessionBlock
+	var loadErr error
+	if statuslineShowsUsageCost(hook, f) {
+		// A session can run over any span of history.
+		entries, loadErr = loadSource(cmd.Context(), "claude", paths, loc, f.debug, false)
+		entries, _ = calc.CalculateCosts(cmd.Context(), entries)
+		block = activeStatuslineBlock(calc, entries)
+	} else {
+		entries, block, loadErr = loadStatuslineUsage(cmd.Context(), paths, loc, now, f.debug, calc)
+	}
 	if loadErr != nil && f.debug {
 		fmt.Fprintf(cmd.ErrOrStderr(), "statusline: %v\n", loadErr)
 	}
-	entries, _ = calc.CalculateCosts(cmd.Context(), entries)
-	output := renderStatusline(hook, f, aliases, entries, loadErr == nil, loc, now, calc, service)
+	output := renderStatusline(hook, f, aliases, entries, block, loadErr == nil, loc, now, service)
 	fmt.Fprintln(cmd.OutOrStdout(), output)
 	if useCache {
 		writeStatuslineCache(cachePath, statuslineCache{Output: output, Updated: now, Mtime: mtime, Size: size})
@@ -230,7 +241,129 @@ func writeStatuslineCache(path string, c statuslineCache) {
 		_ = os.Rename(name, path)
 	}
 }
-func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]string, entries []types.UsageEntry, loaded bool, loc *time.Location, now time.Time, calc *calculator.Calculator, service *pricing.Service) string {
+
+// statuslineShowsUsageCost reports whether the statusline shows the session
+// cost ccusage totals itself rather than only the hook's.
+func statuslineShowsUsageCost(h statuslineHook, f *statuslineFlags) bool {
+	return f.costSource == "ccusage" || f.costSource == "both" || f.costSource == "auto" && h.Cost == nil
+}
+
+// statuslineBlockLookbackDays are the days behind the session window that
+// each bounded statusline load reaches back, tried in turn before the
+// active block falls back to the full history.
+var statuslineBlockLookbackDays = []int{1, 7, 30}
+
+const statuslineSessionLength = 5 * time.Hour
+
+// loadStatuslineUsage loads every Claude entry dated today and finds the
+// active billing block, reading only recently written files when the
+// history allows it.
+//
+// Block boundaries chain from earlier entries until usage pauses for longer
+// than a session, so a bounded load only reproduces the unbounded blocks
+// once it reaches back past such a pause. Each window is widened until it
+// does, and the full history is read as a last resort.
+func loadStatuslineUsage(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) ([]types.UsageEntry, *types.SessionBlock, error) {
+	for _, days := range statuslineBlockLookbackDays {
+		since := statuslineBlockSince(now, loc, days)
+		bound, _ := time.ParseInLocation("2006-01-02", since, loc)
+		loaded, _, err := loadClaude(ctx, paths, loc, bound, debug, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Entries dated before the window may miss skipped sessions; only
+		// the ones inside it are complete. Loads return entries in time
+		// order.
+		var entries []types.UsageEntry
+		for _, e := range loaded {
+			if e.Timestamp.In(loc).Format("2006-01-02") >= since {
+				entries = append(entries, e)
+			}
+		}
+		timestamps := make([]time.Time, len(entries))
+		for i, e := range entries {
+			timestamps[i] = e.Timestamp
+		}
+		anchor, start := statuslineBlockAnchor(timestamps, now, statuslineSessionLength)
+		if anchor == needsMoreHistory {
+			continue
+		}
+		if anchor == needsFullHistory {
+			break
+		}
+		entries, _ = calc.CalculateCosts(ctx, entries)
+		if anchor == noActiveBlock {
+			return entries, nil, nil
+		}
+		first := sort.Search(len(entries), func(i int) bool { return !entries[i].Timestamp.Before(start) })
+		return entries, activeStatuslineBlock(calc, entries[first:]), nil
+	}
+	entries, err := loadSource(ctx, "claude", paths, loc, debug, false)
+	entries, _ = calc.CalculateCosts(ctx, entries)
+	return entries, activeStatuslineBlock(calc, entries), err
+}
+
+func activeStatuslineBlock(calc *calculator.Calculator, entries []types.UsageEntry) *types.SessionBlock {
+	for _, block := range calc.IdentifySessionBlocksDuration(entries, statuslineSessionLength) {
+		if block.IsActive && !block.IsGap {
+			return &block
+		}
+	}
+	return nil
+}
+
+type blockAnchor int
+
+const (
+	// noActiveBlock: no entry falls inside the last session window, so no
+	// block is active.
+	noActiveBlock blockAnchor = iota
+	// anchoredBlock: blocks from the returned entry onward match an
+	// unbounded load.
+	anchoredBlock
+	// needsMoreHistory: the window holds no pause long enough to anchor
+	// block boundaries.
+	needsMoreHistory
+	// needsFullHistory: future-dated entries can form blocks after the
+	// current one, so only the unbounded selection is safe.
+	needsFullHistory
+)
+
+// statuslineBlockAnchor decides whether the sorted timestamps of every entry
+// dated inside a window pin down the active block, and for anchoredBlock
+// returns where block boundaries become independent of older history.
+func statuslineBlockAnchor(timestamps []time.Time, now time.Time, session time.Duration) (blockAnchor, time.Time) {
+	// The window reaches further back than one session, so without an entry
+	// in the last session window no block can be active, whatever lies
+	// before it.
+	if len(timestamps) == 0 {
+		return noActiveBlock, time.Time{}
+	}
+	last := timestamps[len(timestamps)-1]
+	if last.After(now) {
+		return needsFullHistory, time.Time{}
+	}
+	if now.Sub(last) >= session {
+		return noActiveBlock, time.Time{}
+	}
+	// A pause longer than a session starts a fresh block at the next entry,
+	// the same rule IdentifySessionBlocks applies.
+	for i := len(timestamps) - 1; i > 0; i-- {
+		if timestamps[i].Sub(timestamps[i-1]) > session {
+			return anchoredBlock, timestamps[i]
+		}
+	}
+	return needsMoreHistory, time.Time{}
+}
+
+// statuslineBlockSince is the first date, in loc, of a statusline load that
+// reaches lookbackDays behind the session window. The load stays open-ended
+// because an active block ends in the future.
+func statuslineBlockSince(now time.Time, loc *time.Location, lookbackDays int) string {
+	return now.Add(-statuslineSessionLength - time.Duration(lookbackDays)*24*time.Hour).In(loc).Format("2006-01-02")
+}
+
+func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]string, entries []types.UsageEntry, block *types.SessionBlock, loaded bool, loc *time.Location, now time.Time, service *pricing.Service) string {
 	local, today := 0.0, 0.0
 	for _, e := range entries {
 		if e.SessionID == h.SessionID {
@@ -259,16 +392,13 @@ func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]s
 		}
 	}
 	blockInfo, burnInfo := "No active block", ""
-	for _, block := range calc.IdentifySessionBlocks(entries, 5) {
-		if !block.IsActive || block.IsGap {
-			continue
-		}
+	if block != nil {
 		remaining := int(block.EndTime.Sub(now).Minutes())
 		if remaining < 0 {
 			remaining = 0
 		}
 		blockInfo = fmt.Sprintf("$%.2f block (%dh %dm remaining)", block.CostUSD, remaining/60, remaining%60)
-		if rate := calculator.CalculateBurnRate(block); rate != nil {
+		if rate := calculator.CalculateBurnRate(*block); rate != nil {
 			burnInfo = fmt.Sprintf(" | 🔥 $%.2f/hr", rate.CostPerHour)
 			emoji, label := "🟢", "Normal"
 			if rate.TokensPerMinuteForIndicator >= 5000 {
@@ -283,7 +413,6 @@ func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]s
 				burnInfo += " (" + label + ")"
 			}
 		}
-		break
 	}
 	contextInfo := "N/A"
 	input, limit, hasContext := 0, 0, false
