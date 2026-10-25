@@ -50,13 +50,6 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if f.dataPath != "" && !f.allUsers {
-		for _, path := range splitPaths(f.dataPath, home) {
-			if _, err := os.Stat(path); err != nil {
-				return nil, nil, nil, fmt.Errorf("--data-path: %w", err)
-			}
-		}
-	}
 	names := SourceNames()
 	if agent != "" {
 		names = []string{agent}
@@ -84,8 +77,15 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		for _, name := range names {
 			scope := scopes.of(name)
 			paths, err := sourcePaths(name, home, true)
-			if f.dataPath != "" && (agent != "" || name == "claude") {
-				paths, err = splitPaths(f.dataPath, home), nil
+			// --data-path names the focused source's directories, or
+			// Claude's in a unified report.
+			if scope.f.dataPath != "" && (agent != "" || name == "claude") {
+				paths, err = splitPaths(scope.f.dataPath, home), nil
+				for _, path := range paths {
+					if _, err = os.Stat(path); err != nil {
+						return nil, nil, nil, fmt.Errorf("--data-path: %w", err)
+					}
+				}
 			}
 			if err != nil {
 				return nil, nil, nil, err

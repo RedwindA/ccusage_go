@@ -288,13 +288,17 @@ func TestUnifiedSourcesKeepTheirOwnPricing(t *testing.T) {
 	}
 }
 
+// Each source section's path reaches that source in unified reports, as
+// upstream's piPath and openClawPath do, Claude's dataPath included; the
+// unified dataPath it replaces is not read.
 func TestUnifiedSourcesReadTheirConfiguredPaths(t *testing.T) {
-	home, cfg := sourceConfigFixture(t, `{"defaults": {"timezone": "UTC"}, "pi": {"defaults": {"piPath": "$HOME/custom-pi"}}, "openclaw": {"commands": {"daily": {"openClawPath": "$HOME/custom-openclaw"}}}}`)
+	home, cfg := sourceConfigFixture(t, `{"defaults": {"timezone": "UTC", "dataPath": "$HOME/absent"}, "claude": {"defaults": {"dataPath": "$HOME/custom-claude"}}, "pi": {"defaults": {"piPath": "$HOME/custom-pi"}}, "openclaw": {"commands": {"daily": {"openClawPath": "$HOME/custom-openclaw"}}}}`)
+	sourceCLIWrite(t, filepath.Join(home, "custom-claude/projects/project-c/session-c.jsonl"), `{"timestamp":"2026-01-05T12:00:00Z","sessionId":"session-c","costUSD":0.07,"message":{"id":"c1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":77,"output_tokens":5}}}`)
 	sourceCLIWrite(t, filepath.Join(home, "pi/project-a/agent_default.jsonl"), sourcePiMessage("2026-01-05T12:00:00Z", 7, 3))
 	sourceCLIWrite(t, filepath.Join(home, "custom-pi/project-a/agent_custom.jsonl"), sourcePiMessage("2026-01-05T12:00:00Z", 30, 40))
 	sourceCLIWrite(t, filepath.Join(home, "custom-openclaw/agents/main/sessions/custom.jsonl"), `{"type":"message","message":{"role":"assistant","model":"gpt-5.2","usage":{"input":1660,"output":55,"totalTokens":1715,"cost":{"total":0.02}},"timestamp":1767614400000}}`)
 	p := sourceCLIJSON(t, "daily", "--json", "--offline", "--by-agent", "--config", cfg)
-	assertSourceRows(t, "paths", sourceRows(p, "daily"), map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}, "2026-01-05 pi": {30, 0}, "2026-01-05 openclaw": {1660, 0.02}})
+	assertSourceRows(t, "paths", sourceRows(p, "daily"), map[string][2]float64{"2026-01-05 claude": {77, 0.07}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}, "2026-01-05 pi": {30, 0}, "2026-01-05 openclaw": {1660, 0.02}})
 }
 
 func TestNamedPiStoreOverlappingTheSourcePiPathRejected(t *testing.T) {
