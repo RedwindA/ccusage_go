@@ -141,9 +141,11 @@ func TestDateBoundedReportsSkipFilesLastWrittenBeforeTheWindow(t *testing.T) {
 		t.Errorf("unbounded claude daily: totalCost = %v, want 3", got)
 	}
 
-	// The statusline reads recent files only, unless it totals the session
-	// cost itself.
+	// The statusline totals the session over the whole history, but reads
+	// only recent files for today and the active block, whatever the cost
+	// source.
 	now := time.Now()
+	zone := pruneNoonZone(t, now)
 	at := func(hoursAgo int) string {
 		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format(time.RFC3339Nano)
 	}
@@ -153,10 +155,62 @@ func TestDateBoundedReportsSkipFilesLastWrittenBeforeTheWindow(t *testing.T) {
 		pruneUsageLine(at(1), "session-now", "msg-now", "req-now", 1))
 	misdated = pruneWrite(t, status, "projects/project-a/misdated.jsonl", pruneUsageLine(at(2), "misdated", "msg-misdated", "req-misdated", 2))
 	pruneTouch(t, misdated, now.AddDate(0, 0, -40))
-	hook := fmt.Sprintf(`{"session_id":"session-now","transcript_path":%q,"model":{"display_name":"Model"},"cost":{"total_cost_usd":0},"context_window":{"total_input_tokens":1,"context_window_size":100}}`, transcript)
-	for source, want := range map[string]string{"cc": "$1.00 block", "ccusage": "$3.00 block"} {
-		if output := pruneRun(t, hook, "statusline", "--offline", "--no-cache", "--cost-source", source, "--timezone", "UTC"); !strings.Contains(output, want) {
-			t.Errorf("statusline --cost-source %s: %s, want %s", source, output, want)
+	hook, noCost := pruneStatuslineHook(transcript, true), pruneStatuslineHook(transcript, false)
+	for _, tc := range []struct{ source, hook, want string }{
+		{"cc", hook, "💰 $0.00 session / $1.00 today / $1.00 block"},
+		{"auto", hook, "💰 $0.00 session / $1.00 today / $1.00 block"},
+		{"ccusage", hook, "💰 $5.00 session / $1.00 today / $1.00 block"},
+		{"both", hook, "💰 ($0.00 cc / $5.00 ccusage) session / $1.00 today / $1.00 block"},
+		{"auto", noCost, "💰 $5.00 session / $1.00 today / $1.00 block"},
+	} {
+		if output := pruneRun(t, tc.hook, "statusline", "--offline", "--no-cache", "--cost-source", tc.source, "--timezone", zone); !strings.Contains(output, tc.want) {
+			t.Errorf("statusline --cost-source %s: %s, want %s", tc.source, output, tc.want)
+		}
+	}
+}
+
+// pruneNoonZone names a fixed-offset zone where now falls around noon, so
+// entries a few hours old are dated today and those 20 hours old yesterday.
+func pruneNoonZone(t *testing.T, now time.Time) string {
+	t.Helper()
+	zone := fmt.Sprintf("Etc/GMT%+d", now.UTC().Hour()-12)
+	if _, err := time.LoadLocation(zone); err != nil {
+		t.Skip(err)
+	}
+	return zone
+}
+
+// pruneStatuslineHook is a statusline hook for session-now; withCost adds a
+// hook cost of zero.
+func pruneStatuslineHook(transcript string, withCost bool) string {
+	cost := ""
+	if withCost {
+		cost = `"cost":{"total_cost_usd":0},`
+	}
+	return fmt.Sprintf(`{"session_id":"session-now","transcript_path":%q,"model":{"display_name":"Model"},%s"context_window":{"total_input_tokens":1,"context_window_size":100}}`, transcript, cost)
+}
+
+// Today's cost reads the files a load bounded to today keeps, so a file last
+// written over a day before today counts toward the block, whose window
+// reaches back further, but not toward today.
+func TestStatuslineTodaySkipsFilesLastWrittenADayBeforeToday(t *testing.T) {
+	root := pruneFixture(t)
+	now := time.Now()
+	zone := pruneNoonZone(t, now)
+	loc, _ := time.LoadLocation(zone)
+	at := func(hoursAgo int) string {
+		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format(time.RFC3339Nano)
+	}
+	transcript := pruneWrite(t, root, "projects/project-a/session-now.jsonl",
+		pruneUsageLine(at(20), "session-now", "msg-earlier", "req-earlier", 4),
+		pruneUsageLine(at(1), "session-now", "msg-now", "req-now", 1))
+	edge := pruneWrite(t, root, "projects/project-a/edge.jsonl", pruneUsageLine(at(2), "edge", "msg-edge", "req-edge", 2))
+	y, m, d := now.In(loc).Date()
+	pruneTouch(t, edge, time.Date(y, m, d, 0, 0, 0, 0, loc).Add(-30*time.Hour))
+	hook := pruneStatuslineHook(transcript, true)
+	for _, source := range []string{"cc", "auto", "ccusage", "both"} {
+		if output := pruneRun(t, hook, "statusline", "--offline", "--no-cache", "--cost-source", source, "--timezone", zone); !strings.Contains(output, "$1.00 today / $3.00 block") {
+			t.Errorf("statusline --cost-source %s: %s, want $1.00 today / $3.00 block", source, output)
 		}
 	}
 }

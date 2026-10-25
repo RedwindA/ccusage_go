@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -171,20 +172,18 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
 	calc := calculator.New(service)
 	var entries []types.UsageEntry
-	var block *types.SessionBlock
 	var loadErr error
 	if statuslineShowsUsageCost(hook, f) {
 		// A session can run over any span of history.
 		entries, loadErr = loadSource(cmd.Context(), "claude", paths, loc, f.debug, false)
 		entries, _ = calc.CalculateCosts(cmd.Context(), entries)
-		block = activeStatuslineBlock(calc, entries)
-	} else {
-		entries, block, loadErr = loadStatuslineUsage(cmd.Context(), paths, loc, now, f.debug, calc)
 	}
-	if loadErr != nil && f.debug {
-		fmt.Fprintf(cmd.ErrOrStderr(), "statusline: %v\n", loadErr)
+	today, todayErr := statuslineTodayCost(cmd.Context(), paths, loc, now, f.debug, calc)
+	block, blockErr := loadStatuslineBlock(cmd.Context(), paths, loc, now, f.debug, calc)
+	if err := errors.Join(loadErr, todayErr, blockErr); err != nil && f.debug {
+		fmt.Fprintf(cmd.ErrOrStderr(), "statusline: %v\n", err)
 	}
-	output := renderStatusline(hook, f, aliases, entries, block, loadErr == nil, loc, now, service)
+	output := renderStatusline(hook, f, aliases, entries, loadErr == nil, today, block, now, service)
 	fmt.Fprintln(cmd.OutOrStdout(), output)
 	if useCache {
 		writeStatuslineCache(cachePath, statuslineCache{Output: output, Updated: now, Mtime: mtime, Size: size})
@@ -255,21 +254,43 @@ var statuslineBlockLookbackDays = []int{1, 7, 30}
 
 const statuslineSessionLength = 5 * time.Hour
 
-// loadStatuslineUsage loads every Claude entry dated today and finds the
-// active billing block, reading only recently written files when the
-// history allows it.
+// statuslineTodayCost totals the Claude usage dated today, skipping the
+// sessions last written over a day before it.
+func statuslineTodayCost(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) (float64, error) {
+	today := now.In(loc).Format("2006-01-02")
+	bound, _ := time.ParseInLocation("2006-01-02", today, loc)
+	loaded, _, err := loadClaude(ctx, paths, loc, bound, debug, false)
+	if err != nil {
+		return 0, err
+	}
+	var entries []types.UsageEntry
+	for _, e := range loaded {
+		if e.Timestamp.In(loc).Format("2006-01-02") == today {
+			entries = append(entries, e)
+		}
+	}
+	entries, _ = calc.CalculateCosts(ctx, entries)
+	cost := 0.0
+	for _, e := range entries {
+		cost += e.Cost
+	}
+	return cost, nil
+}
+
+// loadStatuslineBlock finds the active billing block, reading only recently
+// written files when the history allows it.
 //
 // Block boundaries chain from earlier entries until usage pauses for longer
 // than a session, so a bounded load only reproduces the unbounded blocks
 // once it reaches back past such a pause. Each window is widened until it
 // does, and the full history is read as a last resort.
-func loadStatuslineUsage(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) ([]types.UsageEntry, *types.SessionBlock, error) {
+func loadStatuslineBlock(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) (*types.SessionBlock, error) {
 	for _, days := range statuslineBlockLookbackDays {
 		since := statuslineBlockSince(now, loc, days)
 		bound, _ := time.ParseInLocation("2006-01-02", since, loc)
 		loaded, _, err := loadClaude(ctx, paths, loc, bound, debug, false)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		// Entries dated before the window may miss skipped sessions; only
 		// the ones inside it are complete. Loads return entries in time
@@ -291,16 +312,16 @@ func loadStatuslineUsage(ctx context.Context, paths []string, loc *time.Location
 		if anchor == needsFullHistory {
 			break
 		}
-		entries, _ = calc.CalculateCosts(ctx, entries)
 		if anchor == noActiveBlock {
-			return entries, nil, nil
+			return nil, nil
 		}
 		first := sort.Search(len(entries), func(i int) bool { return !entries[i].Timestamp.Before(start) })
-		return entries, activeStatuslineBlock(calc, entries[first:]), nil
+		entries, _ = calc.CalculateCosts(ctx, entries[first:])
+		return activeStatuslineBlock(calc, entries), nil
 	}
 	entries, err := loadSource(ctx, "claude", paths, loc, debug, false)
 	entries, _ = calc.CalculateCosts(ctx, entries)
-	return entries, activeStatuslineBlock(calc, entries), err
+	return activeStatuslineBlock(calc, entries), err
 }
 
 func activeStatuslineBlock(calc *calculator.Calculator, entries []types.UsageEntry) *types.SessionBlock {
@@ -363,14 +384,11 @@ func statuslineBlockSince(now time.Time, loc *time.Location, lookbackDays int) s
 	return now.Add(-statuslineSessionLength - time.Duration(lookbackDays)*24*time.Hour).In(loc).Format("2006-01-02")
 }
 
-func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]string, entries []types.UsageEntry, block *types.SessionBlock, loaded bool, loc *time.Location, now time.Time, service *pricing.Service) string {
-	local, today := 0.0, 0.0
+func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]string, entries []types.UsageEntry, loaded bool, today float64, block *types.SessionBlock, now time.Time, service *pricing.Service) string {
+	local := 0.0
 	for _, e := range entries {
 		if e.SessionID == h.SessionID {
 			local += e.Cost
-		}
-		if e.Timestamp.In(loc).Format("2006-01-02") == now.In(loc).Format("2006-01-02") {
-			today += e.Cost
 		}
 	}
 	cc, usage := "N/A", "N/A"
