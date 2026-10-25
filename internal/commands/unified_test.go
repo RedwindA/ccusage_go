@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,26 @@ func isolateSourceHomes(t *testing.T) string {
 		t.Setenv(key, filepath.Join(home, "absent"))
 	}
 	return home
+}
+
+// ccusage prints the command's own report first, then the other sections
+// daily, weekly, monthly, session, whatever order --sections lists them in.
+func TestUnifiedSectionTablesFollowUpstreamOrder(t *testing.T) {
+	isolateSourceHomes(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", fixtureReport(t))
+	stdout, stderr, err := sourceCLIRun("session", "--sections", "monthly,session,weekly,daily", "--offline", "--timezone", "UTC")
+	if err != nil {
+		t.Fatal(err, stderr)
+	}
+	var titles []string
+	for _, line := range strings.Split(stdout, "\n") {
+		if _, kind, ok := strings.Cut(line, "Usage Report - "); ok {
+			titles = append(titles, strings.Trim(kind, " │"))
+		}
+	}
+	if want := []string{"Session", "Daily", "Weekly", "Monthly"}; !slices.Equal(titles, want) {
+		t.Fatalf("section order = %v, want %v\n%s", titles, want, stdout)
+	}
 }
 
 func TestUnifiedDefaultSectionsAndAgentBreakdown(t *testing.T) {

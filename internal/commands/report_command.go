@@ -163,25 +163,26 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		if agent != "" {
 			return fmt.Errorf("--sections is only supported by unified reports")
 		}
-		kinds = []string{kind}
-		seen := map[string]bool{kind: true}
-		validSections := 0
+		requested := map[string]bool{}
 		for _, k := range strings.Split(f.sections, ",") {
 			k = strings.TrimSpace(k)
 			if k == "" {
 				continue
 			}
-			validSections++
 			if k != "daily" && k != "weekly" && k != "monthly" && k != "session" {
 				return fmt.Errorf("invalid section %q", k)
 			}
-			if !seen[k] {
-				kinds = append(kinds, k)
-				seen[k] = true
-			}
+			requested[k] = true
 		}
-		if validSections == 0 {
+		if len(requested) == 0 {
 			return fmt.Errorf("--sections requires at least one report")
+		}
+		// As in ccusage, the other sections follow the command's own report
+		// in a fixed order, whatever order --sections lists them in.
+		for _, k := range []string{"daily", "weekly", "monthly", "session"} {
+			if k != kind && requested[k] {
+				kinds = append(kinds, k)
+			}
 		}
 	}
 	if f.all {
