@@ -83,7 +83,7 @@ func TestDimensionsAndConfigPrecedence(t *testing.T) {
 }
 
 func TestReportValidationBeforeLoading(t *testing.T) {
-	for _, args := range [][]string{{"daily", "--since", "20260230"}, {"daily", "--last", "0"}, {"daily", "--last", "1", "--since", "20260101"}, {"daily", "--since", "20260902", "--until", "20260901"}, {"claude", "daily", "--mode", "wrong"}, {"daily", "--sections", ","}, {"session", "--last", "1"}} {
+	for _, args := range [][]string{{"daily", "--since", "20260230"}, {"daily", "--last", "0"}, {"daily", "--last", "1", "--since", "20260101"}, {"daily", "--since", "20260902", "--until", "20260901"}, {"claude", "daily", "--mode", "wrong"}, {"daily", "--sections", ","}, {"session", "--last", "1"}, {"daily", "--last", "1", "--sections", "monthly"}, {"weekly", "--last", "1", "--sections", "weekly"}} {
 		if out, err := executeReport(args...); err == nil {
 			t.Errorf("accepted %v: %s", args, out)
 		}

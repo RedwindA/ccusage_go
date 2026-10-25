@@ -62,6 +62,11 @@ func newSourceScope(cmd *cobra.Command, kind string, f *reportFlags, start time.
 		if s.since, err = reports.LastSince(kind, f.last, time.Now().In(s.loc), start); err != nil {
 			return nil, err
 		}
+		// As in ccusage: the other sections would show only this report's
+		// last periods, such as part of a month under the whole month.
+		if cmd.Flags().Changed("sections") {
+			return nil, fmt.Errorf("--last cannot be combined with --sections")
+		}
 	}
 	if f.date != "" {
 		if s.since, err = reports.NormalizeDate(f.date); err != nil {
