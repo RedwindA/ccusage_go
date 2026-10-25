@@ -119,14 +119,18 @@ func NewBlocksCommand() *cobra.Command {
 			return err
 		}
 		blocks := calc.IdentifySessionBlocksDuration(entries, time.Duration(length*float64(time.Hour)))
-		limit := calculator.GetMaxTokensFromBlocks(blocks)
-		if tokenLimit != "" && tokenLimit != "max" {
+		maxLimit := tokenLimit == "" || tokenLimit == "max"
+		limit := 0
+		if !maxLimit {
 			limit, err = strconv.Atoi(tokenLimit)
 			if err != nil || limit < 1 {
 				return fmt.Errorf("invalid --token-limit %q", tokenLimit)
 			}
 		}
 		if live && f.format != "json" {
+			if maxLimit {
+				limit = calculator.GetMaxTokensFromBlocks(blocks)
+			}
 			if len(paths) != 1 {
 				return fmt.Errorf("live monitoring requires a single --data-path")
 			}
@@ -149,6 +153,10 @@ func NewBlocksCommand() *cobra.Command {
 		}
 		if recent {
 			selected = calculator.FilterRecentBlocks(selected, DefaultRecentDays)
+		}
+		// Upstream takes the default limit from the blocks it shows.
+		if maxLimit {
+			limit = calculator.GetMaxTokensFromBlocks(selected)
 		}
 		if f.order == "desc" {
 			sort.Slice(selected, func(i, j int) bool { return selected[i].StartTime.After(selected[j].StartTime) })
