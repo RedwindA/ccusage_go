@@ -297,8 +297,12 @@ func TestClaudeConfigDirNamesClaudeDirectories(t *testing.T) {
 			t.Errorf("CLAUDE_CONFIG_DIR=%q statusline: error=%v output=%q", dirs, err, out)
 		}
 	}
-	t.Setenv("CLAUDE_CONFIG_DIR", stray+","+filepath.Join(claude, "projects"))
-	if totals := sourceCLIJSON(t, append([]string{"claude", "daily"}, args...)...)["totals"].(map[string]any); totals["totalCost"] != 2.0 {
-		t.Errorf("claude daily: totals %v, want only the projects/ entry's cost 2", totals)
+	// A trailing separator, as shell completion leaves, still names projects/.
+	projects := filepath.Join(claude, "projects")
+	for _, dir := range []string{projects, projects + string(filepath.Separator), projects + string(filepath.Separator) + "."} {
+		t.Setenv("CLAUDE_CONFIG_DIR", stray+","+dir)
+		if totals := sourceCLIJSON(t, append([]string{"claude", "daily"}, args...)...)["totals"].(map[string]any); totals["totalCost"] != 2.0 {
+			t.Errorf("CLAUDE_CONFIG_DIR=%q claude daily: totals %v, want only the projects/ entry's cost 2", dir, totals)
+		}
 	}
 }

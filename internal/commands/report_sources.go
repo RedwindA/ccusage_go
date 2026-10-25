@@ -300,6 +300,7 @@ func claudeConfigDirs(dirs, home string) ([]string, error) {
 	}
 	var valid []string
 	for _, dir := range splitPaths(dirs, home) {
+		dir = filepath.Clean(dir)
 		if filepath.Base(dir) == "projects" && isDir(dir) {
 			dir = filepath.Dir(dir)
 		}
