@@ -436,6 +436,12 @@ func antiModelID(id int) string {
 		return "gemini-3.6-flash-medium"
 	case 1073:
 		return "gemini-3.6-flash-low"
+	case 1417, 1418, 1419:
+		return "gemini-4-argon"
+	case 1402:
+		return "claude-opus-5-5"
+	case 1050:
+		return "gemini-3.1-flash-lite"
 	}
 	if id >= 1000 {
 		return fmt.Sprintf("model_placeholder_m%d", id-1000)
@@ -480,6 +486,11 @@ var antiAliases = map[string]string{
 	"model_placeholder_m71":            "gemini-3.6-flash-high",
 	"model_placeholder_m72":            "gemini-3.6-flash-medium",
 	"model_placeholder_m73":            "gemini-3.6-flash-low",
+	"model_placeholder_m417":           "gemini-4-argon",
+	"model_placeholder_m418":           "gemini-4-argon",
+	"model_placeholder_m419":           "gemini-4-argon",
+	"model_placeholder_m402":           "claude-opus-5-5",
+	"model_placeholder_m50":            "gemini-3.1-flash-lite",
 	"model_placeholder_m26":            "claude-opus-4-6",
 	"model_placeholder_m35":            "claude-sonnet-4-6",
 	"model_placeholder_m36":            "gemini-3.1-pro",

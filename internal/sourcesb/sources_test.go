@@ -321,3 +321,47 @@ func TestAntigravityDefaultRootsNeedConversationsDirectory(t *testing.T) {
 		t.Fatalf("%+v", entries)
 	}
 }
+func TestAntigravityNewerModelIDs(t *testing.T) {
+	cases := []struct {
+		id                          int
+		placeholder, name, expected string
+	}{
+		{1318, "model_placeholder_m318", "Gemini 3.8 Flash (High)", "gemini-3.8-flash-high"},
+		{1319, "model_placeholder_m319", "Gemini 3.8 Flash (Medium)", "gemini-3.8-flash-medium"},
+		{1320, "model_placeholder_m320", "Gemini 3.8 Flash (Low)", "gemini-3.8-flash-low"},
+		{1298, "model_placeholder_m298", "Gemini 3.7 Flash (High)", "gemini-3.7-flash-high"},
+		{1299, "model_placeholder_m299", "Gemini 3.7 Flash (Medium)", "gemini-3.7-flash-medium"},
+		{1300, "model_placeholder_m300", "Gemini 3.7 Flash (Low)", "gemini-3.7-flash-low"},
+		{1071, "model_placeholder_m71", "Gemini 3.6 Flash (High)", "gemini-3.6-flash-high"},
+		{1072, "model_placeholder_m72", "Gemini 3.6 Flash (Medium)", "gemini-3.6-flash-medium"},
+		{1073, "model_placeholder_m73", "Gemini 3.6 Flash (Low)", "gemini-3.6-flash-low"},
+		{1417, "model_placeholder_m417", "Gemini 4 Argon", "gemini-4-argon"},
+		{1418, "model_placeholder_m418", "Gemini 4 Argon", "gemini-4-argon"},
+		{1419, "model_placeholder_m419", "Gemini 4 Argon", "gemini-4-argon"},
+		{1050, "model_placeholder_m50", "Gemini 3.1 Flash Lite", "gemini-3.1-flash-lite"},
+	}
+	for _, c := range cases {
+		if got := normalizeAnti(antiModelID(c.id)); got != c.expected {
+			t.Errorf("id %d: %s", c.id, got)
+		}
+		if got := normalizeAnti(c.placeholder); got != c.expected {
+			t.Errorf("%s: %s", c.placeholder, got)
+		}
+		if got := normalizeAnti(c.name); got != c.expected {
+			t.Errorf("%s: %s", c.name, got)
+		}
+	}
+	if got := normalizeAnti("Gemini 3.8 Flash"); got != "gemini-3.8-flash" {
+		t.Error(got)
+	}
+	if antiModelID(1402) != "claude-opus-5-5" || normalizeAnti("model_placeholder_m402") != "claude-opus-5-5" {
+		t.Error("claude opus 5.5")
+	}
+	dir := t.TempDir()
+	antigravityDB(t, filepath.Join(dir, "conversations/id.db"), "", 1402, "opus-id")
+	antigravityDB(t, filepath.Join(dir, "conversations/placeholder.db"), "model_placeholder_m402", 0, "opus-placeholder")
+	entries := mustLoad(t, "antigravity", dir)
+	if len(entries) != 2 || entries[0].Model != "claude-opus-5-5" || entries[1].Model != "claude-opus-5-5" {
+		t.Fatalf("%+v", entries)
+	}
+}
