@@ -344,7 +344,7 @@ func defaultOrder(kind, agent string) string {
 }
 
 func writeUsageTable(cmd *cobra.Command, rows []*reports.Row, o reports.Options) error {
-	if err := reports.WriteTable(cmd.OutOrStdout(), rows, o); err != nil {
+	if err := reports.WriteTable(cmd.OutOrStdout(), cmd.ErrOrStderr(), rows, o); err != nil {
 		return err
 	}
 	if o.Compact && len(rows) > 0 {

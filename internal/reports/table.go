@@ -10,9 +10,16 @@ import (
 )
 
 // WriteTable mirrors ccusage's terminal reports; JSON/CSV keep the full data.
-func WriteTable(w io.Writer, rows []*Row, o Options) error {
+// Like ccusage, it reports a table without rows on errw, after the title of a
+// unified report.
+func WriteTable(w, errw io.Writer, rows []*Row, o Options) error {
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "No usage data found.")
+		if o.Agent == "" {
+			if _, err := io.WriteString(w, boxTitle(reportTitle(rows, o), o.Color, o.TerminalWidth)); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintln(errw, emptyTableMessage(o.Agent))
 		return err
 	}
 	headers := []string{map[string]string{"daily": "Date", "weekly": "Week", "monthly": "Month", "session": "Session", "model": "Model", "workspace": "Workspace", "blocks": "Block"}[o.Kind]}
@@ -160,6 +167,16 @@ func reportTitle(rows []*Row, o Options) string {
 		detected = "None"
 	}
 	return "Coding (Agent) CLI Usage Report - " + kind + "\nDetected: " + detected
+}
+
+func emptyTableMessage(agent string) string {
+	switch agent {
+	case "codex", "amp", "codebuff", "goose":
+		return "No " + agentLabel(agent) + " usage data found."
+	case "copilot":
+		return "No GitHub Copilot CLI usage data found.\nSession-state events are read from ${COPILOT_HOME:-~/.copilot}/session-state/<session-id>/events.jsonl; OpenTelemetry file export remains supported.\nSee https://ccusage.com/guide/copilot/#data-source"
+	}
+	return "No usage data found."
 }
 
 func agentLabel(agent string) string {

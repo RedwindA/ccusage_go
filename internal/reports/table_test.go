@@ -3,6 +3,7 @@ package reports
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestTableMatchesCCUsageSnapshot(t *testing.T) {
 		{Period: "2026-02-02", Models: []string{"gpt-5.4"}, Input: 7, Output: 8, CacheCreate: 0, CacheRead: 0, Total: 15},
 	}
 	var out bytes.Buffer
-	if err := WriteTable(&out, rows, Options{Kind: "daily", Agent: "copilot", TerminalWidth: 120}); err != nil {
+	if err := WriteTable(&out, io.Discard, rows, Options{Kind: "daily", Agent: "copilot", TerminalWidth: 120}); err != nil {
 		t.Fatal(err)
 	}
 	want, err := os.ReadFile("testdata/ccusage_copilot_daily.txt")
@@ -42,7 +43,7 @@ func TestCodexTableMatchesCCUsageSnapshot(t *testing.T) {
 		{Period: "2026-10-21", Models: []string{"gpt-5"}, Input: 500, Output: 40, Total: 540},
 	}
 	var out bytes.Buffer
-	if err := WriteTable(&out, rows, Options{Kind: "daily", Agent: "codex", NoCost: true, TerminalWidth: 120}); err != nil {
+	if err := WriteTable(&out, io.Discard, rows, Options{Kind: "daily", Agent: "codex", NoCost: true, TerminalWidth: 120}); err != nil {
 		t.Fatal(err)
 	}
 	want, err := os.ReadFile("testdata/ccusage_codex_daily.txt")
@@ -76,7 +77,7 @@ func TestTableWidthsAndUnicode(t *testing.T) {
 		for _, color := range []bool{false, true} {
 			var out bytes.Buffer
 			o := Options{Kind: "daily", Agent: "claude", TerminalWidth: width, Compact: width < 100, Color: color}
-			if err := WriteTable(&out, rows, o); err != nil {
+			if err := WriteTable(&out, io.Discard, rows, o); err != nil {
 				t.Fatal(err)
 			}
 			result := out.String()
@@ -115,7 +116,7 @@ func TestNonDateReportsUseAvailableIdentifierWidth(t *testing.T) {
 				{Period: "/workspace/example-beta/" + strings.Repeat("subdirectory/", 5), Models: []string{"gpt-5.4"}, Input: 5678, Total: 5678},
 			}
 			var out bytes.Buffer
-			if err := WriteTable(&out, rows, Options{Kind: kind, Agent: "claude", TerminalWidth: 160}); err != nil {
+			if err := WriteTable(&out, io.Discard, rows, Options{Kind: kind, Agent: "claude", TerminalWidth: 160}); err != nil {
 				t.Fatal(err)
 			}
 			for _, identifier := range []string{"/workspace/example-alpha/", "/workspace/example-beta/"} {
@@ -136,7 +137,7 @@ func TestTableBreakdownsDoNotDoubleTotals(t *testing.T) {
 	model := Model{Name: "claude-sonnet-4-6", Input: 1234, Output: 50, Total: 1284, Cost: 1.25}
 	row := &Row{Period: "2026-09-25", Agent: "all", Input: 1234, Output: 50, Total: 1284, Cost: 1.25, Models: []string{model.Name}, Breakdowns: []Model{model}, Agents: []*Row{{Agent: "claude", Models: []string{model.Name}, Input: 1234, Output: 50, Total: 1284, Cost: 1.25, Breakdowns: []Model{model}}}}
 	var out bytes.Buffer
-	if err := WriteTable(&out, []*Row{row}, Options{Kind: "daily", ByAgent: true, Breakdown: true, Color: true, TerminalWidth: 180, DetectedAgents: []string{"claude", "codex"}}); err != nil {
+	if err := WriteTable(&out, io.Discard, []*Row{row}, Options{Kind: "daily", ByAgent: true, Breakdown: true, Color: true, TerminalWidth: 180, DetectedAgents: []string{"claude", "codex"}}); err != nil {
 		t.Fatal(err)
 	}
 	result := out.String()
@@ -158,7 +159,7 @@ func TestFocusedBreakdownLabelsRemainDistinct(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	if err := WriteTable(&out, []*Row{row}, Options{Kind: "daily", Agent: "claude", Breakdown: true, TerminalWidth: 120}); err != nil {
+	if err := WriteTable(&out, io.Discard, []*Row{row}, Options{Kind: "daily", Agent: "claude", Breakdown: true, TerminalWidth: 120}); err != nil {
 		t.Fatal(err)
 	}
 	for _, model := range []string{"└─ opus-4-6", "└─ opus-4-6-fast"} {
@@ -197,7 +198,7 @@ func TestTableOptionsAndUntrustedText(t *testing.T) {
 	row := &Row{Period: "会话\n\x1b[31m", Agent: "codebuff", User: "用户\tA", Project: "项目\r名称", Models: []string{"claude-opus-4-20250514", "claude-opus-4", "bad\x1b[2Jmodel"}, Input: 1000, Total: 2000, Cost: 1, Credits: 2.5}
 	for _, compact := range []bool{false, true} {
 		var out bytes.Buffer
-		err := WriteTable(&out, []*Row{row}, Options{Kind: "session", Compact: compact, NoCost: true, Instances: true, TerminalWidth: 240})
+		err := WriteTable(&out, io.Discard, []*Row{row}, Options{Kind: "session", Compact: compact, NoCost: true, Instances: true, TerminalWidth: 240})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,12 +225,24 @@ type failingTableWriter struct{ err error }
 func (w failingTableWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func TestTableEmptyAndWriteError(t *testing.T) {
-	var out bytes.Buffer
-	if err := WriteTable(&out, nil, Options{Kind: "daily"}); err != nil || out.String() != "No usage data found.\n" {
-		t.Fatalf("empty report: %v %s", err, out.String())
+	// ccusage reports an empty table on stderr, after the title of a unified
+	// report, and names some sources in the message.
+	for _, tc := range []struct {
+		o              Options
+		stdout, stderr string
+	}{
+		{Options{Kind: "daily", DetectedAgents: []string{"claude"}}, "\n╭────────────────────────────────────────────╮\n│                                            │\n│  Coding (Agent) CLI Usage Report - Daily   │\n│              Detected: Claude              │\n│                                            │\n╰────────────────────────────────────────────╯\n\n", "No usage data found.\n"},
+		{Options{Kind: "daily", Agent: "claude"}, "", "No usage data found.\n"},
+		{Options{Kind: "session", Agent: "codex"}, "", "No Codex usage data found.\n"},
+		{Options{Kind: "daily", Agent: "copilot"}, "", "No GitHub Copilot CLI usage data found.\nSession-state events are read from ${COPILOT_HOME:-~/.copilot}/session-state/<session-id>/events.jsonl; OpenTelemetry file export remains supported.\nSee https://ccusage.com/guide/copilot/#data-source\n"},
+	} {
+		var out, diagnostics bytes.Buffer
+		if err := WriteTable(&out, &diagnostics, nil, tc.o); err != nil || out.String() != tc.stdout || diagnostics.String() != tc.stderr {
+			t.Errorf("empty %s %s report: %v stdout=%q stderr=%q", tc.o.Agent, tc.o.Kind, err, out.String(), diagnostics.String())
+		}
 	}
 	want := errors.New("closed output")
-	if err := WriteTable(failingTableWriter{want}, []*Row{{Period: "today"}}, Options{Kind: "daily"}); !errors.Is(err, want) {
+	if err := WriteTable(failingTableWriter{want}, io.Discard, []*Row{{Period: "today"}}, Options{Kind: "daily"}); !errors.Is(err, want) {
 		t.Fatalf("write error lost: %v", err)
 	}
 }
