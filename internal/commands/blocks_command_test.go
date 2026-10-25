@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,6 +90,38 @@ func TestBlocksAreListedByStartTime(t *testing.T) {
 		}
 		if got := strings.Join(ids, " "); got != want {
 			t.Errorf("--order %s: %s, want %s", order, got, want)
+		}
+	}
+}
+
+// Blocks tables follow the shared color settings: redirected output and
+// NO_COLOR are plain, --color and FORCE_COLOR color them.
+func TestBlocksTablesFollowColorSettings(t *testing.T) {
+	now := time.Now()
+	root := blocksFixture(t, map[time.Time]int{now.Add(-30 * time.Minute): 10, now.Add(-10 * time.Minute): 10})
+	for _, key := range []string{"NO_COLOR", "FORCE_COLOR"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	for _, tc := range []struct {
+		env, flag string
+		color     bool
+	}{{"", "", false}, {"NO_COLOR", "--color", false}, {"", "--color", true}, {"FORCE_COLOR", "", true}} {
+		if tc.env != "" {
+			t.Setenv(tc.env, "1")
+		}
+		for _, extra := range [][]string{{}, {"--active"}} {
+			args := append([]string{"blocks", "--data-path", root, "--offline"}, extra...)
+			if tc.flag != "" {
+				args = append(args, tc.flag)
+			}
+			stdout, _, err := sourceCLIRun(args...)
+			if err != nil || strings.Contains(stdout, "\x1b[") != tc.color {
+				t.Errorf("%s %v: colored %v, want %v: %v", tc.env, args, !tc.color, tc.color, err)
+			}
+		}
+		if tc.env != "" {
+			os.Unsetenv(tc.env)
 		}
 	}
 }

@@ -203,11 +203,13 @@ func NewBlocksCommand() *cobra.Command {
 			_, err = fmt.Fprint(cmd.OutOrStdout(), out)
 			return err
 		}
-		formatter := output.NewTableWriterFormatter(f.noColor)
+		var o reports.Options
+		configureTableOutput(cmd, f, &o)
+		formatter := output.NewTableWriterFormatter(!o.Color)
 		formatter.SetTimezone(loc)
 		out := formatter.FormatBlocksReport(selected, limit)
 		if active && len(selected) == 1 {
-			out = formatActiveBlockDetail(selected[0], limit, f.noColor, loc)
+			out = formatActiveBlockDetail(selected[0], limit, !o.Color, loc)
 		}
 		_, err = fmt.Fprint(cmd.OutOrStdout(), out)
 		return err
