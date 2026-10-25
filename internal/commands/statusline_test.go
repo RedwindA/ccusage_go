@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/pricing"
+	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
 func runStatuslineTest(t *testing.T, input string, args ...string) (string, error) {
@@ -142,6 +143,24 @@ func TestClaudeScopedStatuslineConfigAndPricing(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "Scoped") || !strings.Contains(out.String(), "$13.00 session") {
 			t.Fatal(out.String())
+		}
+	}
+}
+
+// The block segment says how long is left as upstream does, without an
+// hour count under an hour.
+func TestStatuslineBlockSegmentSaysTimeLeft(t *testing.T) {
+	now := time.Date(2026, 10, 25, 19, 0, 0, 0, time.UTC)
+	hook := statuslineHook{SessionID: "s"}
+	hook.Model.DisplayName = "Opus"
+	f := &statuslineFlags{costSource: "auto", visual: "off"}
+	for left, want := range map[time.Duration]string{
+		3*time.Hour + 13*time.Minute + 30*time.Second: "$0.29 block (3h 13m left)",
+		59*time.Minute + 30*time.Second:               "$0.29 block (59m left)",
+	} {
+		block := &types.SessionBlock{StartTime: now.Add(left - 5*time.Hour), EndTime: now.Add(left), CostUSD: 0.29}
+		if out := renderStatusline(hook, f, nil, nil, false, 0, block, now, nil); !strings.Contains(out, want) {
+			t.Errorf("%v left: %s, want %q", left, out, want)
 		}
 	}
 }

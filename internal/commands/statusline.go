@@ -415,7 +415,11 @@ func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]s
 		if remaining < 0 {
 			remaining = 0
 		}
-		blockInfo = fmt.Sprintf("$%.2f block (%dh %dm remaining)", block.CostUSD, remaining/60, remaining%60)
+		left := fmt.Sprintf("%dm left", remaining)
+		if remaining >= 60 {
+			left = fmt.Sprintf("%dh %dm left", remaining/60, remaining%60)
+		}
+		blockInfo = fmt.Sprintf("$%.2f block (%s)", block.CostUSD, left)
 		if rate := calculator.CalculateBurnRate(*block); rate != nil {
 			burnInfo = fmt.Sprintf(" | 🔥 $%.2f/hr", rate.CostPerHour)
 			emoji, label := "🟢", "Normal"
