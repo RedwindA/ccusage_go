@@ -333,6 +333,37 @@ func TestClaudeDailyFamilyDedupesAsUpstreamsDailyLoader(t *testing.T) {
 	}
 }
 
+// Without --order, each section of a unified report lists its rows as the
+// standalone report does, as upstream's finish_rows: sessions by cost,
+// highest first, and periods oldest first.
+func TestReportSectionsSortAsTheirStandaloneReports(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	for i, session := range []struct {
+		name, day string
+		cost      float64
+	}{{"a-cheap", "2026-01-02", 0.01}, {"z-expensive", "2026-01-03", 5}, {"m-medium", "2026-01-10", 1}, {"b-small", "2026-01-20", 0.5}} {
+		sourceCLIWrite(t, filepath.Join(root, "projects/p", session.name+".jsonl"), fmt.Sprintf(`{"timestamp":"%sT10:00:00.000Z","sessionId":%q,"requestId":"r%d","costUSD":%v,"message":{"id":"m%d","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`, session.day, session.name, i, session.cost, i))
+	}
+	report := func(args ...string) map[string]any {
+		return sourceCLIJSON(t, append(args, "--data-path", root, "--timezone", "UTC", "--mode", "display", "--offline", "--json")...)
+	}
+	for _, args := range [][]string{{"daily", "--sections", "weekly,monthly,session"}, {"session", "--sections", "daily,weekly,monthly"}} {
+		payload := report(args...)
+		for _, section := range []string{"daily", "weekly", "monthly", "session"} {
+			if got, want := payload[section].([]any), report(section)[section].([]any); !reflect.DeepEqual(got, want) {
+				periods := func(rows []any) (periods []any) {
+					for _, row := range rows {
+						periods = append(periods, row.(map[string]any)["period"])
+					}
+					return periods
+				}
+				t.Errorf("%v: %s section %v, want %v", args, section, periods(got), periods(want))
+			}
+		}
+	}
+}
+
 func TestAutoModeBreakdownsReportTheStoredPartOfCost(t *testing.T) {
 	isolateSourceHomes(t)
 	root := t.TempDir()

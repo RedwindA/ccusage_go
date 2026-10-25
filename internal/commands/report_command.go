@@ -139,11 +139,9 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	if err != nil {
 		return err
 	}
-	if f.order == "" {
-		f.order = "asc"
-		if kind == "model" || kind == "workspace" || kind == "session" && agent == "" {
-			f.order = "desc"
-		}
+	ordered := f.order != ""
+	if !ordered {
+		f.order = defaultOrder(kind, agent)
 	}
 	if f.order != "asc" && f.order != "desc" {
 		return fmt.Errorf("invalid --order %q", f.order)
@@ -257,7 +255,12 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	}
 	payload := map[string]any{}
 	for _, k := range kinds {
-		o.Kind = k
+		o.Kind, o.Order = k, f.order
+		// Without --order or a configured order, a section sorts as its
+		// own report does.
+		if !ordered && k != kind {
+			o.Order = defaultOrder(k, "")
+		}
 		view := entries
 		if k == "session" && sessions {
 			view = sessionEntries
@@ -325,6 +328,16 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		return writeReportJSON(cmd, payload, f)
 	}
 	return nil
+}
+
+// defaultOrder is the order a kind report of agent lists its rows in
+// without --order: unified sessions and model and workspace reports by cost,
+// highest first, and the others by period, oldest first.
+func defaultOrder(kind, agent string) string {
+	if kind == "model" || kind == "workspace" || kind == "session" && agent == "" {
+		return "desc"
+	}
+	return "asc"
 }
 
 func writeUsageTable(cmd *cobra.Command, rows []*reports.Row, o reports.Options) error {
