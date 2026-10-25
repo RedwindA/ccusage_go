@@ -446,7 +446,7 @@ func TestBoundedReportsTolerateUnreadableKeptFiles(t *testing.T) {
 	pruneTouch(t, old, pruneTime("2026-09-01T12:00:00Z"))
 	// A dangling symlink has no mtime, so it is always kept.
 	if err := os.Symlink(filepath.Join(root, "missing.jsonl"), filepath.Join(root, "projects/project-a/dangling.jsonl")); err != nil {
-		t.Fatal(err)
+		t.Skip(err)
 	}
 	codex := filepath.Join(t.TempDir(), "codex")
 	t.Setenv("CODEX_HOME", codex)
