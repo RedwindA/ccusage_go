@@ -3,6 +3,7 @@ package sourcesb
 import (
 	"fmt"
 	"github.com/RedwindA/ccusage_go/internal/types"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,6 +53,29 @@ func copilotTime(r obj, fallback time.Time) time.Time {
 	}
 	return fallback
 }
+
+const (
+	copilotShutdownEvent   = "session.shutdown"
+	copilotCheckpointEvent = "session.usage_checkpoint"
+)
+
+// copilotNanoAIU reads a totalNanoAiu credit count. One AIU is one GitHub AI
+// credit, billed at $0.01.
+func copilotNanoAIU(v interface{}) (int, bool) {
+	x, ok := v.(float64)
+	return int(math.Round(x)), ok && x >= 0
+}
+
+// copilotSnapshotID keys a credit snapshot by its event ID, or by its time and
+// total when the event has none.
+func copilotSnapshotID(e types.UsageEntry, event string) types.UsageEntry {
+	if event == "" {
+		event = fmt.Sprintf("%v:%d:%v", e.Raw["credit_snapshot"], e.Timestamp.UnixMilli(), e.Raw["nano_aiu"])
+	}
+	e.ID = "credits:" + e.SessionID + ":" + event
+	return e
+}
+
 func loadCopilot(file string) ([]types.UsageEntry, error) {
 	rr, err := lines(file)
 	if err != nil {
@@ -60,26 +84,42 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 	var out []types.UsageEntry
 	isSession := strings.Contains(filepath.ToSlash(file), "/session-state/")
 	for _, r := range rr {
-		if s(r["type"]) == "session.shutdown" {
+		if s(r["type"]) == copilotShutdownEvent {
 			isSession = true
 			break
 		}
 	}
 	if isSession {
+		session := filepath.Base(filepath.Dir(file))
 		for _, r := range rr {
-			if s(r["type"]) != "session.shutdown" {
+			typ := s(r["type"])
+			if typ != copilotShutdownEvent && typ != copilotCheckpointEvent {
 				continue
 			}
 			t := ts(r["timestamp"])
 			if t.IsZero() {
 				continue
 			}
-			metrics := object(object(r["data"])["modelMetrics"])
+			data := object(r["data"])
+			// Session-wide credits for copilotCreditGaps; nano_aiu stays unset
+			// when they cannot be reconciled.
+			snapshot := types.UsageEntry{SourceFile: file, SessionID: session, Timestamp: t, Raw: obj{"credit_snapshot": typ}}
+			total, hasTotal := copilotNanoAIU(data["totalNanoAiu"])
+			if typ == copilotCheckpointEvent {
+				// A checkpoint without a total carries nothing to reconcile.
+				if hasTotal {
+					snapshot.Raw["nano_aiu"] = total
+					out = append(out, copilotSnapshotID(snapshot, s(r["id"])))
+				}
+				continue
+			}
+			metrics := object(data["modelMetrics"])
 			keys := []string{}
 			for k := range metrics {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
+			modelsReportCredits := true
 			for _, model := range keys {
 				m := object(metrics[model])
 				u := object(m["usage"])
@@ -87,14 +127,21 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 					continue
 				}
 				model = copilotModel(model)
-				e := types.UsageEntry{Model: model, SourceFile: file, SessionID: filepath.Base(filepath.Dir(file)), Timestamp: t, OutputTokens: n(u["outputTokens"]), CacheReadInputTokens: n(u["cacheReadTokens"]), CacheCreationInputTokens: n(u["cacheWriteTokens"]), Raw: obj{"shutdown": true, "request_count": n(object(m["requests"])["count"]), "reasoning_output_tokens": n(u["reasoningTokens"])}}
+				e := types.UsageEntry{Model: model, SourceFile: file, SessionID: session, Timestamp: t, OutputTokens: n(u["outputTokens"]), CacheReadInputTokens: n(u["cacheReadTokens"]), CacheCreationInputTokens: n(u["cacheWriteTokens"]), Raw: obj{"shutdown": true, "request_count": n(object(m["requests"])["count"]), "reasoning_output_tokens": n(u["reasoningTokens"])}}
 				e.InputTokens = max(0, n(u["inputTokens"])-e.CacheReadInputTokens-e.CacheCreationInputTokens)
 				finish(&e, 0)
 				e.ID = "shutdown:" + e.SessionID + ":" + first(s(r["id"]), t.Format(time.RFC3339Nano)) + ":" + model
 				if e.TotalTokens > 0 || n(e.Raw["request_count"])+n(e.Raw["reasoning_output_tokens"]) > 0 {
+					credits, ok := copilotNanoAIU(m["totalNanoAiu"])
+					modelsReportCredits = modelsReportCredits && ok
+					e.Raw["nano_aiu"] = credits
 					out = append(out, e)
 				}
 			}
+			if hasTotal && modelsReportCredits {
+				snapshot.Raw["nano_aiu"] = total
+			}
+			out = append(out, copilotSnapshotID(snapshot, s(r["id"])))
 		}
 		return out, nil
 	}
@@ -259,6 +306,16 @@ func copilotOtelStart(shutdowns []types.UsageEntry, calls []time.Time) (int, boo
 	return start, start >= 0 && otel > reported
 }
 func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.UsageEntry {
+	var snapshots []types.UsageEntry
+	usage := all[:0]
+	for _, e := range all {
+		if e.Raw["credit_snapshot"] != nil {
+			snapshots = append(snapshots, e)
+		} else {
+			usage = append(usage, e)
+		}
+	}
+	all = usage
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Timestamp.Before(all[j].Timestamp) })
 	var out []types.UsageEntry
 	lastIdentity := map[string]int{}
@@ -267,20 +324,29 @@ func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.
 			lastIdentity[e.ID] = i
 		}
 	}
-	shutdowns, calls := map[string][]types.UsageEntry{}, map[string][]time.Time{}
+	shutdowns, calls, otelSessions := map[string][]types.UsageEntry{}, map[string][]time.Time{}, map[string]bool{}
 	for i, e := range all {
 		key := e.SessionID + ":" + e.Model
 		if e.Raw["shutdown"] != true {
 			calls[key] = append(calls[key], e.Timestamp)
+			otelSessions[e.SessionID] = true
 		} else if lastIdentity[e.ID] == i {
 			shutdowns[key] = append(shutdowns[key], e)
 		}
 	}
 	// Per session and model: how many leading shutdowns are reported as
 	// intervals, and the shutdown after which OTel rows are reported (every
-	// row without one).
-	kept, otelAfter := map[string]int{}, map[string]time.Time{}
+	// row without one). Credits are attributed past --until too, so a
+	// breakdown that a later shutdown catches up on is judged the same way in
+	// every date range.
+	kept, otelAfter, attributed := map[string]int{}, map[string]time.Time{}, map[copilotShutdownTime]int{}
 	for key, list := range shutdowns {
+		previous := 0
+		for _, e := range list {
+			credits := n(e.Raw["nano_aiu"])
+			attributed[copilotShutdownTime{e.SessionID, e.Timestamp.UnixMilli()}] += max(0, credits-previous)
+			previous = credits
+		}
 		visible := sort.Search(len(list), func(i int) bool {
 			return !untilExclusive.IsZero() && !list[i].Timestamp.Before(untilExclusive)
 		})
@@ -332,5 +398,96 @@ func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.
 			out = append(out, e)
 		}
 	}
-	return out
+	// OTel rows record every model call, so sessions that have them are left
+	// to that source rather than to the coarser credit totals.
+	return append(out, copilotCreditGaps(snapshots, attributed, otelSessions)...)
+}
+
+type copilotShutdownTime struct {
+	session string
+	millis  int64
+}
+
+// copilotCreditGaps reports the credits of the session-wide totalNanoAiu that
+// no modelMetrics entry accounts for, as cost-only entries of the unknown
+// model.
+//
+// modelMetrics only covers the running Copilot process: a resumed session, or
+// one the client restarted, reports an empty or partial breakdown, while
+// totalNanoAiu keeps the whole session. At every shutdown, and at the
+// checkpoints after the last one (sessions still open or never shut down
+// cleanly), the unexplained amount is the session total minus the per-model
+// credits reported so far. A shutdown can carry a breakdown that a later one
+// catches up on, so only what stays unexplained at every later snapshot is
+// reported, dated at the first snapshot from which it stays. Checkpoints
+// before a shutdown are already part of that shutdown's total.
+//
+// Only sessions with checkpoints qualify: Copilot versions that predate them
+// restart both totals on every resume, so the cumulative reading used for
+// modelMetrics does not hold there. Without a credit total on every shutdown,
+// the usage already reported cannot be told apart from what is missing.
+func copilotCreditGaps(snapshots []types.UsageEntry, attributed map[copilotShutdownTime]int, otelSessions map[string]bool) []types.UsageEntry {
+	seen, sessions := map[string]bool{}, map[string][]types.UsageEntry{}
+	for _, e := range snapshots {
+		if !seen[e.ID] {
+			seen[e.ID] = true
+			sessions[e.SessionID] = append(sessions[e.SessionID], e)
+		}
+	}
+	ids := []string{}
+	for id := range sessions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	shutdown := func(e types.UsageEntry) bool { return e.Raw["credit_snapshot"] == copilotShutdownEvent }
+	var gaps []types.UsageEntry
+	for _, id := range ids {
+		list := sessions[id]
+		checkpoints, incomplete, last := false, false, -1
+		sort.SliceStable(list, func(i, j int) bool {
+			if !list[i].Timestamp.Equal(list[j].Timestamp) {
+				return list[i].Timestamp.Before(list[j].Timestamp)
+			}
+			return !shutdown(list[i]) && shutdown(list[j])
+		})
+		for i, e := range list {
+			if shutdown(e) {
+				incomplete = incomplete || e.Raw["nano_aiu"] == nil
+				last = i
+			} else {
+				checkpoints = true
+			}
+		}
+		if otelSessions[id] || !checkpoints || incomplete {
+			continue
+		}
+		var points []types.UsageEntry
+		var unexplained []int
+		total, explained := 0, 0
+		for i, e := range list {
+			if !shutdown(e) && i < last {
+				continue
+			}
+			total = max(total, n(e.Raw["nano_aiu"]))
+			if shutdown(e) {
+				explained += attributed[copilotShutdownTime{id, e.Timestamp.UnixMilli()}]
+			}
+			points = append(points, e)
+			unexplained = append(unexplained, max(0, total-explained))
+		}
+		// Keep what stays unexplained at every later point, which never
+		// decreases.
+		for i := len(unexplained) - 2; i >= 0; i-- {
+			unexplained[i] = min(unexplained[i], unexplained[i+1])
+		}
+		reported := 0
+		for i, e := range points {
+			if gap := unexplained[i] - reported; gap > 0 {
+				// One AIU is one GitHub AI credit, billed at $0.01.
+				gaps = append(gaps, types.UsageEntry{ID: e.ID, SourceFile: e.SourceFile, SessionID: id, Timestamp: e.Timestamp, Model: "unknown", Cost: float64(gap) / 1e11, HasCost: true, Raw: obj{"request_count": 0}})
+			}
+			reported = unexplained[i]
+		}
+	}
+	return gaps
 }

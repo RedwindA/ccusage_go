@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -169,4 +171,57 @@ func TestNativeSourceExtraReasoningIsBilled(t *testing.T) {
 	if totals["totalTokens"] != 105.0 || totals["totalCost"] != 105.0 {
 		t.Fatalf("extra reasoning underbilled: %#v", totals)
 	}
+}
+
+// Copilot session credits missing from modelMetrics are stored-cost rows of
+// the unknown model: --mode calculate reports them at $0, and the unified
+// report keeps them although they have no tokens.
+func TestCopilotSessionCreditsCLI(t *testing.T) {
+	home := isolateSourceHomes(t)
+	dir := filepath.Join(home, "copilot")
+	sourceCLIWrite(t, filepath.Join(dir, "session-state/session-credits/events.jsonl"), strings.Join([]string{
+		`{"type":"session.usage_checkpoint","id":"checkpoint-c-1","timestamp":"2026-02-03T01:00:00.000Z","data":{"totalNanoAiu":5000000000}}`,
+		`{"type":"session.shutdown","id":"shutdown-c","timestamp":"2026-02-03T02:00:00.000Z","data":{"totalNanoAiu":9000000000,"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":40,"outputTokens":10},"requests":{"count":2},"totalNanoAiu":3000000000}}}}`,
+		`{"type":"session.usage_checkpoint","id":"checkpoint-c-2","timestamp":"2026-02-04T01:00:00.000Z","data":{"totalNanoAiu":11000000000}}`,
+	}, "\n"))
+	t.Setenv("COPILOT_HOME", dir)
+	// "date tokens messages model=cost..." per daily row.
+	rows := func(args ...string) []string {
+		payload := sourceCLIJSON(t, append(args, "--offline", "--json", "--timezone", "UTC")...)
+		if unpriced := payload["totals"].(map[string]any)["unpricedModels"]; unpriced != nil {
+			t.Fatalf("unpriced models %v", unpriced)
+		}
+		var out []string
+		for _, row := range payload["daily"].([]any) {
+			r := row.(map[string]any)
+			line := fmt.Sprintf("%s %v %v", firstNonNil(r["date"], r["period"]), r["totalTokens"], firstNonNil(r["messageCount"], r["requestCount"]))
+			for _, model := range r["modelBreakdowns"].([]any) {
+				m := model.(map[string]any)
+				line += fmt.Sprintf(" %s=%.5f", m["modelName"], m["cost"])
+			}
+			out = append(out, line)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"copilot", "daily"}, []string{"2026-02-03 50 2 unknown=0.06000 gpt-5.4=0.00025", "2026-02-04 0 <nil> unknown=0.02000"}},
+		{[]string{"copilot", "daily", "--mode", "calculate"}, []string{"2026-02-03 50 2 gpt-5.4=0.00025 unknown=0.00000", "2026-02-04 0 <nil> unknown=0.00000"}},
+		{[]string{"daily"}, []string{"2026-02-03 50 2 unknown=0.06000 gpt-5.4=0.00025", "2026-02-04 0 0 unknown=0.02000"}},
+	} {
+		if got := rows(tc.args...); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%v: got %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func firstNonNil(values ...any) any {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
 }

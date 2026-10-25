@@ -279,7 +279,9 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 	rows := make([]*Row, 0, len(groups))
 	for _, a := range groups {
 		row := a.finish()
-		if row.Total == 0 && (o.Agent == "" || o.Agent == "claude" && o.Kind == "session") {
+		// Cost-only rows, such as Copilot credits missing from modelMetrics,
+		// still bill.
+		if row.Total == 0 && (o.Agent == "" && row.Cost == 0 || o.Agent == "claude" && o.Kind == "session") {
 			continue
 		}
 		names := []string{}
