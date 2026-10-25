@@ -28,7 +28,7 @@ func NewBlocksCommand() *cobra.Command {
 	var length float64
 	var interval int
 	cmd := &cobra.Command{Use: "blocks", Short: "Show Claude billing windows and live usage", Args: cobra.NoArgs}
-	registerReportFlags(cmd, f, "blocks")
+	registerReportFlags(cmd, f, "blocks", "claude")
 	cmd.Flags().BoolVarP(&active, "active", "a", false, "Show active block")
 	cmd.Flags().BoolVarP(&recent, "recent", "r", false, "Show blocks from the last three days")
 	cmd.Flags().BoolVar(&live, "live", false, "Run the live usage dashboard")

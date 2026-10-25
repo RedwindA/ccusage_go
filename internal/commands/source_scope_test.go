@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +218,49 @@ func TestUnifiedSourceLastUsesTheUnifiedWeekStart(t *testing.T) {
 	}
 	p := sourceCLIJSON(t, "weekly", "--last", "1", "--json", "--offline", "--by-agent", "--config", cfg)
 	assertSourceRows(t, "weekly", sourceRows(p, "weekly"), map[string][2]float64{wednesday.Format("2006-01-02") + " codex": want})
+}
+
+// Upstream reads -w and startOfWeek only for weekly reports; the weekly
+// section of another unified report starts its weeks on Monday.
+func TestOnlyUnifiedWeeklyReportsTakeAStartOfWeek(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	var lines []string
+	for i, day := range []string{"2026-10-08", "2026-10-18", "2026-10-19"} {
+		lines = append(lines, fmt.Sprintf(`{"timestamp":"%sT12:00:00Z","sessionId":"s%d","costUSD":0.01,"message":{"id":"m%d","model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":5}}}`, day, i, i))
+	}
+	sourceCLIWrite(t, filepath.Join(claude, "projects/p/s.jsonl"), strings.Join(lines, "\n"))
+	defaults, commands := filepath.Join(home, "defaults.json"), filepath.Join(home, "commands.json")
+	sourceCLIWrite(t, defaults, `{"defaults":{"startOfWeek":"sunday"}}`)
+	sourceCLIWrite(t, commands, `{"commands":{"daily":{"startOfWeek":"sunday"},"weekly":{"startOfWeek":"sunday"},"monthly":{"startOfWeek":"sunday"},"session":{"startOfWeek":"sunday"}}}`)
+	weeks := func(args ...string) []string {
+		var weeks []string
+		for _, row := range sourceCLIJSON(t, append(args, "--sections", "weekly", "--json", "--offline", "--timezone", "UTC")...)["weekly"].([]any) {
+			weeks = append(weeks, row.(map[string]any)["period"].(string))
+		}
+		sort.Strings(weeks)
+		return weeks
+	}
+	monday, sunday := []string{"2026-10-05", "2026-10-12", "2026-10-19"}, []string{"2026-10-04", "2026-10-18"}
+	for _, cfg := range []string{defaults, commands} {
+		for _, kind := range []string{"daily", "monthly", "session"} {
+			if got := weeks(kind, "--config", cfg); !reflect.DeepEqual(got, monday) {
+				t.Errorf("%s --config %s: weeks %v, want %v", kind, filepath.Base(cfg), got, monday)
+			}
+		}
+		if got := weeks("weekly", "--config", cfg); !reflect.DeepEqual(got, sunday) {
+			t.Errorf("weekly --config %s: weeks %v, want %v", filepath.Base(cfg), got, sunday)
+		}
+	}
+	for _, kind := range []string{"daily", "monthly", "session"} {
+		if _, _, err := sourceCLIRun(kind, "-w", "sunday", "--json", "--offline"); err == nil {
+			t.Errorf("%s accepted -w", kind)
+		}
+	}
+	if got := weeks("weekly", "-w", "sunday"); !reflect.DeepEqual(got, sunday) {
+		t.Errorf("weekly -w sunday: weeks %v, want %v", got, sunday)
+	}
 }
 
 // Overrides, tier and date window configured for one source price only that

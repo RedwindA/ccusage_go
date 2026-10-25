@@ -35,7 +35,7 @@ func NewReportCommand(kind, agent string) *cobra.Command {
 	if agent != "" {
 		cmd.Short = "Show " + agent + " " + kind + " usage"
 	}
-	registerReportFlags(cmd, f, kind)
+	registerReportFlags(cmd, f, kind, agent)
 	if agent != "" && agent != "codex" && agent != "opencode" {
 		f.startOfWeek = "sunday"
 		cmd.Flags().Lookup("start-of-week").DefValue = "sunday"
@@ -44,8 +44,8 @@ func NewReportCommand(kind, agent string) *cobra.Command {
 	return cmd
 }
 
-func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
-	bindReportFlags(cmd.Flags(), f, kind)
+func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind, agent string) {
+	bindReportFlags(cmd.Flags(), f, kind, agent)
 	completeValues(cmd, "format", "table", "json", "csv")
 	completeValues(cmd, "order", "asc", "desc")
 	completeValues(cmd, "mode", "auto", "calculate", "display")
@@ -56,7 +56,7 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 	completeJSONFile(cmd, "config")
 }
 
-func bindReportFlags(p *pflag.FlagSet, f *reportFlags, kind string) {
+func bindReportFlags(p *pflag.FlagSet, f *reportFlags, kind, agent string) {
 	p.StringVarP(&f.format, "format", "f", "table", "Output format: table, json, csv")
 	p.BoolVarP(&f.json, "json", "j", false, "Output structured JSON")
 	p.StringVar(&f.dataPath, "data-path", "", "Explicit source directory (root reports: Claude data)")
@@ -67,7 +67,13 @@ func bindReportFlags(p *pflag.FlagSet, f *reportFlags, kind string) {
 	p.StringVarP(&f.order, "order", "o", "", "Sort order: asc or desc")
 	p.StringVarP(&f.mode, "mode", "m", "auto", "Cost mode: auto, calculate, display")
 	p.StringVar(&f.speed, "speed", "auto", "Codex pricing tier: auto, standard, flex, fast")
-	p.StringVarP(&f.startOfWeek, "start-of-week", "w", "monday", "First weekday for weekly reports")
+	// Upstream reads the start of week only for weekly reports; the weekly
+	// section of another unified report starts its weeks on Monday.
+	if agent != "" || kind == "weekly" {
+		p.StringVarP(&f.startOfWeek, "start-of-week", "w", "monday", "First weekday for weekly reports")
+	} else {
+		f.startOfWeek = "monday"
+	}
 	p.BoolVarP(&f.breakdown, "breakdown", "b", false, "Include model breakdown rows")
 	p.BoolVar(&f.noCost, "no-cost", false, "Remove cost fields and columns")
 	p.BoolVar(&f.compact, "compact", false, "Use compact tables")
