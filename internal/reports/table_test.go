@@ -34,6 +34,27 @@ func TestTableMatchesCCUsageSnapshot(t *testing.T) {
 	}
 }
 
+func TestCodexTableMatchesCCUsageSnapshot(t *testing.T) {
+	// Reference: ccusage codex daily --no-cost at 120 columns. Codex tables
+	// show reasoning even when it is zero, and split dates that would fit.
+	rows := []*Row{
+		{Period: "2026-10-20", Models: []string{"gpt-5"}, Input: 1000, Output: 300, Reasoning: 70, CacheRead: 200, Total: 1500},
+		{Period: "2026-10-21", Models: []string{"gpt-5"}, Input: 500, Output: 40, Total: 540},
+	}
+	var out bytes.Buffer
+	if err := WriteTable(&out, rows, Options{Kind: "daily", Agent: "codex", NoCost: true, TerminalWidth: 120}); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/ccusage_codex_daily.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()[strings.Index(out.String(), "┌"):]
+	if got != string(want) {
+		t.Fatalf("table differs from ccusage snapshot:\n%s\nexpected:\n%s", got, want)
+	}
+}
+
 func TestNarrowTableMatchesCCUsageSnapshot(t *testing.T) {
 	table := terminalTable{
 		headers:     []string{"Date", "Models", "Input", "Output", "Cost (USD)"},

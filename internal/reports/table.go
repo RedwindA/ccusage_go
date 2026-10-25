@@ -33,6 +33,11 @@ func WriteTable(w io.Writer, rows []*Row, o Options) error {
 	headers = append(headers, "Models")
 	textColumns := len(headers)
 	headers = append(headers, "Input", "Output")
+	// ccusage's Codex tables show reasoning output, even when it is zero.
+	reasoning := o.Agent == "codex"
+	if reasoning {
+		headers = append(headers, "Reasoning")
+	}
 	if !o.Compact {
 		headers = append(headers, "Cache Create", "Cache Read", "Total Tokens")
 	}
@@ -43,8 +48,15 @@ func WriteTable(w io.Writer, rows []*Row, o Options) error {
 		headers = append(headers, "Cost (USD)")
 	}
 	table := terminalTable{headers: headers, textColumns: textColumns, width: o.TerminalWidth, color: o.Color, compactDates: o.Kind == "daily" || o.Kind == "weekly"}
+	// ccusage splits Codex daily dates over two lines at 120 columns or
+	// fewer, even when the whole date would fit.
+	splitDates := o.Agent == "codex" && o.Kind == "daily" && o.TerminalWidth <= 120
 	add := func(r *Row, label, agent, models string, color int) {
-		cells := []string{terminalText(label)}
+		label = terminalText(label)
+		if _, err := time.Parse("2006-01-02", label); err == nil && splitDates {
+			label = label[:4] + "\n" + label[5:]
+		}
+		cells := []string{label}
 		if showUser {
 			cells = append(cells, terminalText(r.User))
 		}
@@ -55,6 +67,9 @@ func WriteTable(w io.Writer, rows []*Row, o Options) error {
 			cells = append(cells, terminalText(agent))
 		}
 		cells = append(cells, models, tableNumber(r.Input), tableNumber(r.Output))
+		if reasoning {
+			cells = append(cells, tableNumber(r.Reasoning))
+		}
 		if !o.Compact {
 			cells = append(cells, tableNumber(r.CacheCreate), tableNumber(r.CacheRead), tableNumber(r.Total))
 		}
@@ -68,7 +83,7 @@ func WriteTable(w io.Writer, rows []*Row, o Options) error {
 	}
 	breakdown := func(r *Row) {
 		for _, m := range r.Breakdowns {
-			add(&Row{Input: m.Input, Output: m.Output, CacheCreate: m.CacheCreate, CacheRead: m.CacheRead, Total: m.Total, Cost: m.Cost}, "", "", "  └─ "+shortTableModel(m.Name), 90)
+			add(&Row{Input: m.Input, Output: m.Output, Reasoning: m.Reasoning, CacheCreate: m.CacheCreate, CacheRead: m.CacheRead, Total: m.Total, Cost: m.Cost}, "", "", "  └─ "+shortTableModel(m.Name), 90)
 		}
 	}
 	var total Row
@@ -92,6 +107,7 @@ func WriteTable(w io.Writer, rows []*Row, o Options) error {
 		}
 		total.Input += r.Input
 		total.Output += r.Output
+		total.Reasoning += r.Reasoning
 		total.CacheCreate += r.CacheCreate
 		total.CacheRead += r.CacheRead
 		total.Total += r.Total

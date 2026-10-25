@@ -376,6 +376,10 @@ func configureTableOutput(cmd *cobra.Command, f *reportFlags, o *reports.Options
 	} else {
 		o.TerminalWidth = int(^uint(0) >> 1)
 	}
+	// ccusage's Codex tables keep every column at any width.
+	if o.Agent == "codex" {
+		o.Compact = false
+	}
 }
 
 func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {

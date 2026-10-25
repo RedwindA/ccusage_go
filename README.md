@@ -220,6 +220,8 @@ retain readable minimum column widths and may need horizontal scrolling.
 `--no-color` or `NO_COLOR` disables colors; `--color` or `FORCE_COLOR` enables
 them for redirected output. JSON and CSV exports retain their existing schemas.
 
+Codex tables, like ccusage's, add a Reasoning column and keep every column at any width, ignoring `--compact`.
+
 `--mode auto` uses available recorded costs, `--mode calculate` recalculates them,
 and `--mode display` uses recorded costs only, with source-specific billing rules.
 `--offline` uses embedded pricing snapshots; `--no-offline` enables online refresh.

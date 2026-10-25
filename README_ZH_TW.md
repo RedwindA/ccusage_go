@@ -184,6 +184,8 @@ Token 數字加上千位分隔，美元金額保留兩位小數。標準表格�
 `--no-color`／`NO_COLOR` 停用顏色，`--color`／`FORCE_COLOR` 可強制啟用。
 JSON 和 CSV 的資料格式維持不變。
 
+Codex 表格與 ccusage 相同，多一欄 Reasoning，且在任何寬度下都保留所有欄位，不受 `--compact` 影響。
+
 ## 技術堆疊
 
 - **程式語言**：Go 1.25+

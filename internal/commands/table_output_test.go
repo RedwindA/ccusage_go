@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,6 +39,25 @@ func TestTableOutputWidthAndExports(t *testing.T) {
 	stdout, stderr, err = sourceCLIRun(append(args, "--format", "csv")...)
 	if err != nil || !strings.HasPrefix(stdout, "daily,agent,") || strings.Contains(stdout, "╭") || strings.Contains(stderr, "Compact Mode") {
 		t.Fatalf("CSV polluted by table output: %v %s %s", err, stdout, stderr)
+	}
+}
+
+// ccusage's Codex tables never switch to the compact layout.
+func TestCodexTableKeepsEveryColumnWhenNarrow(t *testing.T) {
+	t.Setenv("COLUMNS", "80")
+	isolateSourceHomes(t)
+	dir := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(dir, "sessions/s.jsonl"), `{"type":"session_meta","timestamp":"2026-08-01T00:00:00Z","payload":{"id":"s","cwd":"/work"}}
+{"type":"turn_context","payload":{"model":"gpt-5"}}
+{"type":"event_msg","timestamp":"2026-08-01T00:00:02Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":10}}}}`)
+	for _, extra := range [][]string{nil, {"--compact"}} {
+		stdout, stderr, err := sourceCLIRun(append([]string{"codex", "daily", "--data-path", dir, "--offline", "--timezone", "UTC"}, extra...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(stdout, "Reasoni…") || !strings.Contains(stdout, "Create") || !strings.Contains(stdout, "Tokens") || strings.Contains(stderr, "Compact Mode") {
+			t.Fatalf("%v: compact Codex table: %s %s", extra, stdout, stderr)
+		}
 	}
 }
 
