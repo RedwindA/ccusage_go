@@ -32,7 +32,9 @@ func TestUnifiedDefaultSectionsAndAgentBreakdown(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("not JSON: %v %s", err, out)
 	}
-	if len(payload["daily"].([]any)) != 2 || len(payload["monthly"].([]any)) != 1 || len(payload["session"].([]any)) != 3 {
+	// The fixture's one transcript is one session, whatever sessionIds its
+	// lines record.
+	if len(payload["daily"].([]any)) != 2 || len(payload["monthly"].([]any)) != 1 || len(payload["session"].([]any)) != 1 {
 		t.Fatal(out)
 	}
 	if payload["totals"].(map[string]any)["totalCost"] != float64(9) {

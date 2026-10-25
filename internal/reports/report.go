@@ -190,7 +190,7 @@ func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
 		if w.Project != "" && e.ProjectPath != w.Project && filepath.Base(e.ProjectPath) != w.Project {
 			continue
 		}
-		if o.SessionID != "" && e.SessionID != o.SessionID {
+		if o.SessionID != "" && e.SessionID != o.SessionID && e.RecordedSessionID != o.SessionID {
 			continue
 		}
 		if o.SessionName != "" && e.SessionName != o.SessionName {

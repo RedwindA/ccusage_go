@@ -40,8 +40,12 @@ type UsageEntry struct {
 	WebSearchCost     float64 `json:"web_search_cost,omitempty"`
 	WebFetchCost      float64 `json:"web_fetch_cost,omitempty"`
 	SessionID         string  `json:"session_id"`
-	SessionName       string  `json:"session_name,omitempty"`
-	BlockType         string  `json:"block_type,omitempty"`
+	// RecordedSessionID is the sessionId a Claude line records, empty when
+	// it records none. SessionID is the session its file path names, which
+	// differs for workflow agents filed under their own directory.
+	RecordedSessionID string `json:"-"`
+	SessionName       string `json:"session_name,omitempty"`
+	BlockType         string `json:"block_type,omitempty"`
 	// Conversation-tree metadata; loader keeps these for breakdown reporting
 	// but never filters on IsSidechain (sub-agent calls are independently billed).
 	IsSidechain bool `json:"is_sidechain,omitempty"`

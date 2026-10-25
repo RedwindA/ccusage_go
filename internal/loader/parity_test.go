@@ -371,3 +371,37 @@ func TestClaudeSessionIgnoresSnakeCaseSessionID(t *testing.T) {
 		t.Fatal(sessions, entries)
 	}
 }
+
+// Sessions are named by the transcript's path, as upstream's
+// extract_session_parts names them; workflow agents form their own session.
+func TestFileSessionIDFollowsTheTranscriptPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"/home/me/.claude/projects/project-a/session-a.jsonl":                                      "session-a",
+		"/home/me/.claude/projects/project-a/session-a/chat.jsonl":                                 "session-a",
+		"/home/me/.claude/projects/project-a/session-a/subagents/worker.jsonl":                     "session-a",
+		"/home/me/.claude/projects/project-a/session-a/subagents/workflows/wf_1/agent-a.jsonl":     "wf_1",
+		"/home/me/.claude/projects/project-a/session-a/subagents/workflows/wf_1/subagents/b.jsonl": "wf_1",
+	} {
+		if got := fileSessionID(path); got != want {
+			t.Errorf("%s: got %q, want %q", path, got, want)
+		}
+	}
+}
+
+// Workflow agents record their parent's sessionId but are filed under a
+// directory of their own: they report as that session, and still dedupe
+// within the session they record.
+func TestClaudeWorkflowAgentsFormTheirOwnSession(t *testing.T) {
+	root := t.TempDir()
+	parent := writeNative(t, root, "projects/p/sess-x.jsonl", nativeRecord("sess-x", "msg_p", "", 1000, false))
+	agent := writeNative(t, root, "projects/p/sess-x/subagents/workflows/wf_1/agent-a.jsonl",
+		nativeRecord("sess-x", "msg_p", "", 1000, true), nativeRecord("sess-x", "msg_a", "req_a", 200, true))
+	entries := mustNative(t, parent, agent)
+	sessions := map[string]int{}
+	for _, e := range entries {
+		sessions[e.SessionID+"/"+e.RecordedSessionID] += e.InputTokens
+	}
+	if len(entries) != 2 || sessions["sess-x/sess-x"] != 1000 || sessions["wf_1/sess-x"] != 200 {
+		t.Fatal(sessions)
+	}
+}

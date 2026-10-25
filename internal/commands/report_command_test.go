@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -163,6 +164,43 @@ func TestClaudeSessionIDDetailJSON(t *testing.T) {
 	out, err = executeReport("claude", "session", "--id", "one", "--data-path", path, "--offline", "--json", "--no-cost")
 	if err != nil || strings.Contains(strings.ToLower(out), "cost") {
 		t.Fatalf("no-cost detail: %v %s", err, out)
+	}
+}
+
+// A workflow agent records its parent's sessionId under a directory of its
+// own. Session reports list it as that directory's session, as upstream
+// does, while --id with the parent's ID still finds its usage.
+func TestClaudeWorkflowAgentsReportAsTheirOwnSession(t *testing.T) {
+	root := filepath.Join(isolateSourceHomes(t), "claude")
+	line := `{"timestamp":"2026-10-01T10:0%d:00Z","sessionId":"sess-x","isSidechain":%t,"requestId":"req-%d","message":{"id":"msg-%d","model":"claude-sonnet-4-20250514","usage":{"input_tokens":%d,"output_tokens":%d}}}`
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/sess-x.jsonl"), fmt.Sprintf(line, 0, false, 1, 1, 1000, 500))
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/sess-x/subagents/workflows/wf_1/agent-a.jsonl"), fmt.Sprintf(line, 5, true, 2, 2, 200, 100))
+	sessions := map[string]float64{}
+	for _, args := range [][]string{{"claude", "session"}, {"session"}, {"daily", "--sections", "session"}} {
+		payload := sourceCLIJSON(t, append(args, "--data-path", root, "--offline", "--json")...)
+		rows, _ := payload["sessions"].([]any)
+		if rows == nil {
+			rows = payload["session"].([]any)
+		}
+		for _, row := range rows {
+			r := row.(map[string]any)
+			id, _ := r["sessionId"].(string)
+			if id == "" {
+				id = r["period"].(string)
+			}
+			sessions[strings.Join(args, " ")+" "+id] = r["totalTokens"].(float64)
+		}
+	}
+	want := map[string]float64{}
+	for _, args := range []string{"claude session", "session", "daily --sections session"} {
+		want[args+" sess-x"], want[args+" wf_1"] = 1500, 300
+	}
+	if !reflect.DeepEqual(sessions, want) {
+		t.Fatalf("got %v, want %v", sessions, want)
+	}
+	detail := sourceCLIJSON(t, "claude", "session", "--id", "sess-x", "--data-path", root, "--offline", "--json")
+	if detail["totalTokens"] != 1800.0 || len(detail["entries"].([]any)) != 2 {
+		t.Fatalf("parent detail: %#v", detail)
 	}
 }
 

@@ -59,7 +59,8 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			continue
 		}
 		exactKey := exactDedupeKey(&e)
-		sideKey := key(message, e.SessionID)
+		eSession := dedupeSession(&e)
+		sideKey := key(message, eSession)
 		i, found := exact[exactKey]
 		// A replaced survivor stays indexed under its old keys, so only
 		// match the entry now in that slot.
@@ -75,13 +76,13 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				old := &entries[survivors[r.index]]
 				session := r.session
 				if session == "" {
-					session = old.SessionID
+					session = dedupeSession(old)
 				}
 				oldRequest, _ := old.Raw["request_id"].(string)
 				// Requestless replays match across timestamps; replays with
 				// a new request ID need the parent's timestamp.
 				requestless := request == "" && oldRequest == ""
-				if session == e.SessionID && (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
+				if session == eSession && (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
 					i, found = r.index, true
 					break
 				}
@@ -97,10 +98,11 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			}
 		} else {
 			old := &entries[survivors[i]]
-			if e.SessionID != old.SessionID {
+			oldSession := dedupeSession(old)
+			if eSession != oldSession {
 				// Cross-session copies can become the survivor, so keep
 				// both sessions' routes for later sidechain replays.
-				for _, session := range []string{e.SessionID, old.SessionID} {
+				for _, session := range []string{eSession, oldSession} {
 					for _, route := range []map[string][]routeEntry{replays, sidechains} {
 						push(route, key(message, session), routeEntry{i, session})
 					}
@@ -122,7 +124,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				exact[exactKey] = i
 				// Route the new survivor under its own session and
 				// sidechain flag, as if it were a new entry.
-				if e.SessionID != old.SessionID || e.IsSidechain != old.IsSidechain {
+				if eSession != oldSession || e.IsSidechain != old.IsSidechain {
 					push(replays, sideKey, routeEntry{index: i})
 					if e.IsSidechain {
 						push(sidechains, sideKey, routeEntry{index: i})
@@ -147,9 +149,18 @@ func exactDedupeKey(e *types.UsageEntry) string {
 	message, _ := e.Raw["message_id"].(string)
 	request, _ := e.Raw["request_id"].(string)
 	if request == "" {
-		return requestlessKey(message, e.SessionID, e.Timestamp)
+		return requestlessKey(message, dedupeSession(e), e.Timestamp)
 	}
 	return dedupeKey(message, request)
+}
+
+// dedupeSession is the session an entry's copies are matched within: the
+// sessionId it records, or its file's session when it records none.
+func dedupeSession(e *types.UsageEntry) string {
+	if e.RecordedSessionID != "" {
+		return e.RecordedSessionID
+	}
+	return e.SessionID
 }
 
 // requestlessKey scopes an entry without a request ID to its session and
@@ -195,18 +206,27 @@ func dedupeKey(parts ...string) string {
 	return string(b)
 }
 
+// fileSessionID returns the session a transcript's path names, as upstream's
+// extract_session_parts does below projects/: the file name of
+// <project>/<session>.jsonl, the directory above subagents/ for subagent
+// transcripts, and otherwise the file's directory, so the agents of workflow
+// <session>/subagents/workflows/<id>/ form session <id>.
 func fileSessionID(path string) string {
 	parts := strings.Split(filepath.ToSlash(path), "/")
-	for i, p := range parts {
-		if p == "projects" && i+2 < len(parts) {
-			s := parts[i+2]
-			if s == "subagents" && i+3 < len(parts) {
-				s = parts[i+3]
-			}
-			return strings.TrimSuffix(s, ".jsonl")
-		}
+	if i := slices.Index(parts, "projects"); i >= 0 {
+		parts = parts[i+1:]
 	}
-	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	n := len(parts)
+	if n == 0 {
+		return "unknown"
+	}
+	if session, ok := strings.CutSuffix(parts[n-1], ".jsonl"); n == 2 && ok && session != "" {
+		return session
+	}
+	if n >= 4 && parts[n-2] == "subagents" {
+		return parts[n-3]
+	}
+	return parts[max(n-2, 0)]
 }
 func cloneObject(m map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(m))

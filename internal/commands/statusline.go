@@ -387,7 +387,7 @@ func statuslineBlockSince(now time.Time, loc *time.Location, lookbackDays int) s
 func renderStatusline(h statuslineHook, f *statuslineFlags, aliases map[string]string, entries []types.UsageEntry, loaded bool, today float64, block *types.SessionBlock, now time.Time, service *pricing.Service) string {
 	local := 0.0
 	for _, e := range entries {
-		if e.SessionID == h.SessionID {
+		if e.SessionID == h.SessionID || e.RecordedSessionID == h.SessionID {
 			local += e.Cost
 		}
 	}

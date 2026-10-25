@@ -37,8 +37,8 @@ func sourceConfigFixture(t *testing.T, config string) (string, string) {
 	t.Setenv("PI_AGENT_DIR", filepath.Join(home, "pi"))
 	t.Setenv("OPENCLAW_DIR", filepath.Join(home, "openclaw"))
 	claudeLine := `{"timestamp":"%sT12:00:00Z","sessionId":"session-%s","costUSD":%v,"message":{"id":"%s","model":"claude-sonnet-4-20250514","usage":{"input_tokens":%d,"output_tokens":5}}}`
-	sourceCLIWrite(t, filepath.Join(claude, "projects/project-a/a.jsonl"), fmt.Sprintf(claudeLine, "2026-01-04", "a", 0.01, "a1", 10)+"\n"+fmt.Sprintf(claudeLine, "2026-01-05", "a", 0.01, "a2", 10))
-	sourceCLIWrite(t, filepath.Join(claude, "projects/project-b/b.jsonl"), fmt.Sprintf(claudeLine, "2026-01-05", "b", 0.02, "b1", 1000))
+	sourceCLIWrite(t, filepath.Join(claude, "projects/project-a/session-a.jsonl"), fmt.Sprintf(claudeLine, "2026-01-04", "a", 0.01, "a1", 10)+"\n"+fmt.Sprintf(claudeLine, "2026-01-05", "a", 0.01, "a2", 10))
+	sourceCLIWrite(t, filepath.Join(claude, "projects/project-b/session-b.jsonl"), fmt.Sprintf(claudeLine, "2026-01-05", "b", 0.02, "b1", 1000))
 	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/01/04/before.jsonl"), sourceCodexRollout("2026-01-04T12:00:00Z", 900, 100))
 	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/01/05/in.jsonl"), sourceCodexRollout("2026-01-05T12:00:00Z", 1000, 500))
 	cfg := filepath.Join(home, "ccusage.json")

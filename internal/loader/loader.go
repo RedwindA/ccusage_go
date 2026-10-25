@@ -251,7 +251,7 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 
 	// Global backfill: apply session names across all entries
 	for i := range allEntries {
-		if name, ok := globalSessionNames[allEntries[i].SessionID]; ok {
+		if name, ok := globalSessionNames[dedupeSession(&allEntries[i])]; ok {
 			allEntries[i].SessionName = name
 		}
 	}
@@ -290,6 +290,7 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 	// Extract project path from file path
 	// File path format: /path/to/claude/projects/project-name/YYYY/MM/DD/file.jsonl
 	projectPath := l.extractProjectPath(path)
+	session := fileSessionID(path)
 
 	var entries []types.UsageEntry
 	lineNum := 0
@@ -403,9 +404,7 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 		}
 		for _, candidate := range candidates {
 			candidate.SourceFile = path
-			if candidate.SessionID == "" {
-				candidate.SessionID = fileSessionID(path)
-			}
+			candidate.SessionID = session
 			if candidate.Workspace == "" {
 				candidate.Workspace = workspace
 			}
@@ -1037,9 +1036,10 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.Cost = cost
 	}
 
-	// sessionId is optional; entries without one take their file's session.
+	// sessionId is optional; entries without one dedupe within their file's
+	// session.
 	if sessionID, ok := raw["sessionId"].(string); ok {
-		entry.SessionID = sessionID
+		entry.RecordedSessionID = sessionID
 	}
 
 	return nil

@@ -91,7 +91,7 @@ func (g *sessionGroups) union(a, b int) {
 }
 
 // recordedSessionID returns the first sessionId a transcript records, which
-// is the session the loader attributes its entries to. Transcripts record a
+// is the session the loader dedupes its entries within. Transcripts record a
 // single session, so reading stops at the first line that names one.
 func recordedSessionID(path string) string {
 	file, err := os.Open(path)
