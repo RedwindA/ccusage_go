@@ -219,7 +219,7 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			return err
 		}
 	}
-	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: f.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows()}
+	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: unified.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows()}
 	configureTableOutput(cmd, f, &o)
 	detected := map[string]bool{}
 	for _, entry := range entries {

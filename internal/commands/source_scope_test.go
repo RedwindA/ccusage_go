@@ -255,3 +255,31 @@ func TestUnifiedSourceConfigReachesSections(t *testing.T) {
 	assertSourceRows(t, "daily", sourceRows(p, "daily"), map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {10, 0.01}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}, "2026-01-05 pi": {1000, 0}})
 	assertSourceRows(t, "session", sourceRows(p, "session"), map[string][2]float64{"session-a claude": {20, 0.02}, "2026/01/04/before codex": {900, 0}, "2026/01/05/in codex": {1000, 0}, "in-range pi": {1000, 0}})
 }
+
+// A configured project filters only Claude, and only in unified daily
+// reports and their sections, whether it comes from the global sections or
+// Claude's own, which win; other sources' projects and other reports keep
+// every row. --project still filters every source.
+func TestUnifiedConfigProjectFiltersOnlyClaudeDaily(t *testing.T) {
+	filtered := map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {10, 0.01}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}}
+	for _, tc := range []struct {
+		config string
+		args   []string
+		key    string
+		want   map[string][2]float64
+	}{
+		{`{"defaults": {"timezone": "UTC"}, "commands": {"daily": {"project": "project-a"}}}`, []string{"daily"}, "daily", filtered},
+		{`{"commands": {"daily": {"project": "project-a"}}, "claude": {"defaults": {"timezone": "UTC"}}}`, []string{"daily"}, "daily", filtered},
+		{`{"defaults": {"timezone": "UTC"}, "commands": {"daily": {"project": "project-b"}}, "claude": {"commands": {"daily": {"project": "project-a"}}}}`, []string{"daily"}, "daily", filtered},
+		{`{"defaults": {"timezone": "UTC", "project": "project-a"}}`, []string{"daily", "--sections", "monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {20, 0.02}, "2026-01 codex": {1900, 0}}},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"project": "project-a"}}}`, []string{"daily"}, "daily", map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}}},
+		{`{"defaults": {"timezone": "UTC", "project": "project-a"}}`, []string{"weekly"}, "weekly", map[string][2]float64{"2025-12-29 claude": {10, 0.01}, "2025-12-29 codex": {900, 0}, "2026-01-05 claude": {1010, 0.03}, "2026-01-05 codex": {1000, 0}}},
+		{`{"defaults": {"timezone": "UTC"}, "claude": {"defaults": {"project": "project-a"}}}`, []string{"monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {1020, 0.04}, "2026-01 codex": {1900, 0}}},
+		{`{"defaults": {"timezone": "UTC"}, "claude": {"defaults": {"project": "project-a"}}}`, []string{"session"}, "session", map[string][2]float64{"session-a claude": {20, 0.02}, "session-b claude": {1000, 0.02}, "2026/01/04/before codex": {900, 0}, "2026/01/05/in codex": {1000, 0}}},
+		{`{"defaults": {"timezone": "UTC"}, "claude": {"defaults": {"project": "project-b"}}}`, []string{"weekly", "--project", "project-a"}, "weekly", map[string][2]float64{"2025-12-29 claude": {10, 0.01}, "2026-01-05 claude": {10, 0.01}}},
+	} {
+		_, cfg := sourceConfigFixture(t, tc.config)
+		p := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--by-agent", "--config", cfg)...)
+		assertSourceRows(t, tc.config+" "+strings.Join(tc.args, " "), sourceRows(p, tc.key), tc.want)
+	}
+}

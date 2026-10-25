@@ -16,12 +16,12 @@ import (
 // sourceScope holds the options a report loads, prices and filters one
 // source with.
 type sourceScope struct {
-	f            *reportFlags
-	loc          *time.Location
-	since, until string
-	overrides    map[string]pricing.Override
-	service      *pricing.Service
-	calc         *calculator.Calculator
+	f                     *reportFlags
+	loc                   *time.Location
+	since, until, project string
+	overrides             map[string]pricing.Override
+	service               *pricing.Service
+	calc                  *calculator.Calculator
 }
 
 // sourceScopes maps "" to the report's own scope and, in a unified report,
@@ -39,9 +39,10 @@ func (s sourceScopes) of(agent string) *sourceScope {
 	return s[""]
 }
 
-// newSourceScope resolves the timezone and inclusive date window f selects.
+// newSourceScope resolves the timezone, inclusive date window and project f
+// selects.
 func newSourceScope(cmd *cobra.Command, kind string, f *reportFlags, start time.Weekday) (*sourceScope, error) {
-	s := &sourceScope{f: f, loc: time.Local}
+	s := &sourceScope{f: f, loc: time.Local, project: f.project}
 	var err error
 	if f.timezone != "" {
 		if s.loc, err = time.LoadLocation(f.timezone); err != nil {
@@ -94,7 +95,8 @@ func newSourceScope(cmd *cobra.Command, kind string, f *reportFlags, start time.
 
 // addSources gives each source the config has sections for its own scope:
 // the command line cli read through that source's view of the config. Weeks
-// keep the unified start.
+// keep the unified start. Unless --project is given, a configured project
+// filters only Claude, and only in daily reports.
 func (s sourceScopes) addSources(cmd *cobra.Command, kind string, cli reportFlags, cfg config.Config, start time.Weekday) error {
 	for _, name := range SourceNames() {
 		if !cfg.Addresses(kind, name) {
@@ -105,6 +107,18 @@ func (s sourceScopes) addSources(cmd *cobra.Command, kind string, cli reportFlag
 			return fmt.Errorf("%w (in %s config)", err, name)
 		}
 		s[name] = scope
+	}
+	if explicitReportOption(cmd, "project") {
+		return nil
+	}
+	project := s.of("claude").project
+	for _, scope := range s {
+		scope.project = ""
+	}
+	if kind == "daily" && project != "" {
+		claude := *s.of("claude")
+		claude.project = project
+		s["claude"] = &claude
 	}
 	return nil
 }
@@ -167,7 +181,7 @@ func (s sourceScopes) windows() map[string]reports.Window {
 	windows := map[string]reports.Window{}
 	for name, scope := range s {
 		if name != "" {
-			windows[name] = reports.Window{Since: scope.since, Until: scope.until, Project: scope.f.project, Location: scope.loc}
+			windows[name] = reports.Window{Since: scope.since, Until: scope.until, Project: scope.project, Location: scope.loc}
 		}
 	}
 	return windows
