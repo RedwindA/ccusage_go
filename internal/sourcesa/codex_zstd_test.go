@@ -2,10 +2,12 @@ package sourcesa
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -129,6 +131,25 @@ func TestCodexKeepsUsageDecodedBeforeDamagedZstd(t *testing.T) {
 	fixture(t, root, "garbage.jsonl.zst", codexUsageLog("2026-10-14T00:02:00Z", 300))
 	if total, bySession := sumTokens(t, root); total != 120 || bySession["session"] != 120 {
 		t.Fatal(total, bySession)
+	}
+}
+
+func TestCodexStreamsZstdFrameClaimingHugeContentSize(t *testing.T) {
+	root := t.TempDir()
+	// A multi-segment frame with a 1 MiB window claims 8 GiB but holds one
+	// raw block of usage, then an empty last block.
+	log := codexUsageLog("2026-10-14T00:00:00Z", 100) + "\n"
+	frame := binary.LittleEndian.AppendUint64([]byte{0x28, 0xb5, 0x2f, 0xfd, 0xc0, 0x50}, 1<<33)
+	n := len(log) << 3 // raw block header: size, type 0, not last
+	frame = append(append(frame, byte(n), byte(n>>8), byte(n>>16)), log...)
+	fixture(t, root, "claims-more.jsonl.zst", string(append(frame, 0x01, 0x00, 0x00)))
+	fixture(t, root, "session.jsonl", codexUsageLog("2026-10-14T00:01:00Z", 200))
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	total, _ := sumTokens(t, root)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; total != 340 || allocated > 1<<30 {
+		t.Fatalf("total=%d allocated=%d", total, allocated)
 	}
 }
 

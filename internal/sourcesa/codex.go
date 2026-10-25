@@ -108,9 +108,12 @@ func decodeCodexPayload(payload []byte) (interface{}, error) {
 }
 
 // codexZstd decodes compressed rollouts; DecodeAll is safe for concurrent use.
-// codexDecoded reuses the decoded buffers, as fileread reuses file buffers.
+// DecodeAll first allocates the content size a frame header claims, so that
+// is capped at the largest window a stream may need, and a rollout claiming
+// more is streamed. codexDecoded reuses the decoded buffers, as fileread
+// reuses file buffers.
 var (
-	codexZstd, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	codexZstd, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(zstd.MaxWindowSize))
 	codexDecoded = sync.Pool{New: func() any { return new([]byte) }}
 )
 
@@ -149,7 +152,14 @@ func readCodexEncoding(path string) ([]byte, func(), error) {
 	bp := codexDecoded.Get().(*[]byte)
 	// A damaged frame keeps the usage decoded before it: the line it cuts is
 	// invalid JSON and skipped, like a torn plain tail.
-	*bp, _ = codexZstd.DecodeAll(b, (*bp)[:0])
+	*bp, err = codexZstd.DecodeAll(b, (*bp)[:0])
+	if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+		d, _ := zstd.NewReader(bytes.NewReader(b), zstd.WithDecoderConcurrency(1))
+		defer d.Close()
+		out := bytes.NewBuffer((*bp)[:0])
+		_, _ = d.WriteTo(out)
+		*bp = out.Bytes()
+	}
 	return *bp, func() { codexDecoded.Put(bp) }, nil
 }
 
