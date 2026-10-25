@@ -377,3 +377,23 @@ func TestConfigProjectOptionsApplyOnlyToClaudeDaily(t *testing.T) {
 		}
 	}
 }
+
+// A project filter reads only that project's transcripts, as upstream scans
+// only its directory, so a request copied into another project that would
+// win deduplication there still counts for the filtered one.
+func TestClaudeProjectFilterDedupesWithinTheProject(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	line := `{"timestamp":"2026-01-05T12:00:00Z","sessionId":"s-%s","requestId":"req_%d","message":{"id":"msg_%d","model":"claude-sonnet-4-20250514","usage":{"input_tokens":%d,"output_tokens":%d}}}`
+	sourceCLIWrite(t, filepath.Join(claude, "projects/wa/s-a.jsonl"), fmt.Sprintf(line, "a", 1, 1, 1000, 100))
+	sourceCLIWrite(t, filepath.Join(claude, "projects/wb/s-b.jsonl"), fmt.Sprintf(line, "b", 1, 1, 1000, 100)+"\n"+fmt.Sprintf(line, "b", 2, 2, 50, 5))
+	cfg := filepath.Join(home, "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults": {"timezone": "UTC"}, "claude": {"defaults": {"project": "wb"}}}`)
+	for _, args := range [][]string{{"claude", "daily", "--project", "wb"}, {"daily", "--config", cfg}, {"claude", "daily", "--config", cfg}} {
+		p := sourceCLIJSON(t, append(args, "--json", "--offline", "--timezone", "UTC")...)
+		if totals := p["totals"].(map[string]any); totals["inputTokens"] != 1050.0 || totals["outputTokens"] != 105.0 {
+			t.Errorf("%v: totals %v, want 1050 input and 105 output tokens", args, totals)
+		}
+	}
+}

@@ -289,7 +289,7 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 
 	// Extract project path from file path
 	// File path format: /path/to/claude/projects/project-name/YYYY/MM/DD/file.jsonl
-	projectPath := l.extractProjectPath(path)
+	projectPath := extractProjectPath(path)
 	session := fileSessionID(path)
 
 	var entries []types.UsageEntry
@@ -1048,7 +1048,7 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 // extractProjectPath returns the project directory portion of a JSONL file path.
 // Modern ~/.claude/projects/ uses a flat layout (project/file.jsonl or
 // project/subagents/file.jsonl); the legacy YYYY/MM/DD nesting is gone.
-func (l *Loader) extractProjectPath(filePath string) string {
+func extractProjectPath(filePath string) string {
 	dir := filepath.Dir(filePath)
 	parts := strings.Split(dir, string(os.PathSeparator))
 
@@ -1064,6 +1064,20 @@ func (l *Loader) extractProjectPath(filePath string) string {
 		return strings.Join(parts[:len(parts)-1], string(os.PathSeparator))
 	}
 	return dir
+}
+
+// ProjectFiles keeps the files of project, named by its directory under
+// projects/ or by that directory's path, as reports match it. Upstream reads
+// only that project's files, so its requests are deduplicated among
+// themselves: a copy of one in another project cannot take its place.
+func ProjectFiles(files []string, project string) []string {
+	var kept []string
+	for _, file := range files {
+		if dir := extractProjectPath(file); dir == project || filepath.Base(dir) == project {
+			kept = append(kept, file)
+		}
+	}
+	return kept
 }
 
 // calculateTotalTokens matches TypeScript's getTotalTokens function.

@@ -149,9 +149,9 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			if bounded && scope.since != "" {
 				since, _ = time.ParseInLocation("2006-01-02", scope.since, scope.loc)
 			}
-			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.f.debug, f.singleThread)
+			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.project, scope.f.debug, f.singleThread)
 			if whole && !since.IsZero() && err == nil {
-				history, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
+				history, _, err = loadClaude(ctx, job.paths, scope.loc, time.Time{}, scope.project, scope.f.debug, f.singleThread)
 			}
 		} else {
 			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
@@ -257,7 +257,7 @@ func sourcePaths(name, home string, env bool) []string {
 
 func loadSource(ctx context.Context, name string, paths []string, loc *time.Location, debug, singleThread bool) ([]types.UsageEntry, error) {
 	if name == "claude" {
-		entries, _, err := loadClaude(ctx, paths, loc, time.Time{}, debug, singleThread)
+		entries, _, err := loadClaude(ctx, paths, loc, time.Time{}, "", debug, singleThread)
 		return entries, err
 	}
 	for _, n := range sourcesa.Names() {
@@ -297,15 +297,19 @@ func pathsOverlap(a, b string) bool {
 }
 
 // loadClaude loads Claude usage from paths in a single load across every
-// root, which deduplicates repeated request/message IDs. A nonzero since
-// skips the sessions loader.SplitFilesBeforeSince rules out, so entries dated
-// before since may be missing and callers must discard them. detected
+// root, which deduplicates repeated request/message IDs. A project reads only
+// that project's files, so they are deduplicated among themselves. A nonzero
+// since skips the sessions loader.SplitFilesBeforeSince rules out, so entries
+// dated before since may be missing and callers must discard them. detected
 // reports whether any file, read or skipped, holds usage, as an unbounded
 // load would see it.
-func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, debug, singleThread bool) (entries []types.UsageEntry, detected bool, err error) {
+func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, project string, debug, singleThread bool) (entries []types.UsageEntry, detected bool, err error) {
 	files, err := claudeFiles(ctx, paths)
 	if err != nil {
 		return nil, false, err
+	}
+	if project != "" {
+		files = loader.ProjectFiles(files, project)
 	}
 	kept, pruned := loader.SplitFilesBeforeSince(files, since, time.Now())
 	if debug && len(pruned) > 0 {
