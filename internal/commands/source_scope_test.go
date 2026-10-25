@@ -98,7 +98,7 @@ func TestUnifiedReportsApplySourceConfigOfTheInvokedReport(t *testing.T) {
 		"commands": {
 			"codex:daily": {"mode": "calculate"},
 			"codex:weekly": {"mode": "calculate"},
-			"codex:monthly": {"mode": "display"},
+			"codex:monthly": {"speed": "fast"},
 			"codex:session": {"mode": "calculate"}
 		}
 	}`)
@@ -111,7 +111,7 @@ func TestUnifiedReportsApplySourceConfigOfTheInvokedReport(t *testing.T) {
 		{"bare", nil, "daily", map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-05 codex": {1000, 0.002}}},
 		{"daily", []string{"daily"}, "daily", map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-05 codex": {1000, 0.002}}},
 		{"weekly", []string{"weekly"}, "weekly", map[string][2]float64{"2025-12-29 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}}},
-		{"monthly", []string{"monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {1020, 0.04}, "2026-01 codex": {1000, 0}}},
+		{"monthly", []string{"monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {1020, 0.04}, "2026-01 codex": {1000, 0.006}}},
 		{"session", []string{"session"}, "session", map[string][2]float64{"session-a claude": {20, 0.02}, "session-b claude": {1000, 0.02}}},
 	} {
 		p := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--by-agent", "--config", cfg)...)

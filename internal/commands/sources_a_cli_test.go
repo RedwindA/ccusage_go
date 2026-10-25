@@ -136,3 +136,40 @@ func TestCodexServiceTiersAcrossReports(t *testing.T) {
 		}
 	}
 }
+
+// Upstream prices Codex usage in every cost mode, including display set by
+// flag or by a codex config section in unified reports; display mode only
+// leaves out the models it cannot price.
+func TestCodexIsPricedInDisplayMode(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	usage := func(model string) string {
+		return `{"timestamp":"2026-10-18T12:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"` + model + `","last_token_usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":50,"total_tokens":150}}}}`
+	}
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/10/18/rollout-a.jsonl"), usage("gpt-5"))
+	cfg := filepath.Join(home, "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"codex":{"defaults":{"mode":"display"}}}`)
+	for _, args := range [][]string{{"codex", "daily", "--mode", "display"}, {"codex", "session", "--mode", "display"}, {"daily", "--mode", "display"}, {"daily", "--config", cfg}, {"session", "--config", cfg}} {
+		totals := sourceCLIJSON(t, append(args, "--json", "--offline", "--timezone", "UTC")...)["totals"].(map[string]any)
+		cost, ok := totals["costUSD"].(float64)
+		if !ok {
+			cost, _ = totals["totalCost"].(float64)
+		}
+		if math.Abs(cost-0.00061375) > 1e-12 {
+			t.Errorf("%v: totals %v, want cost 0.00061375", args, totals)
+		}
+	}
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/10/18/rollout-b.jsonl"), usage("gpt-unknown-preview"))
+	for _, mode := range []string{"auto", "display"} {
+		for _, report := range [][]string{{"codex", "daily"}, {"daily"}} {
+			out, _, err := sourceCLIRun(append(report, "--mode", mode, "--json", "--offline", "--timezone", "UTC")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if flagged := strings.Contains(out, "missingPricing") && strings.Contains(out, "unpricedModels"); flagged != (mode == "auto") {
+				t.Errorf("%v --mode %s: missing pricing flagged = %v\n%s", report, mode, flagged, out)
+			}
+		}
+	}
+}
