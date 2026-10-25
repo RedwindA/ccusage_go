@@ -94,53 +94,39 @@ func LoadWithMode(ctx context.Context, name string, paths []string, loc *time.Lo
 		entries, err := loadPi(ctx, files, loc, mode)
 		return entries, errors.Join(discoveryErr, err)
 	}
-	var loadErrors []error
-	if discoveryErr != nil {
-		loadErrors = append(loadErrors, discoveryErr)
-	}
 	loaded := make([][]types.UsageEntry, len(files))
-	fileErrors := make([]error, len(files))
+	// Like upstream, a file that cannot be read or parsed is skipped.
 	if err := parallelEach(ctx, files, func(i int) {
 		f := files[i]
-		var entries []types.UsageEntry
-		var err error
 		switch name {
 		case "amp":
-			entries, err = loadAmp(f)
+			loaded[i], _ = loadAmp(f)
 		case "droid":
-			entries, err = loadDroid(f)
+			loaded[i], _ = loadDroid(f)
 		case "gemini":
-			entries, err = loadGemini(f)
+			loaded[i], _ = loadGemini(f)
 		case "qwen":
-			entries, err = loadQwen(f)
+			loaded[i], _ = loadQwen(f)
 		case "grok":
-			entries, err = loadGrok(f)
+			loaded[i], _ = loadGrok(f)
 		case "openclaw":
 			if filepath.Ext(f) == ".sqlite" {
-				entries, err = loadOpenClawDB(ctx, f)
+				loaded[i], _ = loadOpenClawDB(ctx, f)
 			} else {
-				entries, err = loadOpenClaw(f)
+				loaded[i], _ = loadOpenClaw(f)
 			}
 		}
-		loaded[i], fileErrors[i] = entries, err
 	}); err != nil {
 		return nil, err
 	}
 	var result []types.UsageEntry
-	for i, f := range files {
-		// Preserve usable records while reporting damaged or unreadable source files.
-		if err := fileErrors[i]; err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			loadErrors = append(loadErrors, fmt.Errorf("%s source %s: %w", name, f, err))
-		}
+	for i := range files {
 		result = append(result, loaded[i]...)
 	}
 	if name == "openclaw" {
 		result = mergeOpenClaw(result)
 	}
-	return finalize(result, loc, name != "amp" && name != "droid" && name != "openclaw" && name != "grok"), errors.Join(loadErrors...)
+	return finalize(result, loc, name != "amp" && name != "droid" && name != "openclaw" && name != "grok"), discoveryErr
 }
 
 // discover also returns the directory each file was found under; a file given
@@ -154,10 +140,6 @@ func discover(ctx context.Context, name string, paths []string) ([]string, []str
 		root = filepath.Clean(root)
 		st, e := os.Stat(root)
 		if e != nil {
-			if os.IsNotExist(e) {
-				continue
-			}
-			discoveryErrors = append(discoveryErrors, fmt.Errorf("%s source %s: %w", name, root, e))
 			continue
 		}
 		roots := []string{root}
@@ -197,8 +179,10 @@ func discover(ctx context.Context, name string, paths []string) ([]string, []str
 				if err := ctx.Err(); err != nil {
 					return err
 				}
+				// Like upstream, a directory that cannot be read is
+				// skipped, except that OpenClaw's fails the load.
 				if e != nil {
-					if os.IsNotExist(e) {
+					if os.IsNotExist(e) || name != "openclaw" {
 						return nil
 					}
 					return e

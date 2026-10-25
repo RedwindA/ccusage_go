@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -422,18 +421,14 @@ func parseCodex(p, dir string) (codexSession, error) {
 }
 func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([]types.UsageEntry, error) {
 	sessions := make([]codexSession, len(files))
-	var loadErrors []error
 	byID := map[string]int{}
-	parseErrors := make([]error, len(files))
+	// Like upstream, a rollout that cannot be read is skipped.
 	if err := parallelEach(ctx, files, func(i int) {
-		sessions[i], parseErrors[i] = parseCodex(files[i], dirs[i])
+		sessions[i], _ = parseCodex(files[i], dirs[i])
 	}); err != nil {
 		return nil, err
 	}
-	for i, p := range files {
-		if err := parseErrors[i]; err != nil {
-			loadErrors = append(loadErrors, fmt.Errorf("codex source %s: %w", p, err))
-		}
+	for i := range files {
 		if _, ok := byID[sessions[i].id]; !ok {
 			byID[sessions[i].id] = i
 		}
@@ -472,7 +467,7 @@ func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([
 			result = append(result, e)
 		}
 	}
-	return finalize(mergeCodexCopies(result, true), loc, false), errors.Join(loadErrors...)
+	return finalize(mergeCodexCopies(result, true), loc, false), nil
 }
 
 // MergeCodexCopies counts a usage event that several sessions record once,

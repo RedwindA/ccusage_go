@@ -85,11 +85,8 @@ func LoadUntil(ctx context.Context, name string, paths []string, loc *time.Locat
 	seenPaths := map[string]bool{}
 	for _, root := range paths {
 		info, err := os.Stat(root)
-		if os.IsNotExist(err) {
-			continue
-		}
 		if err != nil {
-			return nil, err
+			continue
 		}
 		if info.IsDir() {
 			switch name {
@@ -126,11 +123,9 @@ func LoadUntil(ctx context.Context, name string, paths []string, loc *time.Locat
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			// Like upstream, a directory that cannot be read is skipped.
 			if e != nil {
-				if os.IsNotExist(e) {
-					return nil
-				}
-				return e
+				return nil
 			}
 			if d.IsDir() {
 				return nil
@@ -209,7 +204,10 @@ func LoadUntil(ctx context.Context, name string, paths []string, loc *time.Locat
 		default:
 			entries, err = loadDatabase(ctx, name, file)
 		}
-		if err != nil {
+		// Like upstream, a file that cannot be read or parsed is skipped,
+		// except that an Antigravity database that cannot be read fails the
+		// load.
+		if err != nil && (name == "antigravity" || ctx.Err() != nil) {
 			return nil, fmt.Errorf("%s: %w", file, err)
 		}
 		out = append(out, entries...)

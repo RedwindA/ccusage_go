@@ -399,7 +399,12 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 	}
 	entries = []types.UsageEntry{}
 	if len(kept) > 0 {
+		// LoadParallel fails when no file it reads holds usage and one
+		// cannot be read; like upstream, such a file is skipped.
 		if entries, err = l.LoadParallel(ctx, kept); err != nil {
+			if ctx.Err() != nil {
+				return nil, false, ctx.Err()
+			}
 			entries = []types.UsageEntry{}
 		}
 	}
@@ -412,11 +417,6 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 		}
 		found, _ := l.LoadParallel(ctx, []string{file})
 		detected = len(found) > 0
-	}
-	// An unbounded load fails only when no file holds usage, so kept files
-	// that cannot be read are fatal only if no skipped file has any.
-	if err != nil && !detected {
-		return nil, false, err
 	}
 	return entries, detected, nil
 }
@@ -435,11 +435,12 @@ func claudeFiles(ctx context.Context, paths []string) ([]string, error) {
 			continue
 		}
 		err := dirwalk.Walk(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			// Like upstream, a directory that cannot be read is skipped.
+			if err != nil {
+				return nil
 			}
 			// Like upstream, read only regular files: a symlink below root
 			// is not followed.

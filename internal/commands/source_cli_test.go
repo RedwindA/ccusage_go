@@ -177,6 +177,60 @@ func TestUnifiedReportsFailOnASourceThatFails(t *testing.T) {
 	}
 }
 
+// Like upstream, a source file or directory that cannot be read or parsed is
+// skipped, so it fails neither the unified report nor its source's own.
+func TestReportsSkipSourceFilesThatCannotBeRead(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := fixtureReport(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	for _, env := range []string{"AMP_DATA_DIR", "GEMINI_DATA_DIR", "CODEX_HOME", "KIMI_DATA_DIR", "OPENCODE_DATA_DIR"} {
+		t.Setenv(env, filepath.Join(home, env))
+	}
+	sourceCLIWrite(t, filepath.Join(home, "AMP_DATA_DIR/threads/T-1.json"), `{"id":"T-1","messages":[`)
+	sourceCLIWrite(t, filepath.Join(home, "GEMINI_DATA_DIR/x/chats/session-2026-10-20T10-00-abc.json"), `{"sessionId":`)
+	lock := func(path string, dir bool) {
+		if dir {
+			if err := os.MkdirAll(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			sourceCLIWrite(t, path, "{}")
+		}
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(path, 0700) })
+		if _, err := os.Open(path); err == nil {
+			t.Skip("file permissions do not keep this user from reading, as for root or on Windows")
+		}
+	}
+	lock(filepath.Join(claude, "projects/locked"), true)
+	lock(filepath.Join(home, "GEMINI_DATA_DIR/locked"), true)
+	lock(filepath.Join(home, "CODEX_HOME/sessions/2026/10/20/rollout-2026-10-20T10-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl"), false)
+	lock(filepath.Join(home, "KIMI_DATA_DIR/sessions/a/b/wire.jsonl"), false)
+	lock(filepath.Join(home, "OPENCODE_DATA_DIR/storage/message/locked"), true)
+	for _, report := range [][]string{{"daily"}, {"session"}, {"claude", "daily"}, {"amp", "daily"}, {"gemini", "daily"}, {"codex", "daily"}, {"kimi", "daily"}, {"opencode", "daily"}} {
+		payload := sourceCLIJSON(t, append(report, "--offline", "--json")...)
+		want := 0.0
+		if len(report) == 1 || report[0] == "claude" {
+			want = 171
+		}
+		if tokens := payload["totals"].(map[string]any)["totalTokens"]; tokens != want {
+			t.Errorf("%v: totalTokens %v, want %v", report, tokens, want)
+		}
+	}
+	// So is a Claude transcript that cannot be read when no other one has
+	// usage.
+	only := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", only)
+	lock(filepath.Join(only, "projects/p/s.jsonl"), false)
+	for _, report := range [][]string{{"daily"}, {"claude", "daily"}, {"blocks"}} {
+		if _, stderr, err := sourceCLIRun(append(report, "--offline", "--json")...); err != nil {
+			t.Errorf("%v: %v %s", report, err, stderr)
+		}
+	}
+}
+
 func TestNativeSourceExtraReasoningIsBilled(t *testing.T) {
 	isolateSourceHomes(t)
 	root := t.TempDir()

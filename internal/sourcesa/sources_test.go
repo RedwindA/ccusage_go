@@ -399,22 +399,24 @@ func TestPiProjectScopedDedup(t *testing.T) {
 	}
 }
 
-func TestDamagedFilesReturnErrorsAlongsideUsableEntries(t *testing.T) {
+// Like upstream, a file that cannot be read or parsed is skipped, as is a
+// directory that cannot be read, except an OpenClaw one, which fails the load.
+func TestDamagedFilesAreSkipped(t *testing.T) {
 	t.Run("JSON", func(t *testing.T) {
 		root := t.TempDir()
 		fixture(t, root, "threads/good.json", `{"id":"s","messages":[{"role":"assistant","usage":{"timestamp":"2026-01-02T00:00:00Z","model":"gpt-5","inputTokens":1}}]}`)
-		bad := fixture(t, root, "threads/bad.json", `{"id":`)
+		fixture(t, root, "threads/bad.json", `{"id":`)
 		entries, err := Load(context.Background(), "amp", []string{root}, time.UTC)
-		if len(entries) != 1 || err == nil || !strings.Contains(err.Error(), bad) {
+		if len(entries) != 1 || err != nil {
 			t.Fatalf("entries=%+v err=%v", entries, err)
 		}
 	})
 	t.Run("SQLite", func(t *testing.T) {
 		root := t.TempDir()
-		bad := fixture(t, root, "agents/main/agent/openclaw-agent.sqlite", "this is not sqlite")
+		fixture(t, root, "agents/main/agent/openclaw-agent.sqlite", "this is not sqlite")
 		fixture(t, root, "agents/main/sessions/good.jsonl", `{"type":"message","timestamp":"2026-01-02T00:00:00Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":1}}}`)
 		entries, err := Load(context.Background(), "openclaw", []string{root}, time.UTC)
-		if len(entries) != 1 || err == nil || !strings.Contains(err.Error(), bad) {
+		if len(entries) != 1 || err != nil {
 			t.Fatalf("entries=%+v err=%v", entries, err)
 		}
 	})
@@ -428,16 +430,35 @@ func TestDamagedFilesReturnErrorsAlongsideUsableEntries(t *testing.T) {
 	})
 	t.Run("unreadable Pi file", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "missing.jsonl")
-		_, err := loadPi(context.Background(), []string{missing}, time.UTC, "auto")
-		if err == nil || !strings.Contains(err.Error(), missing) {
+		if _, err := loadPi(context.Background(), []string{missing}, time.UTC, "auto"); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("unreadable Codex file", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "missing.jsonl")
-		_, err := loadCodex(context.Background(), []string{missing}, []string{filepath.Dir(missing)}, time.UTC)
-		if err == nil || !strings.Contains(err.Error(), missing) {
+		if _, err := loadCodex(context.Background(), []string{missing}, []string{filepath.Dir(missing)}, time.UTC); err != nil {
 			t.Fatal(err)
+		}
+	})
+	t.Run("unreadable directory", func(t *testing.T) {
+		root := t.TempDir()
+		fixture(t, root, "threads/good.json", `{"id":"s","messages":[{"role":"assistant","usage":{"timestamp":"2026-01-02T00:00:00Z","model":"gpt-5","inputTokens":1}}]}`)
+		fixture(t, root, "agents/main/sessions/good.jsonl", `{"type":"message","timestamp":"2026-01-02T00:00:00Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":1}}}`)
+		for _, dir := range []string{"threads/locked", "agents/locked"} {
+			locked := filepath.Join(root, dir)
+			if err := os.Mkdir(locked, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(locked, 0700) })
+			if _, err := os.ReadDir(locked); err == nil {
+				t.Skip("file permissions do not keep this user from reading, as for root or on Windows")
+			}
+		}
+		if entries, err := Load(context.Background(), "amp", []string{root}, time.UTC); len(entries) != 1 || err != nil {
+			t.Fatalf("amp: entries=%+v err=%v", entries, err)
+		}
+		if _, err := Load(context.Background(), "openclaw", []string{root}, time.UTC); err == nil || !strings.Contains(err.Error(), "agents/locked") {
+			t.Fatalf("openclaw: err=%v", err)
 		}
 	})
 }

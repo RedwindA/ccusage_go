@@ -437,9 +437,8 @@ func TestBoundedUnifiedReportsStillDetectClaudeWithOnlyStaleFiles(t *testing.T) 
 	}
 }
 
-// An unbounded load drops unreadable files as long as another file holds
-// usage, so a bounded one must not fail when the only files it keeps are
-// unreadable but a skipped one has usage.
+// Like upstream, loads skip unreadable files, so a bounded one must not fail
+// when the only files it keeps are unreadable but a skipped one has usage.
 func TestBoundedReportsTolerateUnreadableKeptFiles(t *testing.T) {
 	root := pruneFixture(t)
 	old := pruneWrite(t, root, "projects/project-a/old.jsonl", pruneUsageLine("2026-09-01T12:00:00.000Z", "session-old", "msg-old", "req-old", 1))

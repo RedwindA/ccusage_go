@@ -2,8 +2,6 @@ package sourcesa
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -137,18 +135,14 @@ func piEqual(a, b types.UsageEntry, mode string) bool {
 }
 func loadPi(ctx context.Context, files []string, loc *time.Location, mode string) ([]types.UsageEntry, error) {
 	sessions := make([]piSession, len(files))
-	var loadErrors []error
 	byPath := map[string]int{}
-	parseErrors := make([]error, len(files))
+	// Like upstream, a file that cannot be read is skipped.
 	if err := parallelEach(ctx, files, func(i int) {
-		sessions[i], parseErrors[i] = parsePi(files[i])
+		sessions[i], _ = parsePi(files[i])
 	}); err != nil {
 		return nil, err
 	}
 	for i, p := range files {
-		if err := parseErrors[i]; err != nil {
-			loadErrors = append(loadErrors, fmt.Errorf("pi source %s: %w", p, err))
-		}
 		abs, _ := filepath.Abs(p)
 		byPath[abs] = i
 	}
@@ -223,5 +217,5 @@ func loadPi(ctx context.Context, files []string, loc *time.Location, mode string
 			deduped = append(deduped, e)
 		}
 	}
-	return finalize(deduped, loc, false), errors.Join(loadErrors...)
+	return finalize(deduped, loc, false), nil
 }
