@@ -69,3 +69,26 @@ func TestBlocksTokenLimitComesFromTheShownBlocks(t *testing.T) {
 		t.Errorf("--active: %v, want one block without a token limit", blocks)
 	}
 }
+
+// A gap starts a session after the last activity, which can be later than
+// the hour the next block starts at; upstream lists blocks by start time.
+func TestBlocksAreListedByStartTime(t *testing.T) {
+	at := func(clock string) time.Time {
+		ts, _ := time.Parse(time.RFC3339, "2026-09-28T"+clock+"Z")
+		return ts
+	}
+	root := blocksFixture(t, map[time.Time]int{at("06:10:00"): 10, at("06:37:05"): 10, at("11:50:00"): 10})
+	for order, want := range map[string]string{
+		"asc":  "2026-09-28T06:00:00Z 2026-09-28T11:00:00Z gap-2026-09-28T11:37:05Z",
+		"desc": "gap-2026-09-28T11:37:05Z 2026-09-28T11:00:00Z 2026-09-28T06:00:00Z",
+	} {
+		payload := sourceCLIJSON(t, "blocks", "--data-path", root, "--offline", "--json", "--timezone", "UTC", "--order", order)
+		var ids []string
+		for _, b := range payload["blocks"].([]any) {
+			ids = append(ids, b.(map[string]any)["id"].(string))
+		}
+		if got := strings.Join(ids, " "); got != want {
+			t.Errorf("--order %s: %s, want %s", order, got, want)
+		}
+	}
+}

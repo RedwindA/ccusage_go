@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -158,8 +159,11 @@ func NewBlocksCommand() *cobra.Command {
 		if maxLimit {
 			limit = calculator.GetMaxTokensFromBlocks(selected)
 		}
+		// A gap starts a session after the last activity, which can be
+		// later than the hour the next block starts at.
+		sort.SliceStable(selected, func(i, j int) bool { return selected[i].StartTime.Before(selected[j].StartTime) })
 		if f.order == "desc" {
-			sort.Slice(selected, func(i, j int) bool { return selected[i].StartTime.After(selected[j].StartTime) })
+			slices.Reverse(selected)
 		}
 		if f.format == "json" {
 			payload := blocksJSON(selected, limit)
