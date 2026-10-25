@@ -49,20 +49,24 @@ class PowerShellInstallerTest:
         self.target = self.destination / 'ccusage_go.exe'
         self.target.write_bytes(b'old binary')
         self.payload = b'MZ fixture-v0.15.0'
-        self.archive = self.assets / 'ccusage_go-windows-amd64.exe.zip'
-        self.write_archive('ccusage_go-windows-amd64.exe', self.payload)
+        # The installer picks the host's architecture, so serve both.
+        self.write_archives(self.payload)
         self.env = dict(os.environ, OS='Windows_NT', INSTALL_DIR=str(self.destination),
                         TEST_ASSETS=str(self.assets), TEST_INSTALLER=str(INSTALLER),
                         CCUSAGE_GO_NO_MODIFY_PATH='1', PROCESSOR_ARCHITECTURE='AMD64')
         for name in ('VERSION', 'TEST_DOWNLOAD_FAIL', 'TEST_PS7_RESPONSE'):
             self.env.pop(name, None)
 
-    def write_archive(self, name, payload):
-        with zipfile.ZipFile(self.archive, 'w') as archive:
-            archive.writestr(name, payload)
-            archive.writestr('LICENSE', 'MIT')
-        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
-        (self.assets / 'checksums.txt').write_text(f'{digest}  {self.archive.name}\n')
+    def write_archives(self, payload, name=None):
+        sums = ''
+        for arch in ('amd64', 'arm64'):
+            binary = f'ccusage_go-windows-{arch}.exe'
+            path = self.assets / f'{binary}.zip'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr(name or binary, payload)
+                archive.writestr('LICENSE', 'MIT')
+            sums += f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'
+        (self.assets / 'checksums.txt').write_text(sums)
 
     def run_installer(self, *args):
         return subprocess.run([self.shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -101,7 +105,8 @@ class PowerShellInstallerTest:
         self.assertIn('Add this directory to your PATH', result.stdout)
 
     def test_checksum_mismatch_preserves_existing_install(self):
-        self.archive.write_bytes(self.archive.read_bytes() + b'corrupt')
+        for archive in self.assets.glob('*.zip'):
+            archive.write_bytes(archive.read_bytes() + b'corrupt')
         self.assert_preserved(self.run_installer('v0.15.0'))
 
     def test_missing_checksum_preserves_existing_install(self):
@@ -109,11 +114,15 @@ class PowerShellInstallerTest:
         self.assert_preserved(self.run_installer('v0.15.0'))
 
     def test_missing_binary_preserves_existing_install(self):
-        self.write_archive('unexpected.exe', self.payload)
+        self.write_archives(self.payload, name='unexpected.exe')
         self.assert_preserved(self.run_installer('v0.15.0'))
 
     def test_download_failure_preserves_existing_install(self):
         self.env['TEST_DOWNLOAD_FAIL'] = '1'
+        self.assert_preserved(self.run_installer('v0.15.0'))
+
+    def test_empty_binary_preserves_existing_install(self):
+        self.write_archives(b'')
         self.assert_preserved(self.run_installer('v0.15.0'))
 
     def test_invalid_version(self):
@@ -128,22 +137,27 @@ class PowerShellInstallerTest:
     @unittest.skipUnless(os.name == 'nt', 'edits the Windows user PATH')
     def test_adds_install_dir_to_user_path_once(self):
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_ALL_ACCESS) as key:
+
+        def environment():
+            return winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_ALL_ACCESS)
+        with environment() as key:
             try:
                 saved = winreg.QueryValueEx(key, 'Path')
             except FileNotFoundError:
                 saved = None
+            winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, r'%USERPROFILE%\fixture-bin')
 
-            def restore():
+        def restore():
+            with environment() as key:
                 if saved is None:
                     winreg.DeleteValue(key, 'Path')
                 else:
                     winreg.SetValueEx(key, 'Path', 0, saved[1], saved[0])
-            self.addCleanup(restore)
-            winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, r'%USERPROFILE%\fixture-bin')
-            del self.env['CCUSAGE_GO_NO_MODIFY_PATH']
-            for _ in range(2):
-                self.assert_installed(self.run_installer('v0.15.0'))
+        self.addCleanup(restore)
+        del self.env['CCUSAGE_GO_NO_MODIFY_PATH']
+        for _ in range(2):
+            self.assert_installed(self.run_installer('v0.15.0'))
+        with environment() as key:
             value, kind = winreg.QueryValueEx(key, 'Path')
         self.assertEqual(kind, winreg.REG_EXPAND_SZ)
         self.assertEqual(value, str(self.destination) + r';%USERPROFILE%\fixture-bin')

@@ -83,19 +83,28 @@ try {
     if ($fields.Count -eq 2 -and $fields[1].TrimStart('*') -ceq $archive) { $expected = $fields[0]; break }
   }
   if ($expected -notmatch '^[0-9a-fA-F]{64}$') { throw "Missing or invalid checksum for $archive." }
-  $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+  # Hash and unzip through .NET: Get-FileHash and Expand-Archive live in
+  # script modules that Windows PowerShell cannot load when started with
+  # PowerShell 7's PSModulePath.
+  $sha = [Security.Cryptography.SHA256]::Create()
+  $stream = [IO.File]::OpenRead($zip)
+  try { $actual = -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) }
+  finally { $stream.Dispose(); $sha.Dispose() }
   if ($actual -ne $expected) { throw 'Checksum mismatch; installation aborted.' }
 
-  $extractDir = Join-Path $tmp 'extract'
-  Expand-Archive -LiteralPath $zip -DestinationPath $extractDir
-  $extracted = Join-Path $extractDir $binary
-  if (-not (Test-Path -LiteralPath $extracted -PathType Leaf)) { throw "$archive does not contain $binary." }
-  if ((Get-Item -LiteralPath $extracted).Length -eq 0) { throw 'Archive contained an empty binary.' }
-
-  # Stage beside the target so the final step is a rename on the same volume.
-  New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-  $staged = Join-Path $installDir ('.ccusage_go-install-' + [Guid]::NewGuid().ToString('N') + '.exe')
-  Copy-Item -LiteralPath $extracted -Destination $staged
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $zipFile = [IO.Compression.ZipFile]::OpenRead($zip)
+  try {
+    $entry = $zipFile.GetEntry($binary)
+    if (-not $entry) { throw "$archive does not contain $binary." }
+    if ($entry.Length -eq 0) { throw 'Archive contained an empty binary.' }
+    # Stage beside the target so the final step is a rename on the same volume.
+    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    $staged = Join-Path $installDir ('.ccusage_go-install-' + [Guid]::NewGuid().ToString('N') + '.exe')
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $staged)
+  } finally {
+    $zipFile.Dispose()
+  }
   if (Test-Path -LiteralPath $target) {
     # A running ccusage_go.exe cannot be overwritten but can be renamed; the
     # aside copy is removed the next time ccusage_go starts. A copy still
