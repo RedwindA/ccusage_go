@@ -540,10 +540,6 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 		entry.HasCost = true
 	}
 
-	if sessionID, ok := raw["session_id"].(string); ok {
-		entry.SessionID = sessionID
-	}
-
 	if blockType, ok := raw["block_type"].(string); ok {
 		entry.BlockType = blockType
 	}
@@ -1041,10 +1037,8 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.Cost = cost
 	}
 
-	// sessionId is optional (various field names)
+	// sessionId is optional; entries without one take their file's session.
 	if sessionID, ok := raw["sessionId"].(string); ok {
-		entry.SessionID = sessionID
-	} else if sessionID, ok := raw["session_id"].(string); ok {
 		entry.SessionID = sessionID
 	}
 

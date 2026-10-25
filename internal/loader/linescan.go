@@ -15,7 +15,7 @@ var lineTopKeys = map[string]bool{
 	"agentName": true, "aiTitle": true, "block_type": true, "cache_creation_input_tokens": true,
 	"cache_read_input_tokens": true, "cost": true, "costUSD": true, "customTitle": true, "cwd": true,
 	"id": true, "isMeta": true, "isSidechain": true, "message": true, "model": true, "project_path": true,
-	"requestId": true, "session_id": true, "sessionId": true, "timestamp": true, "type": true,
+	"requestId": true, "sessionId": true, "timestamp": true, "type": true,
 	// rawRetainKeys
 	"usage_limit_reset_time": true, "cache_creation": true, "service_tier": true, "message_id": true, "request_id": true,
 }

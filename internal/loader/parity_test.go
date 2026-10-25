@@ -345,3 +345,29 @@ func TestIncrementalRereadReplacesChangedNativeUsage(t *testing.T) {
 		t.Fatal(entries, changed, err)
 	}
 }
+
+// Claude Code records the session as camelCase sessionId. Resumed and forked
+// transcripts also carry a snake_case session_id naming another session,
+// which upstream never reads: entries keep their sessionId, or their file's
+// session without one, and requestless copies dedupe within that session.
+func TestClaudeSessionIgnoresSnakeCaseSessionID(t *testing.T) {
+	root := t.TempDir()
+	a := nativeRecord("sess-a", "msg_x", "", 1000, false)
+	a["session_id"] = "same"
+	b := nativeRecord("sess-b", "msg_x", "", 1000, false)
+	b["session_id"] = "same"
+	c := nativeRecord("", "msg_y", "req_y", 10, false)
+	delete(c, "sessionId")
+	c["session_id"] = "other"
+	entries := mustNative(t,
+		writeNative(t, root, "projects/p/sess-a.jsonl", a),
+		writeNative(t, root, "projects/p/sess-b.jsonl", b),
+		writeNative(t, root, "projects/p/sess-c.jsonl", c))
+	sessions := map[string]int{}
+	for _, e := range entries {
+		sessions[e.SessionID] += e.InputTokens
+	}
+	if len(entries) != 3 || sessions["sess-a"] != 1000 || sessions["sess-b"] != 1000 || sessions["sess-c"] != 10 {
+		t.Fatal(sessions, entries)
+	}
+}
