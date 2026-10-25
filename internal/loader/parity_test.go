@@ -320,7 +320,7 @@ func TestClaudeDailyDedupeMatchesSidechainReplaysAcrossTimestamps(t *testing.T) 
 		record("2026-03-20T09:46:40.000Z", "req-parent", 20, false),
 		record("2026-03-20T09:46:41.000Z", "req-sidechain-replay", 50000, true))
 	daily := New()
-	daily.SetDailyDedupe(func(e *types.UsageEntry) float64 { return e.Cost })
+	daily.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
 	entries, err := daily.LoadParallel(context.Background(), []string{p})
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestClaudeDailyDedupeBreaksEqualUsageTieByCost(t *testing.T) {
 	priced["costUSD"] = 0.5
 	p := writeNative(t, t.TempDir(), "projects/p/s.jsonl", nativeRecord("s", "msg_1", "req_1", 100, false), priced)
 	daily := New()
-	daily.SetDailyDedupe(func(e *types.UsageEntry) float64 { return e.Cost })
+	daily.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
 	entries, err := daily.LoadParallel(context.Background(), []string{p})
 	if err != nil {
 		t.Fatal(err)
@@ -349,6 +349,34 @@ func TestClaudeDailyDedupeBreaksEqualUsageTieByCost(t *testing.T) {
 		t.Fatalf("daily: %+v", entries)
 	}
 	if entries := mustNative(t, p); len(entries) != 1 || entries[0].HasCost {
+		t.Fatalf("entries: %+v", entries)
+	}
+}
+
+// Upstream's daily loader reads the assistant record an AgentProgress line
+// wraps as usage of the line's session, dated and identified by the record;
+// its entry loader skips the line.
+func TestClaudeDailyLoaderReadsAgentProgressRecords(t *testing.T) {
+	record := nativeRecord("record-session", "msg_1", "req_1", 100, true)
+	record["timestamp"] = "2026-09-12T04:38:41.000Z"
+	record["costUSD"] = 0.25
+	p := writeNative(t, t.TempDir(), "projects/p/s.jsonl", map[string]interface{}{
+		"type": "progress", "timestamp": "2026-09-12T04:38:42.296Z", "sessionId": "session-a", "isSidechain": false, "data": map[string]interface{}{"type": "agent_progress", "message": record},
+	})
+	daily := New()
+	daily.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
+	entries, err := daily.LoadParallel(context.Background(), []string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("daily: %+v", entries)
+	}
+	e := entries[0]
+	if e.RecordedSessionID != "session-a" || !e.Timestamp.Equal(time.Date(2026, 9, 12, 4, 38, 41, 0, time.UTC)) || e.ID != "msg_1" || e.Raw["request_id"] != "req_1" || !e.IsSidechain || e.Cost != 0.25 || e.TotalTokens != 102 {
+		t.Fatalf("daily: %+v", e)
+	}
+	if entries := mustNative(t, p); len(entries) != 0 {
 		t.Fatalf("entries: %+v", entries)
 	}
 }

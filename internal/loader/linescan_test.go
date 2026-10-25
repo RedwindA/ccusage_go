@@ -18,23 +18,33 @@ func projectLine(line []byte) (map[string]interface{}, error) {
 	if full == nil {
 		return nil, nil
 	}
-	out := map[string]interface{}{}
-	for k, v := range full {
-		if !lineTopKeys[k] {
-			continue
-		}
-		if message, ok := v.(map[string]interface{}); ok && k == "message" {
-			filtered := map[string]interface{}{}
-			for mk, mv := range message {
-				if lineMessageKeys[mk] {
-					filtered[mk] = mv
-				}
+	out := filterKeys(full, lineTopKeys)
+	if message, ok := out["message"].(map[string]interface{}); ok {
+		out["message"] = filterKeys(message, lineMessageKeys)
+	}
+	if data, ok := out["data"].(map[string]interface{}); ok {
+		data = filterKeys(data, lineDataKeys)
+		if record, ok := data["message"].(map[string]interface{}); ok {
+			record = filterKeys(record, lineProgressKeys)
+			if message, ok := record["message"].(map[string]interface{}); ok {
+				record["message"] = filterKeys(message, lineMessageKeys)
 			}
-			v = filtered
+			data["message"] = record
 		}
-		out[k] = v
+		out["data"] = data
 	}
 	return out, nil
+}
+
+// filterKeys returns the members of object that keys names.
+func filterKeys(object map[string]interface{}, keys map[string]bool) map[string]interface{} {
+	out := map[string]interface{}{}
+	for k, v := range object {
+		if keys[k] {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 var scanLineSeeds = []string{
@@ -45,6 +55,10 @@ var scanLineSeeds = []string{
 	`{"cwd":"café 😀","type":"user"}`,
 	"{\"cwd\":\"bad utf8 \xff\xfe\",\"type\":\"user\"}",
 	`{"message":"not an object","type":"assistant"}`,
+	`{"type":"progress","sessionId":"s","isSidechain":false,"data":{"type":"agent_progress","prompt":"p","message":{"type":"assistant","uuid":"u","timestamp":"2026-01-01T00:00:00Z","requestId":"r","isSidechain":true,"costUSD":0.5,"message":{"id":"m","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":1,"output_tokens":2}}}}}`,
+	`{"data":{"message":"not an object"},"type":"progress"}`,
+	`{"data":{"message":{"message":[1]}},"data":"later wins"}`,
+	`{"data":null}`,
 	`{"message":null,"costUSD":1.5e-3,"cost":-0,"isSidechain":true,"isMeta":false,"id":null}`,
 	`{"message":{"id":1,"model":["x"],"diagnostics":{"cache_miss_reason":{"type":"t"}}},"usage_limit_reset_time":"2026"}`,
 	`{"a":[1,-2.5e+10,true,false,null,{"b":[[]]},""],"type":"x"}`,

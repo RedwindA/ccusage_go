@@ -275,10 +275,11 @@ func TestClaudeReportsAgreeOnRequestlessDedupe(t *testing.T) {
 
 // Upstream totals claude daily and unified daily, weekly and monthly reports
 // from its Claude daily loader, which matches a /btw replay with a new
-// request ID to its parent across timestamps and keeps the costlier of
-// equal copies. claude weekly, monthly and session and unified sessions use
-// its entry loader, which keeps that replay and the first equal copy.
-func TestClaudeDailyFamilyDedupesAsUpstreamsDailyLoader(t *testing.T) {
+// request ID to its parent across timestamps, keeps the costlier of equal
+// copies and reads the assistant records AgentProgress lines wrap. claude
+// weekly, monthly and session and unified sessions use its entry loader,
+// which keeps that replay and the first equal copy and skips those lines.
+func TestClaudeDailyFamilyLoadsAsUpstreamsDailyLoader(t *testing.T) {
 	isolateSourceHomes(t)
 	for _, tc := range []struct {
 		name         string
@@ -293,6 +294,11 @@ func TestClaudeDailyFamilyDedupesAsUpstreamsDailyLoader(t *testing.T) {
 			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`,
 			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"req_1","costUSD":0.5,"message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`,
 		}, []float64{110, 0.5}, []float64{110, 0.00045}},
+		{"AgentProgress records", []string{
+			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`,
+			`{"type":"progress","timestamp":"2026-09-10T12:00:00.001Z","sessionId":"s","data":{"message":{"timestamp":"2026-09-10T12:00:00.000Z","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}}}`,
+			`{"type":"progress","timestamp":"2026-09-10T12:00:02.001Z","sessionId":"s","data":{"message":{"timestamp":"2026-09-10T12:00:02.000Z","requestId":"req_2","costUSD":0.25,"message":{"id":"msg_2","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"output_tokens":0}}}}}`,
+		}, []float64{1110, 0.25045}, []float64{110, 0.00045}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()

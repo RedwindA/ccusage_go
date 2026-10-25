@@ -83,11 +83,12 @@ func (l *Loader) SetTimezone(timezone *time.Location) {
 	l.timezone = timezone
 }
 
-// SetDailyDedupe makes loads deduplicate as upstream's Claude daily loader,
-// which serves its daily, weekly and monthly totals, rather than its entry
-// loader: a /btw sidechain replay matches its parent on message and session
+// SetDailyLoader makes loads read and deduplicate as upstream's Claude daily
+// loader, which serves its daily, weekly and monthly totals, rather than its
+// entry loader: the assistant record an AgentProgress line wraps counts as
+// usage, a /btw sidechain replay matches its parent on message and session
 // alone, and copies with equal usage keep the one cost prices higher.
-func (l *Loader) SetDailyDedupe(cost func(*types.UsageEntry) float64) {
+func (l *Loader) SetDailyLoader(cost func(*types.UsageEntry) float64) {
 	l.dailyCost = cost
 }
 
@@ -384,6 +385,13 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 
 		// Try to parse entry according to TypeScript schema rules
 		entry, err := l.parseEntry(raw, projectPath)
+		if err != nil && l.dailyCost != nil {
+			if record := agentProgressRecord(raw); record != nil {
+				if progress, progressErr := l.parseEntry(record, projectPath); progressErr == nil {
+					entry, err = progress, nil
+				}
+			}
+		}
 		entry.SourceFile = path
 		if err != nil {
 			// TypeScript version would skip this line silently
@@ -439,6 +447,22 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 	}
 
 	return entries, sessionNameMap, debugMsg, nil
+}
+
+// agentProgressRecord returns the assistant record a line without usage of
+// its own wraps under data.message, as upstream's daily loader reads an
+// AgentProgress line: with the line's sessionId and the record's own
+// timestamp, requestId, costUSD and isSidechain. It is nil for other lines.
+func agentProgressRecord(raw map[string]interface{}) map[string]interface{} {
+	data, _ := raw["data"].(map[string]interface{})
+	record, ok := data["message"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if session, ok := raw["sessionId"]; ok {
+		record["sessionId"] = session
+	}
+	return record
 }
 
 func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.UsageEntry, error) {
