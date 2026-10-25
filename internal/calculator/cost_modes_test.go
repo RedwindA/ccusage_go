@@ -124,3 +124,32 @@ func TestCodexSpeedDetectionUsesOnlyExplicitRoots(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// Expected costs are upstream ccusage's for the same usage.
+func TestEmbeddedSnapshotPricesNewModels(t *testing.T) {
+	c := modernCalculator()
+	small := types.UsageEntry{InputTokens: 1000, OutputTokens: 500, CacheReadInputTokens: 2000, CacheCreationInputTokens: 300}
+	large := types.UsageEntry{InputTokens: 250000, OutputTokens: 10000, CacheReadInputTokens: 50000, CacheCreationInputTokens: 20000}
+	fast := small
+	fast.Speed = "fast"
+	for _, tc := range []struct {
+		model string
+		usage types.UsageEntry
+		cost  float64
+	}{
+		{"claude-opus-5-5", small, .0159}, {"claude-opus-5-5", fast, .0318}, {"claude-opus-5-5", types.UsageEntry{InputTokens: 500000, CacheReadInputTokens: 500000, OutputTokens: 100000}, 4.1},
+		{"claude-sonnet-5-5", small, .00795}, {"claude-sonnet-5-5", large, .655},
+		{"claude-haiku-5-5", small, .0004075}, {"claude-haiku-5-5", large, .165},
+		{"gpt-6-sol", small, .00815}, {"gpt-6-sol", large, 1.27}, {"gpt-6-sol", fast, .0163},
+		{"gpt-6.1-sol", small, .00795}, {"gpt-6.1-sol", large, 1.26}, {"gpt-6.1-sol", fast, .0159},
+		{"gpt-6-luna", small, .0004075}, {"gpt-6-luna", large, .0635}, {"gpt-6-luna", fast, .000815},
+		{"gemini-4-argon", small, .00795}, {"gemini-4-argon", large, .655},
+	} {
+		e := tc.usage
+		e.Model = tc.model
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-tc.cost) > 1e-9 {
+			t.Errorf("%s %+v: %v, want %v", tc.model, tc.usage, e.Cost, tc.cost)
+		}
+	}
+}

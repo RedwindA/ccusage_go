@@ -1,4 +1,4 @@
-.PHONY: build clean test lint install build-all release-all release-linux release-darwin release-windows compress-releases
+.PHONY: build clean test lint update-pricing install build-all release-all release-linux release-darwin release-windows compress-releases
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS = -s -w -X main.version=$(VERSION)
@@ -28,6 +28,11 @@ benchmark:
 # Lint code
 lint:
 	golangci-lint run
+
+# Refresh internal/pricing's embedded snapshots from an upstream ccusage checkout
+UPSTREAM ?= ../ccusage
+update-pricing:
+	python3 scripts/update_pricing.py "$(UPSTREAM)"
 
 # Install to GOPATH
 install:

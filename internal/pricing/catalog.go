@@ -13,8 +13,9 @@ import (
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 )
 
-// Snapshot pinned by upstream flake.lock: BerriAI/litellm at
-// 6f37808d44a3a39ddc9f857343d833537d3b94f5. Models/fields follow upstream build.rs.
+// LiteLLM models/fields reduced like upstream's ccusage-pricing-snapshots
+// build.rs; regenerate with `make update-pricing UPSTREAM=<ccusage checkout>`.
+// Pinned by upstream flake.lock: BerriAI/litellm@d3b70c42ed1599727669ea7883c3971008a9113d
 //
 //go:embed litellm-pricing.json
 var liteSnapshot []byte
