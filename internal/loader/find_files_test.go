@@ -26,3 +26,18 @@ func TestLoadFromPathReadsASymlinkedProjectsDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
+
+// Like reports, the monitor skips a symlinked transcript.
+func TestLoadFromPathSkipsSymlinkedTranscripts(t *testing.T) {
+	dir := t.TempDir()
+	store := filepath.Join(dir, "session.jsonl")
+	line := createTestJSONLEntry(time.Now(), "claude-sonnet-4-20250514", 100, 50, "msg-1", "req-1")
+	require.NoError(t, os.WriteFile(store, []byte(line+"\n"), 0o644))
+	project := filepath.Join(dir, "claude", "projects", "proj-a")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	if err := os.Symlink(store, filepath.Join(project, "session.jsonl")); err != nil {
+		t.Skip(err)
+	}
+	entries, _ := New().LoadFromPath(context.Background(), filepath.Join(dir, "claude"))
+	require.Empty(t, entries)
+}

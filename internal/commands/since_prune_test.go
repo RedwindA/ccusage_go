@@ -444,9 +444,13 @@ func TestBoundedReportsTolerateUnreadableKeptFiles(t *testing.T) {
 	root := pruneFixture(t)
 	old := pruneWrite(t, root, "projects/project-a/old.jsonl", pruneUsageLine("2026-09-01T12:00:00.000Z", "session-old", "msg-old", "req-old", 1))
 	pruneTouch(t, old, pruneTime("2026-09-01T12:00:00Z"))
-	// A dangling symlink has no mtime, so it is always kept.
-	if err := os.Symlink(filepath.Join(root, "missing.jsonl"), filepath.Join(root, "projects/project-a/dangling.jsonl")); err != nil {
-		t.Skip(err)
+	unreadable := pruneWrite(t, root, "projects/project-a/unreadable.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-new", "msg-new", "req-new", 1))
+	pruneTouch(t, unreadable, pruneFreshMtime)
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(unreadable); err == nil {
+		t.Skip("file permissions do not keep this user from reading, as for root or on Windows")
 	}
 	codex := filepath.Join(t.TempDir(), "codex")
 	t.Setenv("CODEX_HOME", codex)

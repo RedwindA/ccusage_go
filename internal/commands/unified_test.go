@@ -195,3 +195,19 @@ func TestSymlinkedSourceRootsAreRead(t *testing.T) {
 		t.Errorf("claude session %v", s)
 	}
 }
+
+// Upstream lists only regular files below a source directory, so a
+// symlinked Claude transcript is not read.
+func TestSymlinkedClaudeTranscriptsAreSkipped(t *testing.T) {
+	root := pruneFixture(t)
+	store := pruneWrite(t, t.TempDir(), "session-a.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-a", "msg-1", "req-1", 1))
+	pruneWrite(t, root, "projects/project-a/session-b.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-b", "msg-2", "req-2", 2))
+	if err := os.Symlink(store, filepath.Join(root, "projects/project-a/session-a.jsonl")); err != nil {
+		t.Skip(err)
+	}
+	for _, args := range [][]string{{"claude", "daily"}, {"claude", "session"}, {"daily"}} {
+		if totals := sourceCLIJSON(t, append(args, "--json", "--offline", "--timezone", "UTC")...)["totals"].(map[string]any); totals["totalCost"] != 2.0 {
+			t.Errorf("%v: totals %v, want only session-b's cost 2", args, totals)
+		}
+	}
+}
