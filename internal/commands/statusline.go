@@ -167,13 +167,13 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 	offline := f.offline && !f.noOffline
 	prefetch := startPricing(cmd, offline)
 	home, _ := os.UserHomeDir()
-	paths := sourcePaths("claude", home, true)
+	// Without Claude directories the session has no cost of ccusage's own.
+	paths, loadErr := sourcePaths("claude", home, true)
 	service := newPricingService(offline, prefetch)
 	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
 	calc := calculator.New(service)
 	var entries []types.UsageEntry
-	var loadErr error
-	if statuslineShowsUsageCost(hook, f) {
+	if statuslineShowsUsageCost(hook, f) && loadErr == nil {
 		// A session can run over any span of history.
 		entries, loadErr = loadSource(cmd.Context(), "claude", paths, loc, f.debug, false)
 		entries, _ = calc.CalculateCosts(cmd.Context(), entries)

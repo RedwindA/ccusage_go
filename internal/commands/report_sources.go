@@ -76,15 +76,19 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 		fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --all-users ignores source path environment variables, explicit paths and pi.stores")
 		for _, u := range users {
 			for _, name := range names {
-				jobs = append(jobs, sourceJob{name: name, user: u.Name, paths: sourcePaths(name, u.Home, false)})
+				paths, _ := sourcePaths(name, u.Home, false)
+				jobs = append(jobs, sourceJob{name: name, user: u.Name, paths: paths})
 			}
 		}
 	} else {
 		for _, name := range names {
 			scope := scopes.of(name)
-			paths := sourcePaths(name, home, true)
+			paths, err := sourcePaths(name, home, true)
 			if f.dataPath != "" && (agent != "" || name == "claude") {
-				paths = splitPaths(f.dataPath, home)
+				paths, err = splitPaths(f.dataPath, home), nil
+			}
+			if err != nil {
+				return nil, nil, nil, err
 			}
 			if name == "pi" && scope.f.piPath != "" {
 				paths = splitPaths(scope.f.piPath, home)
@@ -102,7 +106,7 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 			jobs = append(jobs, sourceJob{name: name, paths: paths})
 		}
 		if agent == "" {
-			occupied := sourcePaths("pi", home, true)
+			occupied, _ := sourcePaths("pi", home, true)
 			if piPath := scopes.of("pi").f.piPath; piPath != "" {
 				occupied = splitPaths(piPath, home)
 			}
@@ -249,31 +253,58 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 	return boundedEntries, wholeEntries, detected, cmd.Context().Err()
 }
 
-func sourcePaths(name, home string, env bool) []string {
+// sourcePaths returns the directories name is read from under home, or with
+// env the ones its environment variables name. Only a set CLAUDE_CONFIG_DIR
+// can fail; see claudeConfigDirs.
+func sourcePaths(name, home string, env bool) ([]string, error) {
 	if name == "claude" {
 		if env {
-			if paths := os.Getenv("CLAUDE_CONFIG_DIR"); paths != "" {
-				return splitPaths(paths, home)
+			if dirs, ok := os.LookupEnv("CLAUDE_CONFIG_DIR"); ok {
+				return claudeConfigDirs(dirs, home)
 			}
 		}
 		xdg := filepath.Join(home, ".config")
 		if env && os.Getenv("XDG_CONFIG_HOME") != "" {
 			xdg = os.Getenv("XDG_CONFIG_HOME")
 		}
-		return []string{filepath.Join(xdg, "claude"), filepath.Join(home, ".claude")}
+		return []string{filepath.Join(xdg, "claude"), filepath.Join(home, ".claude")}, nil
 	}
 	for _, n := range sourcesa.Names() {
 		if n == name {
 			if env {
-				return sourcesa.DefaultPaths(name, home)
+				return sourcesa.DefaultPaths(name, home), nil
 			}
-			return sourcesa.DefaultPathsForHome(name, home)
+			return sourcesa.DefaultPathsForHome(name, home), nil
 		}
 	}
 	if env {
-		return sourcesb.DefaultPaths(name, home)
+		return sourcesb.DefaultPaths(name, home), nil
 	}
-	return sourcesb.DefaultPathsForHome(name, home)
+	return sourcesb.DefaultPathsForHome(name, home), nil
+}
+
+// claudeConfigDirs returns the Claude config directories dirs, a
+// CLAUDE_CONFIG_DIR value, names as upstream reads it: entries that hold a
+// projects/ directory or are one, skipping the rest. Naming none, even when
+// set but empty, is an error.
+func claudeConfigDirs(dirs, home string) ([]string, error) {
+	isDir := func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && info.IsDir()
+	}
+	var valid []string
+	for _, dir := range splitPaths(dirs, home) {
+		if filepath.Base(dir) == "projects" && isDir(dir) {
+			dir = filepath.Dir(dir)
+		}
+		if isDir(filepath.Join(dir, "projects")) {
+			valid = append(valid, dir)
+		}
+	}
+	if len(valid) == 0 {
+		return nil, fmt.Errorf("no valid Claude data directories found in CLAUDE_CONFIG_DIR; expected each path to be a Claude config directory containing projects/, or the projects/ directory itself: %s", dirs)
+	}
+	return valid, nil
 }
 
 // dailyDedupeCost prices a copy of a Claude entry as the report will, for

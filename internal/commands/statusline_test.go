@@ -44,9 +44,7 @@ func TestStatuslineRecalculatesSessionAndRespectsConfig(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	entry := map[string]any{"type": "assistant", "timestamp": time.Now().UTC().Format(time.RFC3339), "sessionId": "fixture-session", "message": map[string]any{"id": "unique-status-id", "model": "status-test-model", "usage": map[string]any{"input_tokens": 2, "output_tokens": 3}}}
 	raw, _ := json.Marshal(entry)
-	if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), append(raw, '\n'), 0600); err != nil {
-		t.Fatal(err)
-	}
+	sourceCLIWrite(t, filepath.Join(dir, "projects/p/session.jsonl"), string(raw)+"\n")
 	cfg := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(cfg, []byte(`{"commands":{"statusline":{"costSource":"both","pricingOverrides":{"status-test-model":{"inputCostPerToken":1,"outputCostPerToken":2}},"modelLabelAliases":{"Model":"Friendly"}}}}`), 0600); err != nil {
 		t.Fatal(err)
@@ -129,7 +127,7 @@ func TestClaudeScopedStatuslineConfigAndPricing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	t.Setenv("NO_COLOR", "1")
-	sourceCLIWrite(t, filepath.Join(dir, "session.jsonl"), `{"type":"assistant","timestamp":"2026-08-01T00:00:00Z","sessionId":"scoped","message":{"id":"scoped-message","model":"scoped-model","usage":{"input_tokens":2,"output_tokens":3}}}`)
+	sourceCLIWrite(t, filepath.Join(dir, "projects/p/session.jsonl"), `{"type":"assistant","timestamp":"2026-08-01T00:00:00Z","sessionId":"scoped","message":{"id":"scoped-message","model":"scoped-model","usage":{"input_tokens":2,"output_tokens":3}}}`)
 	cfg := filepath.Join(t.TempDir(), "config.json")
 	sourceCLIWrite(t, cfg, `{"claude":{"commands":{"statusline":{"costSource":"ccusage","modelLabelAliases":{"Model":"Scoped"},"pricingOverrides":{"scoped-model":{"inputCostPerToken":2,"outputCostPerToken":3}}}}}}`)
 	for _, args := range [][]string{{"statusline", "--no-cache", "--config", cfg}, {"claude", "statusline", "--no-cache", "--config", cfg}} {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,11 @@ func isolateSourceHomes(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for _, key := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "DROID_SESSIONS_DIR", "AMP_DATA_DIR", "PI_AGENT_DIR", "OPENCLAW_DIR", "GEMINI_DATA_DIR", "GROK_HOME", "QWEN_DATA_DIR", "OPENCODE_DATA_DIR", "CODEBUFF_DATA_DIR", "HERMES_HOME", "KILO_DATA_DIR", "KIMI_DATA_DIR", "ANTIGRAVITY_DATA_DIR", "ZCODE_HOME", "GOOSE_PATH_ROOT", "COPILOT_HOME", "COPILOT_OTEL_FILE_EXPORTER_PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
+	// A set CLAUDE_CONFIG_DIR must name a Claude directory; unset, Claude is
+	// read from the empty home.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	for _, key := range []string{"CODEX_HOME", "DROID_SESSIONS_DIR", "AMP_DATA_DIR", "PI_AGENT_DIR", "OPENCLAW_DIR", "GEMINI_DATA_DIR", "GROK_HOME", "QWEN_DATA_DIR", "OPENCODE_DATA_DIR", "CODEBUFF_DATA_DIR", "HERMES_HOME", "KILO_DATA_DIR", "KIMI_DATA_DIR", "ANTIGRAVITY_DATA_DIR", "ZCODE_HOME", "GOOSE_PATH_ROOT", "COPILOT_HOME", "COPILOT_OTEL_FILE_EXPORTER_PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		t.Setenv(key, filepath.Join(home, "absent"))
 	}
 	return home
@@ -235,5 +240,44 @@ func TestClaudeRootsShareProjectsAndSessions(t *testing.T) {
 		if len(rows) != 1 || rows[0].(map[string]any)["totalCost"] != 3.0 {
 			t.Errorf("%v rows %v, want one session-a costing 3", report, rows)
 		}
+	}
+}
+
+// Upstream reads Claude only from the CLAUDE_CONFIG_DIR entries that are a
+// Claude config directory with projects/, or that projects/ directory, and
+// fails every report that reads Claude when the variable is set but names
+// none; the statusline then shows no session cost of its own.
+func TestClaudeConfigDirNamesClaudeDirectories(t *testing.T) {
+	home := isolateSourceHomes(t)
+	t.Setenv("NO_COLOR", "1")
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	sourceCLIWrite(t, filepath.Join(home, "codex/sessions/2026/09/11/rollout.jsonl"), sourceCodexRollout("2026-09-11T12:00:00Z", 100, 10))
+	stray := filepath.Join(home, "stray")
+	pruneWrite(t, stray, "p/session-a.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-a", "msg-1", "req-1", 1))
+	claude := filepath.Join(home, "claude")
+	pruneWrite(t, claude, "projects/p/session-b.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-b", "msg-2", "req-2", 2))
+	args := []string{"--json", "--offline", "--timezone", "UTC"}
+	for _, dirs := range []string{filepath.Join(home, "absent"), stray, " , "} {
+		t.Setenv("CLAUDE_CONFIG_DIR", dirs)
+		for _, report := range [][]string{{"daily"}, {"weekly"}, {"session"}, {"claude", "daily"}, {"claude", "monthly"}, {"claude", "session"}, {"blocks"}} {
+			stdout, _, err := sourceCLIRun(append(report, args...)...)
+			if err == nil || !strings.Contains(err.Error(), "no valid Claude data directories found in CLAUDE_CONFIG_DIR") || stdout != "" {
+				t.Errorf("CLAUDE_CONFIG_DIR=%q %v: error=%v stdout=%q", dirs, report, err, stdout)
+			}
+		}
+		if totals := sourceCLIJSON(t, append([]string{"codex", "daily"}, args...)...)["totals"].(map[string]any); totals["totalTokens"] != 110.0 {
+			t.Errorf("CLAUDE_CONFIG_DIR=%q codex daily: totals %v", dirs, totals)
+		}
+		if totals := sourceCLIJSON(t, append([]string{"claude", "daily", "--data-path", claude}, args...)...)["totals"].(map[string]any); totals["totalCost"] != 2.0 {
+			t.Errorf("CLAUDE_CONFIG_DIR=%q claude daily --data-path: totals %v", dirs, totals)
+		}
+		out, err := runStatuslineTest(t, `{"session_id":"session-b","model":{"display_name":"Sonnet"}}`, "--offline", "--no-cache", "--cost-source", "ccusage")
+		if err != nil || !strings.Contains(out, "N/A session / $0.00 today / No active block") {
+			t.Errorf("CLAUDE_CONFIG_DIR=%q statusline: error=%v output=%q", dirs, err, out)
+		}
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", stray+","+filepath.Join(claude, "projects"))
+	if totals := sourceCLIJSON(t, append([]string{"claude", "daily"}, args...)...)["totals"].(map[string]any); totals["totalCost"] != 2.0 {
+		t.Errorf("claude daily: totals %v, want only the projects/ entry's cost 2", totals)
 	}
 }

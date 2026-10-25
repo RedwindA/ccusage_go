@@ -91,7 +91,7 @@ func NewBlocksCommand() *cobra.Command {
 			return fmt.Errorf("invalid --order %q", f.order)
 		}
 		home, _ := os.UserHomeDir()
-		paths := sourcePaths("claude", home, true)
+		paths, err := sourcePaths("claude", home, true)
 		if live {
 			existing := []string{}
 			for _, path := range paths {
@@ -102,7 +102,10 @@ func NewBlocksCommand() *cobra.Command {
 			paths = existing
 		}
 		if f.dataPath != "" {
-			paths = splitPaths(f.dataPath, home)
+			paths, err = splitPaths(f.dataPath, home), nil
+		}
+		if err != nil {
+			return err
 		}
 		offline := f.offline && !f.noOffline
 		prefetch := startPricing(cmd, offline)
