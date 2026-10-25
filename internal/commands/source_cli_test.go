@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -243,4 +244,44 @@ func firstNonNil(values ...any) any {
 		}
 	}
 	return nil
+}
+
+// Upstream's OpenCode loader has no price list in display mode, so a
+// message shows the cost it recorded, or $0 when it recorded none.
+func TestOpenCodeDisplayModeShowsRecordedCostsOnly(t *testing.T) {
+	isolateSourceHomes(t)
+	dir := t.TempDir()
+	t.Setenv("OPENCODE_DATA_DIR", dir)
+	db := sourceCLIDB(t, filepath.Join(dir, "opencode.db"), `CREATE TABLE message(id TEXT,session_id TEXT,data TEXT);`)
+	for _, row := range []string{
+		`('m1','s','{"role":"assistant","modelID":"gpt-5","providerID":"openai","time":{"created":1778000000000},"tokens":{"input":1000,"output":100},"cost":0.5}')`,
+		`('m2','s','{"role":"assistant","modelID":"gpt-5","providerID":"openai","time":{"created":1778000001000},"tokens":{"input":1000,"output":100},"cost":0}')`,
+		`('m3','s','{"role":"assistant","modelID":"unknown-opencode-model","providerID":"openai","time":{"created":1778000002000},"tokens":{"input":1000,"output":100}}')`,
+	} {
+		if _, err := db.Exec(`INSERT INTO message VALUES` + row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mode := range []string{"auto", "display"} {
+		want := 0.50225
+		if mode == "display" {
+			want = 0.5
+		}
+		for _, args := range [][]string{{"opencode", "daily"}, {"opencode", "session"}, {"daily"}} {
+			out, _, err := sourceCLIRun(append(args, "--mode", mode, "--json", "--offline", "--timezone", "UTC")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(out), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if cost, _ := payload["totals"].(map[string]any)["totalCost"].(float64); math.Abs(cost-want) > 1e-12 {
+				t.Errorf("%v --mode %s: cost %v, want %v", args, mode, cost, want)
+			}
+			if flagged := strings.Contains(out, "missingPricing"); flagged != (mode == "auto") {
+				t.Errorf("%v --mode %s: missing pricing flagged = %v\n%s", args, mode, flagged, out)
+			}
+		}
+	}
 }

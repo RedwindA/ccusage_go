@@ -56,6 +56,11 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 			entry.UsesStoredCost = c.mode != "calculate" && c.mode != "display"
 			return
 		}
+		// Upstream's OpenCode loader has no price list in display mode.
+		if entry.Agent == "opencode" && c.mode == "display" {
+			entry.Cost = 0
+			return
+		}
 		c.calculateSingleCost(ctx, entry)
 		return
 	}
