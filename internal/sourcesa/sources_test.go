@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,6 +264,19 @@ func TestCodexForkSuppressesParentReplayAndArchiveCopy(t *testing.T) {
 		t.Fatal(entries)
 	}
 	if entries[1].InputTokens != 20 || !entries[1].IsSidechain {
+		t.Fatal(entries)
+	}
+}
+func TestCodexRepeatedSnapshotDoesNotEndRewrittenBurst(t *testing.T) {
+	root := t.TempDir()
+	tokenCount := func(ts string, input, totalInput int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":%d},"total_token_usage":{"input_tokens":%d,"output_tokens":1,"total_tokens":%d},"model":"gpt-5.5"}}}`, ts, input, input+1, totalInput, totalInput+1)
+	}
+	// The replay repeats a snapshot, which must not end the burst; the
+	// child's own turn follows a real pause.
+	fixture(t, root, "child.jsonl", `{"type":"session_meta","payload":{"id":"child","forked_from_id":"missing-parent"}}`+"\n"+tokenCount("2026-07-10T08:00:00.100Z", 100, 100)+"\n"+tokenCount("2026-07-10T08:00:00.200Z", 100, 100)+"\n"+tokenCount("2026-07-10T08:00:08.000Z", 50, 50))
+	entries := loadTest(t, "codex", root)
+	if len(entries) != 1 || entries[0].InputTokens != 50 {
 		t.Fatal(entries)
 	}
 }

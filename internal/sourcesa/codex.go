@@ -50,6 +50,17 @@ type codexSession struct {
 	compacted   map[string]time.Time
 	id, parent  string
 	fork        time.Time
+	// burst is the first token count when the session opens with two
+	// written back to back, as Codex writes a fork's replayed history.
+	burst time.Time
+}
+
+// inCodexBurst reports whether usage at t continues a burst last seen at
+// prev. Codex writes a replayed history within milliseconds, while the
+// child's own first turn follows a pause of seconds.
+func inCodexBurst(prev, t time.Time) bool {
+	gap := t.Sub(prev)
+	return gap >= 0 && gap <= time.Second
 }
 
 // codexRequest pairs a compaction request's token_usage_record with the
@@ -247,6 +258,7 @@ func parseCodex(p string) (codexSession, error) {
 	fallbackModel := false
 	previous := codexUsage{}
 	hasPrevious := false
+	var heads []time.Time // the first two token counts
 	for _, r := range rows {
 		typ := str(r["type"])
 		payload := obj(r["payload"])
@@ -324,6 +336,10 @@ func parseCodex(p string) (codexSession, error) {
 			if totals == nil && last == nil {
 				continue
 			}
+			// A repeated snapshot adds no usage but still belongs to a burst.
+			if len(heads) < 2 {
+				heads = append(heads, t)
+			}
 			curr := parseCodexUsage(totals)
 			advanced := totals == nil || !hasPrevious || curr != previous
 			if last != nil && advanced {
@@ -386,6 +402,9 @@ func parseCodex(p string) (codexSession, error) {
 		s.entries = append(s.entries, newEntry(currentModel, fallbackModel, t, usage, eventSpeed))
 		s.usages = append(s.usages, usage)
 	}
+	if len(heads) == 2 && inCodexBurst(heads[0], heads[1]) {
+		s.burst = heads[0]
+	}
 	for id, req := range requests {
 		if req.recorded && req.compacted {
 			if s.compacted == nil {
@@ -432,17 +451,9 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 					skip++
 				}
 			}
-			if skip == 0 && len(s.entries) >= 2 {
-				gap := s.entries[1].Timestamp.Sub(s.entries[0].Timestamp)
-				if gap >= 0 && gap <= time.Second {
-					skip = 1
-					for skip < len(s.entries) {
-						gap = s.entries[skip].Timestamp.Sub(s.entries[skip-1].Timestamp)
-						if gap < 0 || gap > time.Second {
-							break
-						}
-						skip++
-					}
+			if skip == 0 && !s.burst.IsZero() {
+				for at := s.burst; skip < len(s.entries) && inCodexBurst(at, s.entries[skip].Timestamp); skip++ {
+					at = s.entries[skip].Timestamp
 				}
 			}
 		}
