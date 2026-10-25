@@ -12,11 +12,11 @@ import (
 
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/config"
-	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/reports"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type reportFlags struct {
@@ -44,7 +44,18 @@ func NewReportCommand(kind, agent string) *cobra.Command {
 }
 
 func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
-	p := cmd.Flags()
+	bindReportFlags(cmd.Flags(), f, kind)
+	completeValues(cmd, "format", "table", "json", "csv")
+	completeValues(cmd, "order", "asc", "desc")
+	completeValues(cmd, "mode", "auto", "calculate", "display")
+	completeValues(cmd, "speed", "auto", "standard", "flex", "fast")
+	completeValues(cmd, "start-of-week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+	completeList(cmd, "sections", "daily", "weekly", "monthly", "session")
+	completeDir(cmd, "data-path", "pi-path", "openclaw-path", "open-claw-path")
+	completeJSONFile(cmd, "config")
+}
+
+func bindReportFlags(p *pflag.FlagSet, f *reportFlags, kind string) {
 	p.StringVarP(&f.format, "format", "f", "table", "Output format: table, json, csv")
 	p.BoolVarP(&f.json, "json", "j", false, "Output structured JSON")
 	p.StringVar(&f.dataPath, "data-path", "", "Explicit source directory (root reports: Claude data)")
@@ -97,14 +108,6 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 	if kind == "session" {
 		p.StringVarP(&f.sessionID, "id", "i", "", "Show session details by ID")
 	}
-	completeValues(cmd, "format", "table", "json", "csv")
-	completeValues(cmd, "order", "asc", "desc")
-	completeValues(cmd, "mode", "auto", "calculate", "display")
-	completeValues(cmd, "speed", "auto", "standard", "flex", "fast")
-	completeValues(cmd, "start-of-week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-	completeList(cmd, "sections", "daily", "weekly", "monthly", "session")
-	completeDir(cmd, "data-path", "pi-path", "openclaw-path", "open-claw-path")
-	completeJSONFile(cmd, "config")
 }
 
 func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
@@ -115,29 +118,9 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	if err := cfg.Validate(kind, agent); err != nil {
 		return err
 	}
-	for name, value := range cfg.Options(kind, agent) {
-		name = optionFlag(name)
-		flag := cmd.Flags().Lookup(name)
-		if flag == nil || explicitReportOption(cmd, name) {
-			continue
-		}
-		if err := flag.Value.Set(fmt.Sprint(value)); err != nil {
-			return fmt.Errorf("config %s: %w", name, err)
-		}
-	}
-	loc := time.Local
-	if f.timezone != "" {
-		loc, err = time.LoadLocation(f.timezone)
-		if err != nil {
-			return fmt.Errorf("invalid timezone: %w", err)
-		}
-	}
-	since, err := reports.NormalizeDate(f.since)
-	if err != nil {
-		return err
-	}
-	until, err := reports.NormalizeDate(f.until)
-	if err != nil {
+	// Sources with config sections of their own read the command line again.
+	cli := *f
+	if err := applyConfig(cmd, cmd.Flags(), cfg.Options(kind, agent)); err != nil {
 		return err
 	}
 	weekdays := map[string]time.Weekday{"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday, "wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday}
@@ -145,42 +128,9 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	if !ok {
 		return fmt.Errorf("invalid --start-of-week %q", f.startOfWeek)
 	}
-	if f.last != 0 || cmd.Flags().Changed("last") {
-		if since != "" || until != "" {
-			return fmt.Errorf("--last cannot be combined with --since or --until")
-		}
-		since, err = reports.LastSince(kind, f.last, time.Now().In(loc), start)
-		if err != nil {
-			return err
-		}
-	}
-	if f.date != "" {
-		since, err = reports.NormalizeDate(f.date)
-		if err != nil {
-			return err
-		}
-		until = since
-	}
-	if f.month != "" {
-		t, e := time.ParseInLocation("2006-01", f.month, loc)
-		if e != nil {
-			return fmt.Errorf("invalid month: %w", e)
-		}
-		since = t.Format("2006-01-02")
-		until = t.AddDate(0, 1, -1).Format("2006-01-02")
-	}
-	if f.week != "" {
-		date, e := reports.NormalizeDate(f.week)
-		if e != nil {
-			return e
-		}
-		t, _ := time.ParseInLocation("2006-01-02", date, loc)
-		t = reports.WeekStart(t, start)
-		since = t.Format("2006-01-02")
-		until = t.AddDate(0, 0, 6).Format("2006-01-02")
-	}
-	if since != "" && until != "" && since > until {
-		return fmt.Errorf("--since must not be after --until")
+	unified, err := newSourceScope(cmd, kind, f, start)
+	if err != nil {
+		return err
 	}
 	if f.order == "" {
 		f.order = "asc"
@@ -191,14 +141,11 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	if f.order != "asc" && f.order != "desc" {
 		return fmt.Errorf("invalid --order %q", f.order)
 	}
-	if f.mode != "auto" && f.mode != "calculate" && f.mode != "display" {
-		return fmt.Errorf("invalid --mode %q", f.mode)
+	if err := checkCostFlags(f); err != nil {
+		return err
 	}
 	if f.debugSamples < 0 {
 		return fmt.Errorf("--debug-samples must be nonnegative")
-	}
-	if f.speed != "auto" && f.speed != "standard" && f.speed != "flex" && f.speed != "fast" {
-		return fmt.Errorf("invalid --speed %q", f.speed)
 	}
 	if f.json || f.jq != "" {
 		f.format = "json"
@@ -241,16 +188,20 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 		}
 		agent = "claude"
 	}
-	f.until = until
-	offline := f.offline && !f.noOffline
-	prefetch := startPricing(cmd, offline)
-	entries, err := loadReportEntries(cmd, agent, f, loc, cfg)
+	unified.overrides = cfg.PricingOverrides(kind, agent)
+	scopes := sourceScopes{"": unified}
+	if agent == "" {
+		if err := scopes.addSources(cmd, kind, cli, cfg, start); err != nil {
+			return err
+		}
+	}
+	prefetch := startPricing(cmd, scopes.offline())
+	entries, err := loadReportEntries(cmd, agent, scopes, cfg)
 	if err != nil {
 		return err
 	}
-	service := newPricingService(offline, prefetch)
-	service.SetOverrides(cfg.PricingOverrides(kind, agent))
-	debugPricing(cmd, service, entries, f)
+	scopes.price(prefetch)
+	debugPricing(cmd, entries, f, scopes)
 	if agent == "claude" && kind == "session" && f.sessionID != "" {
 		for i := range entries {
 			if entries[i].Raw == nil {
@@ -263,14 +214,12 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			entries[i].Raw["recorded_cost"] = recorded
 		}
 	}
-	calc := calculator.New(service)
-	calc.SetMode(f.mode)
-	calc.SetSpeed(f.speed)
-	entries, err = calc.CalculateCosts(cmd.Context(), entries)
-	if err != nil {
-		return err
+	for i := range entries {
+		if _, err := scopes.of(entries[i].Agent).calc.CalculateCosts(cmd.Context(), entries[i:i+1]); err != nil {
+			return err
+		}
 	}
-	o := reports.Options{Kind: kind, Agent: agent, Since: since, Until: until, Project: f.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: loc, WeekStart: start}
+	o := reports.Options{Kind: kind, Agent: agent, Since: unified.since, Until: unified.until, Project: f.project, SessionID: f.sessionID, SessionName: f.sessionName, Order: f.order, Instances: f.instances, ByAgent: f.byAgent, NoCost: f.noCost, Breakdown: f.breakdown, Compact: f.compact, Location: unified.loc, WeekStart: start, Sources: scopes.windows()}
 	configureTableOutput(cmd, f, &o)
 	detected := map[string]bool{}
 	for _, entry := range entries {
@@ -419,6 +368,32 @@ func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {
 	return enc.Encode(payload)
 }
 
+// applyConfig sets each config option on flags unless cmd's command line
+// sets it.
+func applyConfig(cmd *cobra.Command, flags *pflag.FlagSet, options map[string]any) error {
+	for name, value := range options {
+		name = optionFlag(name)
+		flag := flags.Lookup(name)
+		if flag == nil || explicitReportOption(cmd, name) {
+			continue
+		}
+		if err := flag.Value.Set(fmt.Sprint(value)); err != nil {
+			return fmt.Errorf("config %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func checkCostFlags(f *reportFlags) error {
+	if f.mode != "auto" && f.mode != "calculate" && f.mode != "display" {
+		return fmt.Errorf("invalid --mode %q", f.mode)
+	}
+	if f.speed != "auto" && f.speed != "standard" && f.speed != "flex" && f.speed != "fast" {
+		return fmt.Errorf("invalid --speed %q", f.speed)
+	}
+	return nil
+}
+
 func optionFlag(name string) string {
 	var b strings.Builder
 	for _, r := range name {
@@ -449,18 +424,19 @@ func explicitReportOption(cmd *cobra.Command, name string) bool {
 	return false
 }
 
-func debugPricing(cmd *cobra.Command, service *pricing.Service, entries []types.UsageEntry, f *reportFlags) {
+func debugPricing(cmd *cobra.Command, entries []types.UsageEntry, f *reportFlags, scopes sourceScopes) {
 	if !f.debug || f.noCost {
 		return
 	}
-	calc := calculator.New(service)
-	calc.SetMode("calculate")
-	calc.SetSpeed(f.speed)
 	count := 0
 	for _, entry := range entries {
 		if !entry.HasCost && entry.Cost == 0 {
 			continue
 		}
+		scope := scopes.of(entry.Agent)
+		calc := calculator.New(scope.service)
+		calc.SetMode("calculate")
+		calc.SetSpeed(scope.f.speed)
 		candidate := entry
 		candidate.Raw = make(map[string]any, len(entry.Raw))
 		for key, value := range entry.Raw {

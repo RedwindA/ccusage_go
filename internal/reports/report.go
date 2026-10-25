@@ -20,6 +20,28 @@ type Options struct {
 	Instances, ByAgent, NoCost, Breakdown, Compact                    bool
 	Location                                                          *time.Location
 	WeekStart                                                         time.Weekday
+	// Sources holds the window of each source a unified report resolved
+	// its own options for; other sources use Since, Until, Project and
+	// Location.
+	Sources map[string]Window
+}
+
+// Window is the date window, project and timezone a source's usage is
+// filtered and grouped with.
+type Window struct {
+	Since, Until, Project string
+	Location              *time.Location
+}
+
+func (o Options) window(agent string) Window {
+	w, ok := o.Sources[agent]
+	if !ok {
+		w = Window{Since: o.Since, Until: o.Until, Project: o.Project, Location: o.Location}
+	}
+	if w.Location == nil {
+		w.Location = time.Local
+	}
+	return w
 }
 
 type Row struct {
@@ -152,10 +174,6 @@ func activityBounds(e types.UsageEntry) (time.Time, time.Time) {
 	return first, last
 }
 func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
-	loc := o.Location
-	if loc == nil {
-		loc = time.Local
-	}
 	candidates := make([]types.UsageEntry, 0, len(entries))
 	latest := map[string]time.Time{}
 	for _, e := range entries {
@@ -165,10 +183,11 @@ func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
 		if o.Agent != "" && o.Agent != "all" && e.Agent != o.Agent {
 			continue
 		}
-		if aggregate, _ := e.Raw["session_aggregate"].(bool); aggregate && (o.Kind != "session" || o.Since != "" || o.Until != "") {
+		w := o.window(e.Agent)
+		if aggregate, _ := e.Raw["session_aggregate"].(bool); aggregate && (o.Kind != "session" || w.Since != "" || w.Until != "") {
 			continue
 		}
-		if o.Project != "" && e.ProjectPath != o.Project && filepath.Base(e.ProjectPath) != o.Project {
+		if w.Project != "" && e.ProjectPath != w.Project && filepath.Base(e.ProjectPath) != w.Project {
 			continue
 		}
 		if o.SessionID != "" && e.SessionID != o.SessionID {
@@ -192,8 +211,9 @@ func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
 		if wholeSessionDate(e, o) {
 			t = latest[sessionGroupKey(e, o)]
 		}
-		date := t.In(loc).Format("2006-01-02")
-		if o.Since != "" && date < o.Since || o.Until != "" && date > o.Until {
+		w := o.window(e.Agent)
+		date := t.In(w.Location).Format("2006-01-02")
+		if w.Since != "" && date < w.Since || w.Until != "" && date > w.Until {
 			continue
 		}
 		out = append(out, e)
@@ -218,17 +238,13 @@ func displayModel(e types.UsageEntry) string {
 
 func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 	groups := map[string]*accumulator{}
-	loc := o.Location
-	if loc == nil {
-		loc = time.Local
-	}
 	entries = Filter(entries, o)
 	if o.Agent == "" && (o.Kind == "daily" || o.Kind == "weekly" || o.Kind == "monthly") {
-		entries = dropEmptyAgentDays(entries, o, loc)
+		entries = dropEmptyAgentDays(entries, o)
 	}
 	for _, e := range entries {
 		e.Model = displayModel(e)
-		t := e.Timestamp.In(loc)
+		t := e.Timestamp.In(o.window(e.Agent).Location)
 		var period string
 		switch o.Kind {
 		case "monthly":
@@ -326,10 +342,10 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 // and upstream drops an agent's day with neither tokens nor cost before
 // merging. A Copilot credit row that --mode calculate prices at $0 must not
 // list Copilot or its unknown model on a day another agent used.
-func dropEmptyAgentDays(entries []types.UsageEntry, o Options, loc *time.Location) []types.UsageEntry {
+func dropEmptyAgentDays(entries []types.UsageEntry, o Options) []types.UsageEntry {
 	key := func(e types.UsageEntry) string {
 		user, _ := e.Raw["system_user"].(string)
-		k := e.Timestamp.In(loc).Format("2006-01-02") + "\x00" + user + "\x00" + e.Agent
+		k := e.Timestamp.In(o.window(e.Agent).Location).Format("2006-01-02") + "\x00" + user + "\x00" + e.Agent
 		if o.Instances {
 			k += "\x00" + e.ProjectPath
 		}

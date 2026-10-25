@@ -135,6 +135,15 @@ func (c Config) Options(command, agent string) map[string]any {
 	}
 	return out
 }
+
+// Addresses reports whether the file has a section for agent: an agent
+// object, or a "<agent> <command>" or "<agent>:<command>" command. A unified
+// report then loads that source with Options(command, agent), as
+// `ccusage <agent> <command>` would, rather than with its own options.
+func (c Config) Addresses(command, agent string) bool {
+	commands := object(c.Values["commands"])
+	return object(c.Values[agent]) != nil || object(commands[agent+" "+command]) != nil || object(commands[agent+":"+command]) != nil
+}
 func (c Config) PricingOverrides(command, agent string) map[string]pricing.Override {
 	out := map[string]pricing.Override{}
 	raw, _ := json.Marshal(c.Options(command, agent)["pricingOverrides"])

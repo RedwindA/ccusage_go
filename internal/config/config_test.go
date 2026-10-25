@@ -102,3 +102,17 @@ func TestValidationIsScopedToActiveCommandAndNamedStoreReaders(t *testing.T) {
 		t.Fatal("invalid named store accepted for unified daily")
 	}
 }
+func TestAddressesOnlySourcesWithSections(t *testing.T) {
+	c, err := Load(fixture(t, `{"defaults":{"mode":"display"},"commands":{"pi:daily":{"json":true},"amp daily":{"json":true},"codex:weekly":{}},"openclaw":{"defaults":{"offline":true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[string]bool{"pi": true, "amp": true, "openclaw": true, "codex": false, "claude": false} {
+		if c.Addresses("daily", agent) != want {
+			t.Errorf("%s: addressed %v", agent, !want)
+		}
+	}
+	if !c.Addresses("weekly", "codex") {
+		t.Error("codex weekly not addressed")
+	}
+}

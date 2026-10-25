@@ -31,7 +31,8 @@ type sourceJob struct {
 	paths             []string
 }
 
-func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *time.Location, cfg config.Config) ([]types.UsageEntry, error) {
+func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cfg config.Config) ([]types.UsageEntry, error) {
+	f := scopes[""].f
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -67,15 +68,16 @@ func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *ti
 		}
 	} else {
 		for _, name := range names {
+			scope := scopes.of(name)
 			paths := sourcePaths(name, home, true)
 			if f.dataPath != "" && (agent != "" || name == "claude") {
 				paths = splitPaths(f.dataPath, home)
 			}
-			if name == "pi" && f.piPath != "" {
-				paths = splitPaths(f.piPath, home)
+			if name == "pi" && scope.f.piPath != "" {
+				paths = splitPaths(scope.f.piPath, home)
 			}
-			if name == "openclaw" && f.openclawPath != "" {
-				paths = splitPaths(f.openclawPath, home)
+			if name == "openclaw" && scope.f.openclawPath != "" {
+				paths = splitPaths(scope.f.openclawPath, home)
 			}
 			for i, path := range paths {
 				if path == "~" {
@@ -88,8 +90,8 @@ func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *ti
 		}
 		if agent == "" {
 			occupied := sourcePaths("pi", home, true)
-			if f.piPath != "" {
-				occupied = splitPaths(f.piPath, home)
+			if piPath := scopes.of("pi").f.piPath; piPath != "" {
+				occupied = splitPaths(piPath, home)
 			}
 			for _, store := range cfg.PiStores {
 				paths := splitPaths(store.Path, home)
@@ -118,19 +120,24 @@ func loadReportEntries(cmd *cobra.Command, agent string, f *reportFlags, loc *ti
 	work := func(i int) {
 		defer wg.Done()
 		job := jobs[i]
+		// Named pi stores load with the report's own options.
+		scope := scopes[""]
+		if job.label == "" {
+			scope = scopes.of(job.name)
+		}
 		var entries []types.UsageEntry
 		var err error
-		if job.name == "copilot" && f.until != "" {
-			bound, e := time.ParseInLocation("2006-01-02", f.until, loc)
+		if job.name == "copilot" && scope.until != "" {
+			bound, e := time.ParseInLocation("2006-01-02", scope.until, scope.loc)
 			if e != nil {
 				err = e
 			} else {
-				entries, err = sourcesb.LoadUntil(ctx, job.name, job.paths, loc, bound.AddDate(0, 0, 1))
+				entries, err = sourcesb.LoadUntil(ctx, job.name, job.paths, scope.loc, bound.AddDate(0, 0, 1))
 			}
 		} else if job.name == "pi" {
-			entries, err = sourcesa.LoadWithMode(ctx, job.name, job.paths, loc, f.mode)
+			entries, err = sourcesa.LoadWithMode(ctx, job.name, job.paths, scope.loc, scope.f.mode)
 		} else {
-			entries, err = loadSource(ctx, job.name, job.paths, loc, f.debug, f.singleThread)
+			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
 		}
 		fallbackSpeed := "standard"
 		if job.name == "codex" {

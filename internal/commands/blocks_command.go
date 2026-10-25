@@ -111,7 +111,7 @@ func NewBlocksCommand() *cobra.Command {
 		}
 		service := newPricingService(offline, prefetch)
 		service.SetOverrides(cfg.PricingOverrides("blocks", "claude"))
-		debugPricing(cmd, service, entries, f)
+		debugPricing(cmd, entries, f, sourceScopes{"": {f: f, service: service}})
 		calc := calculator.New(service)
 		calc.SetMode(f.mode)
 		entries, err = calc.CalculateCosts(cmd.Context(), entries)
