@@ -33,6 +33,17 @@ func (s *Service) hasPrimaryPricing(ctx context.Context, model string) bool {
 // "[agent] model" label names, directly or through its alias as upstream's
 // has_user_override reads it, then one on the raw model.
 func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, provider any, at time.Time) (ModelPricing, error) {
+	p, err := s.sourcePricing(ctx, model, agent, provider, at)
+	if agent == "codex" && !p.cacheReadExplicit {
+		// Like upstream's calculate_codex_bucket_cost, Codex bills cached
+		// input at the input rate when the price names no cache-read rate.
+		p.CacheReadInputTokenCost = p.InputCostPerToken
+		p.CacheReadAbove = p.InputAbove
+	}
+	return p, err
+}
+
+func (s *Service) sourcePricing(ctx context.Context, model, agent string, provider any, at time.Time) (ModelPricing, error) {
 	qualified := "[" + agent + "] " + model
 	if s.HasOverride(qualified) || s.HasOverride(ResolveModelName(qualified)) {
 		p, err := s.GetPricing(ctx, qualified, at)

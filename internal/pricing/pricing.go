@@ -280,6 +280,7 @@ func apply(p ModelPricing, o Override) ModelPricing {
 	}
 	if o.CacheReadInputTokenCost != nil {
 		p.CacheReadInputTokenCost = *o.CacheReadInputTokenCost
+		p.cacheReadExplicit = true
 	}
 	if o.InputAbove != nil {
 		p.InputAbove = o.InputAbove

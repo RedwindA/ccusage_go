@@ -357,6 +357,35 @@ func TestCodexFlexPricing(t *testing.T) {
 		t.Fatalf("Codex speed changed Claude pricing: %v", got)
 	}
 }
+
+// Codex bills cached input at the input rate (above a long-context tier, its
+// rate there) when the price names no cache-read rate, as gpt-5-pro's and
+// gpt-5.5-pro's do not; an override's cache-read rate names one. Other agents
+// keep the 10% default. Expected costs are upstream ccusage's.
+func TestCodexBillsCachedInputAtInputRateWithoutCacheReadRate(t *testing.T) {
+	s := pricing.NewService()
+	s.SetOffline(true)
+	cacheRead := 1e-6
+	s.SetOverrides(map[string]pricing.Override{"o3-pro": {CacheReadInputTokenCost: &cacheRead}})
+	c := New(s)
+	for _, tc := range []struct {
+		agent, model  string
+		input, cached int
+		cost          float64
+	}{
+		{"codex", "gpt-5-pro", 200000, 800000, 15.12},
+		{"codex", "gpt-5.5-pro", 100000, 200000, 18.27},
+		{"codex", "o3-pro", 200000, 800000, 4.88},
+		{"codex", "gpt-5", 200000, 800000, .36},
+		{"claude", "gpt-5-pro", 200000, 800000, 4.32},
+	} {
+		e := types.UsageEntry{Agent: tc.agent, Model: tc.model, InputTokens: tc.input, CacheReadInputTokens: tc.cached, OutputTokens: 1000}
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-tc.cost) > 1e-9 {
+			t.Errorf("%s %s: %v, want %v", tc.agent, tc.model, e.Cost, tc.cost)
+		}
+	}
+}
 func TestCodexSpeedDetectionFollowsSelectedProfile(t *testing.T) {
 	for _, tc := range []struct{ config, want string }{
 		{`service_tier = "fast"`, "fast"},
