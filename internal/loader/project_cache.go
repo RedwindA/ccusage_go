@@ -20,8 +20,8 @@ type FileState struct {
 type ProjectCache struct {
 	DirPath     string
 	Files       map[string]FileState          // filename → state
-	Entries     []types.UsageEntry            // deduplicated, cost-calculated entries
-	fileEntries map[string][]types.UsageEntry // native records per file, before cross-file selection
+	Entries     []types.UsageEntry            // cost-calculated entries, deduplicated only once merged
+	fileEntries map[string][]types.UsageEntry // native records per file, before deduplication
 	DedupeMap   map[string]bool               // uniqueHash → seen (per-project dedup)
 }
 
@@ -190,7 +190,6 @@ func (ic *IncrementalCache) Update(
 		for _, entries := range pc.fileEntries {
 			pc.Entries = append(pc.Entries, entries...)
 		}
-		pc.Entries = deduplicateUsage(pc.Entries)
 
 		// Update file states
 		for name, state := range currentFiles {

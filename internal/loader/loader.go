@@ -201,8 +201,8 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 		err          error
 	}
 
-	// Results are merged in path order so the outcome (first session name
-	// wins, dedupe tie-breaks) does not depend on worker scheduling.
+	// Results are merged in path order so the first session name that wins
+	// does not depend on worker scheduling.
 	results := make([]result, len(paths))
 	order := parallel.LargestFirst(ctx, l.maxWorkers, paths)
 	_ = parallel.Run(ctx, l.maxWorkers, order, func(i int) {
@@ -428,7 +428,7 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 		return nil, nil, debugMsg, types.LoaderError{Path: path, Err: readErr}
 	}
 
-	return deduplicateUsage(entries), sessionNameMap, debugMsg, nil
+	return entries, sessionNameMap, debugMsg, nil
 }
 
 func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.UsageEntry, error) {

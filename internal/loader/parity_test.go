@@ -177,6 +177,67 @@ func TestClaudeExactDedupeMatchesOnlyTheCurrentSurvivor(t *testing.T) {
 		}
 	}
 }
+
+// Upstream dedupes files in path order and each file line by line, so a tie
+// keeps the first candidate in that order rather than the earliest one, and
+// which candidate a replay matches depends on what came before it.
+func TestClaudeDedupeFollowsPathAndLineOrder(t *testing.T) {
+	late := requestlessRecord("2026-09-12T00:00:00.100Z", "s1", "g", 2, true)
+	early := requestlessRecord("2026-09-11T11:00:00.000Z", "s1", "g", 2, true)
+	root := t.TempDir()
+	for name, entries := range map[string][]types.UsageEntry{
+		// "s1.jsonl" sorts before "s1/subagents/agent-a.jsonl".
+		"files": mustNative(t,
+			writeNative(t, root, "projects/p/s1/subagents/agent-a.jsonl", early),
+			writeNative(t, root, "projects/p/s1.jsonl", late)),
+		"lines": mustNative(t, writeNative(t, t.TempDir(), "projects/p/s1.jsonl", late, early)),
+	} {
+		if len(entries) != 1 || !entries[0].Timestamp.Equal(time.Date(2026, 9, 12, 0, 0, 0, 100e6, time.UTC)) {
+			t.Errorf("%s: want the first tied copy to survive, got %+v", name, entries)
+		}
+	}
+
+	// In path order the s2 replay meets the s3 copy of r2 on their exact
+	// key, so it never reaches the requestless sidechain on the replay route
+	// and both responses remain.
+	root = t.TempDir()
+	sidechain := requestlessRecord("2026-09-11T11:00:00.000Z", "s2", "g", 2, true)
+	answer := nativeRecord("s3", "g", "r2", 100, true)
+	answer["timestamp"] = "2026-09-12T00:00:00.100Z"
+	replay := nativeRecord("s2", "g", "r2", 100, true)
+	replay["timestamp"] = "2026-09-11T11:00:00.000Z"
+	replay["message"].(map[string]interface{})["usage"].(map[string]interface{})["output_tokens"] = 30
+	entries := mustNative(t,
+		writeNative(t, root, "projects/p/b.jsonl", replay),
+		writeNative(t, root, "projects/p/a.jsonl", sidechain, answer))
+	if len(entries) != 2 || entries[0].TotalTokens+entries[1].TotalTokens != 102+130 {
+		t.Errorf("mixed: %+v", entries)
+	}
+}
+
+// A replay with a new request ID only matches its parent at the parent's
+// timestamp. Deduping each file (or project) first would merge the later
+// line of that replayed response into its first line, which then matches
+// the parent; upstream sees every line in one pass and keeps the later one.
+func TestClaudeDedupeIsOnePassOverEveryLine(t *testing.T) {
+	root := t.TempDir()
+	parent := nativeRecord("s", "m", "r0", 5, false)
+	first := nativeRecord("s", "m", "r1", 30, true)
+	later := nativeRecord("s", "m", "r1", 20, true)
+	later["timestamp"] = "2026-09-12T04:38:47.296Z"
+	writeNative(t, root, "projects/p1/a.jsonl", parent)
+	writeNative(t, root, "projects/p2/b.jsonl", first, later)
+	loaded := mustNative(t, filepath.Join(root, "projects/p1/a.jsonl"), filepath.Join(root, "projects/p2/b.jsonl"))
+	cached, _, err := NewIncrementalCache().Update(New(), nil, root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, entries := range map[string][]types.UsageEntry{"load": loaded, "cache": cached} {
+		if len(entries) != 2 || entries[0].TotalTokens+entries[1].TotalTokens != 7+22 {
+			t.Errorf("%s: %+v", name, entries)
+		}
+	}
+}
 func TestClaudeSpeedBreaksEqualUsageTie(t *testing.T) {
 	root := t.TempDir()
 	plain := nativeRecord("s", "m", "r", 10, false)

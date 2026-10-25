@@ -15,6 +15,10 @@ import (
 
 // deduplicateUsage delays selection until every candidate has been parsed.
 // Streaming snapshots can grow, and sidechain replay can change request ids.
+// Callers pass each file's entries in line order, and one pass over them in
+// file path order matches upstream: ties keep the first candidate and a
+// replay's match depends on earlier entries, so deduping each file first or
+// going by timestamp picks other survivors.
 func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	// Sort indexes rather than the (large) entries themselves.
 	order := make([]int, len(entries))
@@ -22,11 +26,7 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		order[i] = i
 	}
 	sort.SliceStable(order, func(i, j int) bool {
-		a, b := &entries[order[i]], &entries[order[j]]
-		if a.Timestamp.Equal(b.Timestamp) {
-			return a.SourceFile < b.SourceFile
-		}
-		return a.Timestamp.Before(b.Timestamp)
+		return entries[order[i]].SourceFile < entries[order[j]].SourceFile
 	})
 	out := make([]types.UsageEntry, 0, len(entries))
 	exact := map[string]int{}
