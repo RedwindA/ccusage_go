@@ -85,6 +85,10 @@ func loadDatabase(ctx context.Context, name, file string) ([]types.UsageEntry, e
 			if err != nil {
 				return nil, err
 			}
+			var forkCopies map[string]int64
+			if tab == "session_message" {
+				forkCopies = forkCopyCutoffs(ctx, db)
+			}
 			for _, r := range rr {
 				m := decode([]byte(s(r["data"])))
 				if m == nil {
@@ -92,6 +96,13 @@ func loadDatabase(ctx context.Context, name, file string) ([]types.UsageEntry, e
 				}
 				if tab == "session_message" {
 					if s(r["type"]) != "assistant" {
+						continue
+					}
+					// Copies neither count nor mark the fork as covered: the
+					// fork's session_v2 counters start at zero and hold only
+					// fork-local usage, so they stay a valid fallback. Without
+					// a seq the row cannot be classified, so it stays.
+					if cutoff, ok := forkCopies[s(r["session_id"])]; ok && r["seq"] != nil && int64(f(r["seq"])) <= cutoff {
 						continue
 					}
 					model := object(m["model"])
@@ -223,6 +234,47 @@ func loadDatabase(ctx context.Context, name, file string) ([]types.UsageEntry, e
 		}
 	}
 	return out, nil
+}
+
+// forkCopyCutoffs maps each OpenCode v2 fork session to the largest
+// session_message seq that is still history copied from its parent: the
+// boundary's seq for a "through" fork, or the parent's last seq below it for a
+// "before" fork. Forks whose parent, boundary row or seq column is missing are
+// left out, so they keep every row instead of being cut on a guess.
+func forkCopyCutoffs(ctx context.Context, db *sql.DB) map[string]int64 {
+	cutoffs := map[string]int64{}
+	if !table(ctx, db, "session_v2") {
+		return cutoffs
+	}
+	forks, err := rows(ctx, db, "SELECT id, fork_session_id, fork_boundary FROM session_v2 WHERE fork_session_id IS NOT NULL AND fork_boundary IS NOT NULL")
+	if err != nil {
+		return cutoffs
+	}
+	for _, r := range forks {
+		fork, parent := s(r["id"]), s(r["fork_session_id"])
+		boundary := decode([]byte(s(r["fork_boundary"])))
+		if fork == "" || parent == "" {
+			continue
+		}
+		// Every copy gets a new id, so the boundary message is looked up in
+		// the parent and the fork's rows are compared by the preserved seq.
+		var seq int64
+		if db.QueryRowContext(ctx, "SELECT seq FROM session_message WHERE session_id = ? AND id = ? LIMIT 1", parent, s(boundary["messageID"])).Scan(&seq) != nil {
+			continue
+		}
+		switch s(boundary["type"]) {
+		case "through":
+			cutoffs[fork] = seq
+		case "before":
+			// seq is sparse and the fork's own rows continue right after the
+			// last copied row, so seq-1 could swallow them.
+			var last sql.NullInt64
+			if db.QueryRowContext(ctx, "SELECT MAX(seq) FROM session_message WHERE session_id = ? AND seq < ?", parent, seq).Scan(&last) == nil && last.Valid {
+				cutoffs[fork] = last.Int64
+			}
+		}
+	}
+	return cutoffs
 }
 func openMessage(m obj, name, file, id, session string, row obj) (types.UsageEntry, bool) {
 	e := types.UsageEntry{SourceFile: file, Raw: m}

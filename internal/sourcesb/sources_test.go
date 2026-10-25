@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"fmt"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -102,6 +105,66 @@ func TestOpenCodeV2AndSessionFallback(t *testing.T) {
 		if x.SessionID == "fallback" && (x.TotalTokens != 30 || x.Raw["session_aggregate"] != true) {
 			t.Fatalf("%+v", x)
 		}
+	}
+}
+
+// Mirrors upstream's OpenCode fork fixtures: forks copy the parent's
+// session_message rows under new ids but with the same seq.
+func TestOpenCodeForkCopies(t *testing.T) {
+	const schema = `CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER NOT NULL DEFAULT 0,time_created INTEGER,data TEXT); CREATE TABLE session_v2(id TEXT PRIMARY KEY,time_created INTEGER,cost REAL,tokens_input INTEGER,tokens_output INTEGER,tokens_cache_read INTEGER,tokens_cache_write INTEGER,tokens_reasoning INTEGER,model TEXT,fork_session_id TEXT,fork_boundary TEXT);`
+	turn := func(id, session string, seq, input int) string {
+		return fmt.Sprintf(`INSERT INTO session_message(id,session_id,type,seq,time_created,data) VALUES('%s','%s','assistant',%d,%d,'{"model":{"id":"gpt-test","providerID":"openai"},"time":{"created":1767312000000},"tokens":{"input":%d,"output":10},"cost":0.01}');`, id, session, seq, 1767312000000+seq, input)
+	}
+	fork := func(id, parent, boundary, message string) string {
+		return fmt.Sprintf(`INSERT INTO session_v2(id,fork_session_id,fork_boundary) VALUES('%s','%s','{"type":"%s","messageID":"%s"}');`, id, parent, boundary, message)
+	}
+	// The parent has two turns, the boundary turn and a later turn the fork
+	// never copies; the fork copies seq 0-2 and adds its own turn at seq 4.
+	history := func(boundary string) string {
+		return schema + turn("parent-msg-1", "parent", 0, 100) + turn("parent-msg-2", "parent", 1, 200) + turn("boundary-msg", "parent", 2, 300) + turn("parent-msg-4", "parent", 3, 400) +
+			turn("fork-copy-1", "fork", 0, 100) + turn("fork-copy-2", "fork", 1, 200) + turn("fork-copy-boundary", "fork", 2, 300) + turn("fork-own", "fork", 4, 40) +
+			fork("fork", "parent", boundary, "boundary-msg")
+	}
+	parent := []string{"boundary-msg", "parent-msg-1", "parent-msg-2", "parent-msg-4"}
+	allFork := []string{"fork-copy-1", "fork-copy-2", "fork-copy-boundary", "fork-own"}
+	for _, c := range []struct {
+		name, sql string
+		want      map[string][]string
+	}{
+		{"through drops the copied boundary", history("through"), map[string][]string{"parent": parent, "fork": {"fork-own"}}},
+		{"before keeps the copied boundary", history("before"), map[string][]string{"parent": parent, "fork": {"fork-copy-boundary", "fork-own"}}},
+		{"unresolvable boundary keeps every row", history("through") + `UPDATE session_v2 SET fork_boundary='{"type":"through","messageID":"missing"}' WHERE id='fork';`, map[string][]string{"parent": parent, "fork": allFork}},
+		{"missing fork metadata keeps every row", history("through") + `DROP TABLE session_v2;`, map[string][]string{"parent": parent, "fork": allFork}},
+		{"pre-seq schema keeps every row", `CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,time_created INTEGER,data TEXT); CREATE TABLE session_v2(id TEXT PRIMARY KEY,fork_session_id TEXT,fork_boundary TEXT);` +
+			`INSERT INTO session_message VALUES('parent-msg','parent','assistant',1767312000000,'{"model":{"id":"gpt-test","providerID":"openai"},"tokens":{"input":100}}'),('fork-copy','fork','assistant',1767312000000,'{"model":{"id":"gpt-test","providerID":"openai"},"tokens":{"input":100}}'),('fork-own','fork','assistant',1767312000000,'{"model":{"id":"gpt-test","providerID":"openai"},"tokens":{"input":40}}');` +
+			fork("fork", "parent", "through", "parent-msg"), map[string][]string{"parent": {"parent-msg"}, "fork": {"fork-copy", "fork-own"}}},
+		// The grandchild copies the fork's rows, including the fork's own turn,
+		// and names that turn as its boundary.
+		{"fork of a fork", history("through") + turn("grand-copy-1", "grandchild", 0, 100) + turn("grand-copy-2", "grandchild", 1, 100) + turn("grand-copy-boundary", "grandchild", 2, 100) + turn("grand-copy-fork-own", "grandchild", 4, 100) + turn("grand-own", "grandchild", 5, 7) +
+			fork("grandchild", "fork", "through", "fork-own"), map[string][]string{"parent": parent, "fork": {"fork-own"}, "grandchild": {"grand-own"}}},
+		// The fork's own turn was reverted; its counters start at zero, so the
+		// aggregate holds only fork-local usage and stays the fallback.
+		{"only copies fall back to the fork aggregate", history("through") + `DELETE FROM session_message WHERE id='fork-own'; UPDATE session_v2 SET time_created=1767312000000,cost=0.02,tokens_input=40,tokens_output=4,model='{"id":"gpt-test","providerID":"openai"}' WHERE id='fork';`, map[string][]string{"parent": parent, "fork": {"session:fork"}}},
+		// Parent seqs have gaps and the fork's own row continues right after
+		// the last copy instead of below the boundary.
+		{"sparse before keeps rows after the last copy", schema + turn("parent-a", "parent", 0, 100) + turn("parent-b", "parent", 10, 200) + turn("parent-boundary", "parent", 100, 300) +
+			turn("fork-copy-a", "fork", 0, 100) + turn("fork-copy-b", "fork", 10, 200) + turn("fork-own", "fork", 20, 40) +
+			fork("fork", "parent", "before", "parent-boundary"), map[string][]string{"parent": {"parent-a", "parent-b", "parent-boundary"}, "fork": {"fork-own"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database(t, filepath.Join(dir, "opencode.db"), c.sql)
+			got := map[string][]string{}
+			for _, e := range mustLoad(t, "opencode", dir) {
+				got[e.SessionID] = append(got[e.SessionID], e.ID)
+			}
+			for _, ids := range got {
+				sort.Strings(ids)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 func TestKimiFormatsAndDedup(t *testing.T) {
