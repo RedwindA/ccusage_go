@@ -218,7 +218,10 @@ func patchContextTiers(primary, fallback map[string]ModelPricing) {
 		if !ok {
 			tier, ok = normalized[normalize(base)]
 		}
-		if ok && tier.LongContextThreshold > 0 {
+		// Rates published with their own 200K boundary are kept whole: mixing
+		// in another source's tier would price both tiers wrong.
+		published := p.InputAbove != nil || p.OutputAbove != nil || p.CacheCreateAbove != nil || p.CacheReadAbove != nil
+		if ok && tier.LongContextThreshold > 0 && !published {
 			p.LongContextThreshold = tier.LongContextThreshold
 			p.InputAbove = tier.InputAbove
 			p.OutputAbove = tier.OutputAbove

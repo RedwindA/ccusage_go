@@ -98,3 +98,17 @@ func TestFastMultiplierForDatedAndProviderIDs(t *testing.T) {
 		}
 	}
 }
+
+// Ported from upstream's long_context_overlay_survives_litellm_refresh_and_defers_to_upstream.
+func TestModelsDevTiersFillOnlyFlatLiteLLMRates(t *testing.T) {
+	live := parseLite([]byte(`{"gpt-5.5":{"input_cost_per_token":0.000006,"output_cost_per_token":0.000031},"gpt-5.5-2026-04-23":{"input_cost_per_token":0.000006,"output_cost_per_token":0.000031}}`))
+	for _, model := range []string{"gpt-5.5", "gpt-5.5-2026-04-23"} {
+		if p := live[model]; p.InputAbove == nil || *p.InputAbove != 10e-6 || p.LongContextThreshold != 272000 {
+			t.Errorf("%s: %+v", model, p)
+		}
+	}
+	live = parseLite([]byte(`{"gpt-5.5":{"input_cost_per_token":0.000006,"output_cost_per_token":0.000031,"input_cost_per_token_above_200k_tokens":0.000012}}`))
+	if p := live["gpt-5.5"]; p.InputAbove == nil || *p.InputAbove != 12e-6 || p.OutputAbove != nil || p.LongContextThreshold != 0 {
+		t.Errorf("published tier replaced: %+v", p)
+	}
+}
