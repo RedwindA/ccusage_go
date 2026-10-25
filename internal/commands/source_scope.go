@@ -55,7 +55,7 @@ func newSourceScope(cmd *cobra.Command, kind string, f *reportFlags, start time.
 	if s.until, err = reports.NormalizeDate(f.until); err != nil {
 		return nil, err
 	}
-	if f.last != 0 || cmd.Flags().Changed("last") {
+	if cmd.Flags().Changed("last") {
 		if s.since != "" || s.until != "" {
 			return nil, fmt.Errorf("--last cannot be combined with --since or --until")
 		}

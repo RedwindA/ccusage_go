@@ -163,6 +163,41 @@ func TestUnifiedSourceConfigErrorsNameTheSource(t *testing.T) {
 	}
 }
 
+// Upstream's config has no period selectors: `last`, `date`, `month` and
+// `week` in any section leave the window to the command line, so no section
+// drops a source's rows or fails a report that --last does not apply to.
+func TestConfigPeriodSelectorsAreIgnored(t *testing.T) {
+	days := map[string][2]float64{"2026-01-04 claude": {10, 0.01}, "2026-01-05 claude": {1010, 0.03}, "2026-01-04 codex": {900, 0}, "2026-01-05 codex": {1000, 0}}
+	sessions := map[string][2]float64{"session-a claude": {20, 0.02}, "session-b claude": {1000, 0.02}, "2026/01/04/before codex": {900, 0}, "2026/01/05/in codex": {1000, 0}}
+	for _, tc := range []struct {
+		config string
+		args   []string
+		key    string
+		want   map[string][2]float64
+	}{
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"last": 2}}}`, []string{"daily"}, "daily", days},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"commands": {"daily": {"last": 1}}}}`, []string{"daily", "--since", "20260101"}, "daily", days},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"last": 7}}}`, []string{"daily", "--sections", "session"}, "session", sessions},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"last": 7}}}`, []string{"session"}, "session", sessions},
+		{`{"defaults": {"timezone": "UTC", "last": 7}}`, []string{"session"}, "session", sessions},
+		{`{"defaults": {"timezone": "UTC", "last": 2}}`, []string{"daily"}, "daily", days},
+		{`{"defaults": {"timezone": "UTC"}, "commands": {"codex:daily": {"date": "2026-01-04"}}}`, []string{"daily"}, "daily", days},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"week": "2025-12-01"}}}`, []string{"weekly"}, "weekly", map[string][2]float64{"2025-12-29 claude": {10, 0.01}, "2025-12-29 codex": {900, 0}, "2026-01-05 claude": {1010, 0.03}, "2026-01-05 codex": {1000, 0}}},
+		{`{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"month": "2025-12"}}}`, []string{"monthly"}, "monthly", map[string][2]float64{"2026-01 claude": {1020, 0.04}, "2026-01 codex": {1900, 0}}},
+	} {
+		_, cfg := sourceConfigFixture(t, tc.config)
+		p := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--by-agent", "--config", cfg)...)
+		assertSourceRows(t, tc.config+" "+strings.Join(tc.args, " "), sourceRows(p, tc.key), tc.want)
+	}
+	_, cfg := sourceConfigFixture(t, `{"defaults": {"timezone": "UTC"}, "codex": {"defaults": {"last": 1}}}`)
+	for report, key := range map[string]string{"daily": "daily", "session": "sessions"} {
+		p := sourceCLIJSON(t, "codex", report, "--json", "--offline", "--config", cfg)
+		if rows := p[key].([]any); len(rows) != 2 {
+			t.Errorf("codex %s: %d rows, want 2", report, len(rows))
+		}
+	}
+}
+
 // A source's --last window starts weeks on the unified start of week, not on
 // its own, while the rest of its section still applies.
 func TestUnifiedSourceLastUsesTheUnifiedWeekStart(t *testing.T) {

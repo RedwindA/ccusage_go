@@ -369,10 +369,14 @@ func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {
 }
 
 // applyConfig sets each config option on flags unless cmd's command line
-// sets it.
+// sets it. Upstream's config has no period selectors, so --last, --date,
+// --month and --week come only from the command line.
 func applyConfig(cmd *cobra.Command, flags *pflag.FlagSet, options map[string]any) error {
 	for name, value := range options {
-		name = optionFlag(name)
+		switch name = optionFlag(name); name {
+		case "last", "date", "month", "week":
+			continue
+		}
 		flag := flags.Lookup(name)
 		if flag == nil || explicitReportOption(cmd, name) {
 			continue
