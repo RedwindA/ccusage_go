@@ -154,10 +154,23 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 	defer s.mu.Unlock()
 	resolved := ResolveModelName(model)
 	s.refreshFor(ctx, model, resolved)
-	p, ok := lookup(model, resolved)
-	override, hasOverride := s.overrides[model]
+	key := model
+	override, hasOverride := s.overrides[key]
 	if !hasOverride {
-		override, hasOverride = s.overrides[resolved]
+		key = resolved
+		override, hasOverride = s.overrides[key]
+	}
+	var p ModelPricing
+	var ok bool
+	if hasOverride {
+		// Like upstream's apply_override, an override builds on the LiteLLM or
+		// built-in entry its own key, or that key's built-in alias, names, and
+		// never on another model's rates a fuzzy match found.
+		if p, ok = s.primary[key]; !ok {
+			p = s.primary[canonical(key)]
+		}
+	} else {
+		p, ok = lookup(model, resolved)
 	}
 	if !ok && !hasOverride {
 		return ModelPricing{}, fmt.Errorf("no pricing found for model %q", model)

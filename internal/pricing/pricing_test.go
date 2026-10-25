@@ -46,6 +46,27 @@ func TestZeroAndPartialOverrides(t *testing.T) {
 		t.Fatalf("free: %+v %v", p, err)
 	}
 }
+
+// Like upstream's apply_override, an override builds only on the entry its
+// own key names: a gateway id that fuzzy-matches another model keeps none of
+// that model's cache, long-context or Fast rates.
+func TestOverrideOfAnUnpricedIDStartsFromNoRates(t *testing.T) {
+	s := NewService()
+	s.SetOffline(true)
+	input, output := 1e-6, 2e-6
+	overrides := map[string]Override{}
+	ids := []string{"my-gpt-5.5-proxy", "corp-claude-sonnet-4-gw", "corp-claude-opus-4-7-gw", "claude-sonnet-4-5-corp"}
+	for _, model := range ids {
+		overrides[model] = Override{InputCostPerToken: &input, OutputCostPerToken: &output}
+	}
+	s.SetOverrides(overrides)
+	want := ModelPricing{InputCostPerToken: input, OutputCostPerToken: output, FastMultiplier: 1}
+	for _, model := range ids {
+		if p, err := s.GetPricing(context.Background(), model, time.Time{}); err != nil || p != want {
+			t.Errorf("%s: %+v %v", model, p, err)
+		}
+	}
+}
 func TestDeepSeekTimeSchedule(t *testing.T) {
 	s := NewService()
 	s.SetOffline(true)
