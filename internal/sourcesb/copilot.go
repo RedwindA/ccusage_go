@@ -147,7 +147,9 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 		sess, _ := copilotSession(a)
 		sess = first(sess, s(c["session"]), tr, "unknown-session")
 		e := types.UsageEntry{SourceFile: file, Model: copilotModel(first(s(pick(a, "gen_ai.response.model", "gen_ai.request.model")), s(c["model"]), "unknown")), SessionID: sess, Timestamp: copilotTime(r, mtime(file)), InputTokens: n(a["gen_ai.usage.input_tokens"]), OutputTokens: n(a["gen_ai.usage.output_tokens"]), CacheReadInputTokens: n(a["gen_ai.usage.cache_read.input_tokens"]), CacheCreationInputTokens: n(pick(a, "gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens")), Raw: obj{"rank": rank, "trace": tr, "response": s(a["gen_ai.response.id"]), "request_count": 1, "reasoning_output_tokens": n(pick(a, "gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"))}}
-		e.InputTokens = max(0, e.InputTokens-e.CacheReadInputTokens)
+		// Copilot counts cache reads and writes in the input tokens, as it does
+		// in session-state inputTokens.
+		e.InputTokens = max(0, e.InputTokens-e.CacheReadInputTokens-e.CacheCreationInputTokens)
 		finish(&e, n(pick(a, "gen_ai.usage.total_tokens", "gen_ai.usage.total.token_count")))
 		if e.TotalTokens == 0 {
 			continue
@@ -190,11 +192,36 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 			}
 		}
 	}
+	// The Copilot CLI exports some chat spans a second time, under a new trace
+	// or span ID but with the response ID and usage of the original call. VS
+	// Code reports one response ID on every call of a turn, so the usage tells
+	// calls apart. Only the earliest span of a call is kept.
+	type call struct {
+		response, model                                           string
+		input, output, cacheCreation, cacheRead, reasoning, extra int
+	}
+	earliest, repeated := map[call]int{}, map[int]bool{}
+	for i, e := range out {
+		if n(e.Raw["rank"]) != 1 || s(e.Raw["response"]) == "" {
+			continue
+		}
+		c := call{s(e.Raw["response"]), e.Model, e.InputTokens, e.OutputTokens, e.CacheCreationInputTokens, e.CacheReadInputTokens, n(e.Raw["reasoning_output_tokens"]), e.ReasoningTokens}
+		kept, ok := earliest[c]
+		switch {
+		case !ok:
+			earliest[c] = i
+		case e.Timestamp.Before(out[kept].Timestamp):
+			repeated[kept] = true
+			earliest[c] = i
+		default:
+			repeated[i] = true
+		}
+	}
 	var result []types.UsageEntry
-	for _, e := range out {
+	for i, e := range out {
 		rank := n(e.Raw["rank"])
 		tr, resp := s(e.Raw["trace"]), s(e.Raw["response"])
-		if tr != "" && traceRanks[tr] < rank || resp != "" && responseRanks[resp] < rank {
+		if repeated[i] || tr != "" && traceRanks[tr] < rank || resp != "" && responseRanks[resp] < rank {
 			continue
 		}
 		result = append(result, e)
@@ -202,9 +229,37 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 
 	return result, nil
 }
+
+// copilotOtelStart reports from which shutdown OTel rows replace the shutdown
+// intervals of one session and model. A Copilot process restores the breakdown
+// of the session's last shutdown, so the calls of a process that ended without
+// one (killed, crashed or restarted by the app) are missing from every later
+// shutdown, while OTel still has a row for each of them. Counted from the first
+// interval with OTel rows, OTel replaces the intervals when it holds more calls
+// than their request counts. Shutdowns without request counts cannot be
+// compared. The comparison covers every shutdown, so it does not depend on the
+// date range.
+func copilotOtelStart(shutdowns []types.UsageEntry, calls []time.Time) (int, bool) {
+	start, counted, otel, reported, previous := -1, 0, 0, 0, 0
+	for i, e := range shutdowns {
+		requests := n(e.Raw["request_count"])
+		if requests == 0 {
+			return 0, false
+		}
+		through := sort.Search(len(calls), func(j int) bool { return calls[j].After(e.Timestamp) })
+		if start < 0 && through > counted {
+			start = i
+		}
+		if start >= 0 {
+			otel += through - counted
+			reported += max(0, requests-previous)
+		}
+		counted, previous = through, requests
+	}
+	return start, start >= 0 && otel > reported
+}
 func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.UsageEntry {
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Timestamp.Before(all[j].Timestamp) })
-	latest := map[string]types.UsageEntry{}
 	var out []types.UsageEntry
 	lastIdentity := map[string]int{}
 	for i, e := range all {
@@ -212,11 +267,42 @@ func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.
 			lastIdentity[e.ID] = i
 		}
 	}
+	shutdowns, calls := map[string][]types.UsageEntry{}, map[string][]time.Time{}
 	for i, e := range all {
-		if e.Raw["shutdown"] != true || lastIdentity[e.ID] != i || !untilExclusive.IsZero() && !e.Timestamp.Before(untilExclusive) {
+		key := e.SessionID + ":" + e.Model
+		if e.Raw["shutdown"] != true {
+			calls[key] = append(calls[key], e.Timestamp)
+		} else if lastIdentity[e.ID] == i {
+			shutdowns[key] = append(shutdowns[key], e)
+		}
+	}
+	// Per session and model: how many leading shutdowns are reported as
+	// intervals, and the shutdown after which OTel rows are reported (every
+	// row without one).
+	kept, otelAfter := map[string]int{}, map[string]time.Time{}
+	for key, list := range shutdowns {
+		visible := sort.Search(len(list), func(i int) bool {
+			return !untilExclusive.IsZero() && !list[i].Timestamp.Before(untilExclusive)
+		})
+		after := visible
+		if start, ok := copilotOtelStart(list, calls[key]); ok {
+			visible, after = min(visible, start), start
+		}
+		kept[key] = visible
+		if after > 0 {
+			otelAfter[key] = list[after-1].Timestamp
+		}
+	}
+	latest, positions := map[string]types.UsageEntry{}, map[string]int{}
+	for i, e := range all {
+		if e.Raw["shutdown"] != true || lastIdentity[e.ID] != i {
 			continue
 		}
 		key := e.SessionID + ":" + e.Model
+		positions[key]++
+		if positions[key] > kept[key] {
+			continue
+		}
 		prev, ok := latest[key]
 		latest[key] = e
 		if ok {
@@ -241,8 +327,8 @@ func reconcileCopilot(all []types.UsageEntry, untilExclusive time.Time) []types.
 		if e.Raw["shutdown"] == true {
 			continue
 		}
-		last, ok := latest[e.SessionID+":"+e.Model]
-		if !ok || e.Timestamp.After(last.Timestamp) {
+		after, ok := otelAfter[e.SessionID+":"+e.Model]
+		if !ok || e.Timestamp.After(after) {
 			out = append(out, e)
 		}
 	}
