@@ -27,6 +27,10 @@ func TestOfflineSnapshotAndAliases(t *testing.T) {
 	if _, err := s.GetPricing(context.Background(), "entirely-unknown-model", time.Time{}); err == nil {
 		t.Error("unknown models must not invent prices")
 	}
+	// Every key contains the empty id, which upstream never prices.
+	if p, err := s.GetPricing(context.Background(), "", time.Time{}); err == nil {
+		t.Errorf("empty model priced: %+v", p)
+	}
 	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"private-model":"gpt-5.6-sol"}`)
 	p, err := s.GetPricing(context.Background(), "private-model", time.Time{})
 	if err != nil || p.FastMultiplier != 2 {

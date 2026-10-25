@@ -100,9 +100,11 @@ invalid trailing record
 	}
 	service := pricing.NewService()
 	service.SetOffline(true)
-	input, limit, ok := statuslineTranscriptContext(path, "unpriced", service)
-	if !ok || input != 90 || limit != 200000 {
-		t.Fatalf("%d %d %v", input, limit, ok)
+	for _, model := range []string{"unpriced", ""} {
+		input, limit, ok := statuslineTranscriptContext(path, model, service)
+		if !ok || input != 90 || limit != 200000 {
+			t.Fatalf("%q: %d %d %v", model, input, limit, ok)
+		}
 	}
 }
 func TestStatuslineStaleOutputWhileLivePIDUpdates(t *testing.T) {

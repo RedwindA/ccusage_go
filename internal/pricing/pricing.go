@@ -426,8 +426,12 @@ func (s *Service) exactEntry(model string) (ModelPricing, bool) {
 
 // find looks model up in one table like upstream's find_entry_or_alias: the
 // id, its built-in alias, the exact-only id a separator spelling names and,
-// when fuzzy is set, the longest key matching it.
+// when fuzzy is set, the longest key matching it. The empty id names nothing,
+// though every key contains it: upstream's callers never price it.
 func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool) (ModelPricing, bool) {
+	if model == "" {
+		return ModelPricing{}, false
+	}
 	if p, ok := all[model]; ok {
 		return p, true
 	}
