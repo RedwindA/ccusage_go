@@ -8,6 +8,7 @@ import (
 	_ "modernc.org/sqlite"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -64,6 +65,25 @@ func rows(ctx context.Context, db *sql.DB, query string) ([]obj, error) {
 func table(ctx context.Context, db *sql.DB, name string) bool {
 	var x int
 	return db.QueryRowContext(ctx, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&x) == nil
+}
+
+// hasColumns reports whether table exists with every one of columns.
+func hasColumns(ctx context.Context, db *sql.DB, table string, columns ...string) bool {
+	r, err := db.QueryContext(ctx, `SELECT * FROM "`+table+`" LIMIT 0`)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	names, err := r.Columns()
+	if err != nil {
+		return false
+	}
+	for _, column := range columns {
+		if !slices.Contains(names, column) {
+			return false
+		}
+	}
+	return true
 }
 func loadDatabase(ctx context.Context, name, file string) ([]types.UsageEntry, error) {
 	db, err := openDB(file)
@@ -197,18 +217,17 @@ func loadDatabase(ctx context.Context, name, file string) ([]types.UsageEntry, e
 			}
 		}
 	case "zcode":
-		if !table(ctx, db, "model_usage") {
+		// As upstream, skip databases without the columns it queries.
+		if !hasColumns(ctx, db, "model_usage", "id", "session_id", "started_at", "model_id", "status", "input_tokens", "output_tokens") || !hasColumns(ctx, db, "session", "id", "directory") {
 			return out, nil
 		}
+		sessionRows, err := rows(ctx, db, "SELECT * FROM session")
+		if err != nil {
+			return nil, err
+		}
 		sessions := map[string]obj{}
-		if table(ctx, db, "session") {
-			rr, e := rows(ctx, db, "SELECT * FROM session")
-			if e != nil {
-				return nil, e
-			}
-			for _, r := range rr {
-				sessions[s(r["id"])] = r
-			}
+		for _, r := range sessionRows {
+			sessions[s(r["id"])] = r
 		}
 		rr, err := rows(ctx, db, "SELECT * FROM model_usage WHERE status='completed'")
 		if err != nil {

@@ -91,6 +91,27 @@ func TestSQLiteSources(t *testing.T) {
 		}
 	})
 }
+
+// Upstream reads a ZCode database only when model_usage and session have the
+// columns it queries, as in its legacy-schema and unrelated-schema fixtures,
+// and skips any other database without an error.
+func TestZCodeRequiresTheSessionSchema(t *testing.T) {
+	const usage = `CREATE TABLE model_usage(id TEXT,session_id TEXT,started_at INTEGER,model_id TEXT,status TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_input_tokens INTEGER,computed_total_tokens INTEGER); INSERT INTO model_usage VALUES('usage-legacy','session-legacy',1786909042666,'custom-model','completed',100,10,25,110);`
+	for schema, want := range map[string]int{
+		usage + `CREATE TABLE session(id TEXT,directory TEXT); INSERT INTO session VALUES('session-legacy','');`: 1,
+		usage:                                    0,
+		usage + `CREATE TABLE session(id TEXT);`: 0,
+		`CREATE TABLE model_usage(id TEXT,session_id TEXT,started_at INTEGER,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER); CREATE TABLE session(id TEXT,directory TEXT);`: 0,
+		`CREATE TABLE unrelated(id TEXT);`: 0,
+	} {
+		dir := t.TempDir()
+		database(t, filepath.Join(dir, "cli/db/db.sqlite"), schema)
+		e := mustLoad(t, "zcode", dir)
+		if len(e) != want || want == 1 && (e[0].ProjectPath != "ZCode" || e[0].InputTokens != 75 || e[0].CacheReadInputTokens != 25) {
+			t.Errorf("%s: %+v, want %d entries", schema, e, want)
+		}
+	}
+}
 func TestOpenCodeV2AndSessionFallback(t *testing.T) {
 	dir := t.TempDir()
 	database(t, filepath.Join(dir, "opencode.db"), `CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,data TEXT); CREATE TABLE session_v2(id TEXT,time_created INTEGER,cost REAL,tokens_input INTEGER,tokens_output INTEGER,tokens_cache_read INTEGER,tokens_cache_write INTEGER,tokens_reasoning INTEGER,model TEXT); INSERT INTO session_message VALUES('m','s','assistant',1778000000000,'{"model":{"id":"gpt-5","providerID":"openai"},"tokens":{"input":10,"output":5}}'); INSERT INTO session_v2 VALUES('s',1778000000000,9,999,0,0,0,0,'gpt-5'); INSERT INTO session_v2 VALUES('fallback',1778000000000,2,20,4,3,2,1,'{"id":"gpt-5","providerID":"openai"}');`)
