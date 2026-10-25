@@ -405,3 +405,32 @@ func TestClaudeWorkflowAgentsFormTheirOwnSession(t *testing.T) {
 		t.Fatal(sessions)
 	}
 }
+
+// Session files are named by UUID, so the file that sorts last by path can
+// hold the oldest usage. Loads still return entries in time order, which the
+// monitor relies on to show the newest calls under Recent Activity.
+func TestLoadReturnsEntriesInTimeOrderAcrossFiles(t *testing.T) {
+	root := t.TempDir()
+	starts := map[string]time.Time{
+		"00000000-new": time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC),
+		"ffffffff-old": time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC),
+	}
+	for session, start := range starts {
+		var records []map[string]interface{}
+		for i := 0; i < 10; i++ {
+			r := nativeRecord(session, fmt.Sprintf("msg_%s_%d", session, i), fmt.Sprintf("req_%s_%d", session, i), 1, false)
+			r["timestamp"] = start.Add(time.Duration(i) * time.Hour).Format(time.RFC3339)
+			records = append(records, r)
+		}
+		writeNative(t, root, "projects/p/"+session+".jsonl", records...)
+	}
+	entries, err := New().LoadFromPath(context.Background(), root)
+	if err != nil || len(entries) != 20 {
+		t.Fatal(len(entries), err)
+	}
+	for i, e := range entries[10:] {
+		if want := starts["00000000-new"].Add(time.Duration(i) * time.Hour); !e.Timestamp.Equal(want) {
+			t.Errorf("entry %d at %s, want %s", 10+i, e.Timestamp, want)
+		}
+	}
+}
