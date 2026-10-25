@@ -279,7 +279,7 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			o.DetectedAgents = append(o.DetectedAgents, entry.Agent)
 		}
 	}
-	if agent == "codex" && kind == "session" && f.sessionID != "" {
+	if agent == "codex" && kind == "session" && (f.sessionID != "" || explicitReportOption(cmd, "id")) {
 		row, err := resolveCodexSession(entries, o, f.sessionID)
 		if err != nil {
 			return err

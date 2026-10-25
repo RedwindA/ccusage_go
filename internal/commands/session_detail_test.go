@@ -103,6 +103,7 @@ func TestCodexSessionIDLookupErrors(t *testing.T) {
 	codexSessionFixture(t, codexSessionUUID)
 	for requested, want := range map[string]string{
 		"missing":        "No Codex session found with ID: missing",
+		"":               "No Codex session found with ID: ",
 		codexSessionUUID: fmt.Sprintf("Codex session ID '%s' is ambiguous and matches 2 sessions.", codexSessionUUID),
 	} {
 		out, _, err := sourceCLIRun("codex", "session", "--id", requested, "--offline")
