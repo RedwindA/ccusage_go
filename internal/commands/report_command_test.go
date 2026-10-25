@@ -339,6 +339,28 @@ func TestClaudeDailyFamilyLoadsAsUpstreamsDailyLoader(t *testing.T) {
 	}
 }
 
+// An advisor call is priced from its own iteration's usage only, as upstream
+// prices it: the parent line's cache writes are not billed to it again.
+func TestClaudeAdvisorCostIgnoresTheParentsCacheWrites(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), `{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"r","costUSD":1,"message":{"id":"m","model":"claude-opus-4-6","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":40000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40000},"iterations":[{"type":"advisor_message","model":"claude-opus-4-6","input_tokens":100,"output_tokens":50}]}}}`)
+	// The advisor's 100 input and 50 output tokens at $5 and $25 per million.
+	want := 1 + 100*5e-6 + 50*25e-6
+	for _, report := range [][]string{{"claude", "daily"}, {"claude", "session"}, {"daily"}, {"blocks"}} {
+		payload := sourceCLIJSON(t, append(report, "--data-path", root, "--timezone", "UTC", "--offline", "--json")...)
+		var cost float64
+		if report[0] == "blocks" {
+			cost = payload["blocks"].([]any)[0].(map[string]any)["costUSD"].(float64)
+		} else {
+			cost = payload["totals"].(map[string]any)["totalCost"].(float64)
+		}
+		if math.Abs(cost-want) > 1e-9 {
+			t.Errorf("%v: cost %v, want %v", report, cost, want)
+		}
+	}
+}
+
 // Without --order, each section of a unified report lists its rows as the
 // standalone report does, as upstream's finish_rows: sessions by cost,
 // highest first, and periods oldest first.

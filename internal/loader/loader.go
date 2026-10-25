@@ -406,6 +406,9 @@ func (l *Loader) parseFile(path string) parsedFile {
 			}
 		}
 
+		// Advisor calls copy the line before parseEntry adds the parent's
+		// own usage to it, such as its cache_creation breakdown.
+		advisors := advisorRecords(raw)
 		// Try to parse entry according to TypeScript schema rules. Entry
 		// loads skip a line that fails; daily loads read the record an
 		// AgentProgress line wraps instead.
@@ -443,7 +446,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 		}
 
 		candidates := []types.UsageEntry{entry}
-		for _, advisor := range advisorRecords(raw) {
+		for _, advisor := range advisors {
 			if child, err := l.parseEntry(advisor, projectPath); err == nil {
 				candidates = append(candidates, child)
 			}
