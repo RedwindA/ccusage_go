@@ -151,6 +151,27 @@ func TestAutoModeMarksTheRecordedCostItBills(t *testing.T) {
 		}
 	}
 }
+
+// Port of upstream's auto_recalculates_negative_but_keeps_zero_source_cost_for_default_and_named_stores:
+// auto mode prices the tokens of a negative recorded Pi cost and keeps a 0,
+// while display mode still shows the raw figure.
+func TestPiAutoModePricesANegativeRecordedCost(t *testing.T) {
+	c := modernCalculator()
+	for _, agent := range []string{"pi", "omp"} {
+		for _, tc := range []struct {
+			mode, name     string
+			recorded, want float64
+			stored         bool
+		}{{"auto", "negative", -1.25, 0.033, false}, {"auto", "zero", 0, 0, true}, {"display", "negative", -1.25, -1.25, false}} {
+			c.SetMode(tc.mode)
+			e := types.UsageEntry{Agent: agent, Model: "claude-sonnet-4-20250514", InputTokens: 1000, OutputTokens: 2000, Cost: tc.recorded, HasCost: true, Raw: map[string]interface{}{"source_format": "pi"}}
+			_ = c.CalculateCost(&e)
+			if math.Abs(e.Cost-tc.want) > 1e-12 || e.UsesStoredCost != tc.stored {
+				t.Errorf("%s %s %s: cost %v stored %v, want %v %v", agent, tc.mode, tc.name, e.Cost, e.UsesStoredCost, tc.want, tc.stored)
+			}
+		}
+	}
+}
 func TestUnknownAndReasoning(t *testing.T) {
 	c := modernCalculator()
 	e := types.UsageEntry{Model: "not-a-real-model", InputTokens: 100}

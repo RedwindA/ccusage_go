@@ -65,6 +65,10 @@ func (c *Calculator) applyCost(ctx context.Context, entry *types.UsageEntry) {
 		}
 		return
 	}
+	// Auto mode treats a negative Pi cost as missing and prices the tokens.
+	if format, _ := entry.Raw["source_format"].(string); format == "pi" && entry.Cost < 0 {
+		recorded = false
+	}
 	if c.mode != "calculate" && recorded && !c.hasPiOverride(entry) {
 		entry.UsesStoredCost = true
 		return
