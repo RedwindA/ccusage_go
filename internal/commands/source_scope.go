@@ -132,7 +132,7 @@ func sourceScopeFor(cmd *cobra.Command, kind, source string, cli reportFlags, cf
 	bindReportFlags(flags, f, kind)
 	// Binding resets f to the defaults; start from the command line instead.
 	*f = cli
-	if err := applyConfig(cmd, flags, cfg.Options(kind, source)); err != nil {
+	if err := applyConfig(cmd, flags, kind, source, cfg.Options(kind, source)); err != nil {
 		return nil, err
 	}
 	scope, err := newSourceScope(cmd, kind, f, start)

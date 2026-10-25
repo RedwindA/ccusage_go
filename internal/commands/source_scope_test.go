@@ -318,3 +318,39 @@ func TestUnifiedConfigProjectFiltersOnlyClaudeDaily(t *testing.T) {
 		assertSourceRows(t, tc.config+" "+strings.Join(tc.args, " "), sourceRows(p, tc.key), tc.want)
 	}
 }
+
+// Upstream reads a configured project, instances and projectAliases only for
+// claude daily, and a unified daily report gives its project to Claude; every
+// other report keeps all rows, not grouped or labeled by project.
+func TestConfigProjectOptionsApplyOnlyToClaudeDaily(t *testing.T) {
+	_, cfg := sourceConfigFixture(t, `{"defaults": {"timezone": "UTC", "project": "project-a", "instances": true, "projectAliases": "project-a=Alpha"}}`)
+	for _, tc := range []struct {
+		args  []string
+		key   string
+		rows  int
+		total float64
+	}{
+		{[]string{"claude", "daily"}, "projects", 1, 30},
+		{[]string{"claude", "weekly"}, "weekly", 1, 1035},
+		{[]string{"claude", "monthly"}, "monthly", 1, 1035},
+		{[]string{"claude", "session"}, "sessions", 2, 1035},
+		{[]string{"codex", "daily"}, "daily", 2, 2500},
+		{[]string{"daily"}, "daily", 2, 2530},
+		{[]string{"weekly"}, "weekly", 2, 3535},
+	} {
+		p := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--config", cfg)...)
+		rows, _ := p[tc.key].([]any)
+		if projects, ok := p[tc.key].(map[string]any); ok {
+			rows = projects["project-a"].([]any)[:1]
+		}
+		if len(rows) != tc.rows || p["totals"].(map[string]any)["totalTokens"] != tc.total {
+			t.Errorf("%v: %d rows, totals %v; want %d rows, %v tokens", tc.args, len(rows), p["totals"], tc.rows, tc.total)
+		}
+	}
+	for args, alias := range map[string]bool{"claude daily": true, "claude weekly --instances": false} {
+		out, _, err := sourceCLIRun(append(strings.Fields(args), "--offline", "--config", cfg)...)
+		if err != nil || strings.Contains(out, "Alpha") != alias {
+			t.Errorf("%s: alias shown %v, want %v: %v\n%s", args, !alias, alias, err, out)
+		}
+	}
+}

@@ -121,7 +121,7 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	}
 	// Sources with config sections of their own read the command line again.
 	cli := *f
-	if err := applyConfig(cmd, cmd.Flags(), cfg.Options(kind, agent)); err != nil {
+	if err := applyConfig(cmd, cmd.Flags(), kind, agent, cfg.Options(kind, agent)); err != nil {
 		return err
 	}
 	weekdays := map[string]time.Weekday{"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday, "wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday}
@@ -377,14 +377,24 @@ func writeReportJSON(cmd *cobra.Command, payload any, f *reportFlags) error {
 	return enc.Encode(payload)
 }
 
-// applyConfig sets each config option on flags unless cmd's command line
-// sets it. Upstream's config has no period selectors, so --last, --date,
-// --month and --week come only from the command line.
-func applyConfig(cmd *cobra.Command, flags *pflag.FlagSet, options map[string]any) error {
+// applyConfig sets each config option of the kind report of agent on flags
+// unless cmd's command line sets it. Upstream's config has no period
+// selectors, so --last, --date, --month and --week come only from the command
+// line. It reads project, instances and projectAliases only for claude daily,
+// and a unified daily report passes its project on to Claude.
+func applyConfig(cmd *cobra.Command, flags *pflag.FlagSet, kind, agent string, options map[string]any) error {
 	for name, value := range options {
 		switch name = optionFlag(name); name {
 		case "last", "date", "month", "week":
 			continue
+		case "project":
+			if kind != "daily" || agent != "claude" && agent != "" {
+				continue
+			}
+		case "instances", "project-aliases":
+			if kind != "daily" || agent != "claude" {
+				continue
+			}
 		}
 		flag := flags.Lookup(name)
 		if flag == nil || explicitReportOption(cmd, name) {
