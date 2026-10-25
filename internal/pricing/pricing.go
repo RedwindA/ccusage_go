@@ -65,8 +65,9 @@ type lookupResult struct {
 }
 
 // Service prices models from two tables, like upstream: primary holds the
-// LiteLLM snapshot (or its live refresh) and the built-in rates, and models
-// holds models.dev, which only prices what primary misses.
+// LiteLLM snapshot (or its live refresh), the built-in rates and the
+// overrides, and models holds models.dev, which only prices what primary
+// misses.
 type Service struct {
 	primary         map[string]ModelPricing
 	models          map[string]ModelPricing
@@ -84,6 +85,8 @@ type Service struct {
 	offline              bool
 	attempted            bool
 	overrides            map[string]Override
+	// replaced holds the primary entries setOverrides replaced, by key.
+	replaced map[string]lookupResult
 }
 
 // snapshotPricing is the embedded models.dev snapshot; callers must not
@@ -120,7 +123,41 @@ func (s *Service) SetOffline(v bool) { s.mu.Lock(); defer s.mu.Unlock(); s.offli
 func (s *Service) SetOverrides(v map[string]Override) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.overrides = v
+	s.setOverrides(v)
+}
+
+// setOverrides makes each override an entry of primary, like upstream's
+// apply_override: in key order, it builds on the entry its key, or that key's
+// built-in alias, names there (no rates when neither does), and the lookup
+// then reaches it like any rate. It first puts back the entries the previous
+// overrides replaced. Callers hold s.mu.
+func (s *Service) setOverrides(overrides map[string]Override) {
+	for key, old := range s.replaced {
+		if old.found {
+			s.primary[key] = old.price
+		} else {
+			delete(s.primary, key)
+		}
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	s.replaced = make(map[string]lookupResult, len(keys))
+	for _, key := range keys {
+		p, ok := s.primary[key]
+		s.replaced[key] = lookupResult{p, ok}
+		if !ok {
+			// A context limit stays with the key that publishes it.
+			p = s.primary[canonical(key)]
+			p.MaxInputTokens = 0
+		}
+		s.primary[key] = apply(p, overrides[key])
+	}
+	s.overrides = overrides
+	s.memo = map[string]lookupResult{}
+	s.primaryIdx = nil
 }
 func (s *Service) HasOverride(model string) bool {
 	s.mu.Lock()
@@ -154,25 +191,8 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 	defer s.mu.Unlock()
 	resolved := ResolveModelName(model)
 	s.refreshFor(ctx, model, resolved)
-	key := model
-	override, hasOverride := s.overrides[key]
-	if !hasOverride {
-		key = resolved
-		override, hasOverride = s.overrides[key]
-	}
-	var p ModelPricing
-	var ok bool
-	if hasOverride {
-		// Like upstream's apply_override, an override builds on the LiteLLM or
-		// built-in entry its own key, or that key's built-in alias, names, and
-		// never on another model's rates a fuzzy match found.
-		if p, ok = s.primary[key]; !ok {
-			p = s.primary[canonical(key)]
-		}
-	} else {
-		p, ok = lookup(model, resolved)
-	}
-	if !ok && !hasOverride {
+	p, ok := lookup(model, resolved)
+	if !ok {
 		return ModelPricing{}, fmt.Errorf("no pricing found for model %q", model)
 	}
 	if p.FastMultiplier == 0 {
@@ -181,9 +201,6 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 	identity := deepseekV4Identity(model)
 	if identity == "" {
 		identity = deepseekV4Identity(resolved)
-	}
-	if !hasOverride && identity != "" {
-		override, hasOverride = s.overrides[identity]
 	}
 	if !at.IsZero() && identity != "" {
 		rates := []float64{.14, .28, .14, .0028}
@@ -211,9 +228,14 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 		p.OutputAbove = nil
 		p.CacheCreateAbove = nil
 		p.CacheReadAbove = nil
-	}
-	if hasOverride {
-		p = apply(p, override)
+		// Like upstream's find_at, an override of the model, its alias or the
+		// DeepSeek id sets its own fields over the schedule.
+		for _, key := range []string{model, resolved, identity} {
+			if override, ok := s.overrides[key]; ok {
+				p = apply(p, override)
+				break
+			}
+		}
 	}
 	return p, nil
 }
@@ -581,11 +603,6 @@ func (s *Service) ContextLimit(ctx context.Context, model string) (int, bool) {
 	fuzzy := !s.requiresExact(model) && !s.requiresExact(resolved)
 	for _, allow := range []bool{false, fuzzy} {
 		for _, name := range names {
-			for _, key := range []string{name, canonical(name)} {
-				if limit := s.overrides[key].MaxInputTokens; limit != nil {
-					return *limit, true
-				}
-			}
 			if p, ok := find(s.primary, s.primaryIndex(), name, allow, hasContextLimit); ok {
 				return p.MaxInputTokens, true
 			}
@@ -645,11 +662,13 @@ func (s *Service) refresh(ctx context.Context) {
 	if !prefetched {
 		live = fetchLite(ctx, s.client)
 	}
+	// Like upstream, the overrides apply to the refreshed entries.
+	overrides := s.overrides
+	s.setOverrides(nil)
 	for model, p := range live {
 		s.primary[model] = p
 	}
-	s.memo = map[string]lookupResult{}
-	s.primaryIdx = nil
+	s.setOverrides(overrides)
 }
 func modelsPricing(payload []byte) map[string]ModelPricing {
 	type cost struct {

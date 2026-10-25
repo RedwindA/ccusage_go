@@ -71,6 +71,48 @@ func TestOverrideOfAnUnpricedIDStartsFromNoRates(t *testing.T) {
 		}
 	}
 }
+
+// Upstream's apply_override stores an override as an entry of the LiteLLM
+// table, so the lookup reaches it like any rate: an id that fuzzy-matches its
+// key or names it through a built-in alias is priced and sized by it, and a
+// model with an entry of its own keeps that entry before the override of its
+// CCUSAGE_MODEL_ALIASES target. A DeepSeek V4 override still sets its fields
+// over the time schedule (user_deepseek_v4_overrides_remain_authoritative,
+// partial_deepseek_v4_override_keeps_schedule_for_unspecified_fields).
+func TestOverridesAreEntriesOfTheLookup(t *testing.T) {
+	ctx := context.Background()
+	s := NewService()
+	s.SetOffline(true)
+	own, err := s.GetPricing(ctx, "claude-sonnet-4-5", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, output, flash, limit := 1e-6, 2e-6, 9e-6, 100000
+	s.SetOverrides(map[string]Override{
+		"claude-opus-4-8":     {InputCostPerToken: &input, OutputCostPerToken: &output},
+		"my-custom-model":     {InputCostPerToken: &input, OutputCostPerToken: &output, MaxInputTokens: &limit},
+		"gpt-5.3-codex-spark": {InputCostPerToken: &input, OutputCostPerToken: &output},
+		"deepseek-v4-flash":   {InputCostPerToken: &flash},
+	})
+	for _, model := range []string{"bedrock/claude-opus-4-8", "claude-opus-4-8-20260101", "my-custom-model-20250101", "my-custom-model@v2", "anthropic/my-custom-model", "gpt-5.3-spark"} {
+		if p, err := s.GetPricing(ctx, model, time.Time{}); err != nil || p.InputCostPerToken != input || p.OutputCostPerToken != output {
+			t.Errorf("%s: %+v %v", model, p, err)
+		}
+	}
+	for _, model := range []string{"my-custom-model-20250101", "bedrock/my-custom-model"} {
+		if got, ok := s.ContextLimit(ctx, model); !ok || got != limit {
+			t.Errorf("%s: context limit %d %v", model, got, ok)
+		}
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-08-17T01:00:00Z")
+	if p, err := s.GetPricing(ctx, "deepseek-v4-flash", at); err != nil || p.InputCostPerToken != flash || math.Abs(p.OutputCostPerToken-1.32e-6) > 1e-15 || math.Abs(p.CacheReadInputTokenCost-.014e-6) > 1e-15 {
+		t.Errorf("DeepSeek: %+v %v", p, err)
+	}
+	t.Setenv("CCUSAGE_MODEL_ALIASES", `{"claude-sonnet-4-5":"claude-opus-4-8"}`)
+	if p, err := s.GetPricing(ctx, "claude-sonnet-4-5", time.Time{}); err != nil || p.InputCostPerToken != own.InputCostPerToken {
+		t.Errorf("own entry lost to the alias's override: %+v %v", p, err)
+	}
+}
 func TestDeepSeekTimeSchedule(t *testing.T) {
 	s := NewService()
 	s.SetOffline(true)

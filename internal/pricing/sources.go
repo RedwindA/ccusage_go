@@ -8,14 +8,14 @@ import (
 )
 
 // hasExactPricing reports whether model as written names an entry of its own
-// (exactEntry) or an override: upstream's find_exact_with_fallback, which
-// decides whether Hermes prices a provider-qualified id.
+// (exactEntry): upstream's find_exact_with_fallback, which decides whether
+// Hermes prices a provider-qualified id.
 func (s *Service) hasExactPricing(ctx context.Context, model string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refreshFor(ctx, model, model)
 	_, ok := s.exactEntry(model)
-	return ok || hasKey(s.overrides, model)
+	return ok
 }
 
 // hasPrimaryPricing reports whether LiteLLM, a built-in rate or an override
@@ -25,7 +25,7 @@ func (s *Service) hasPrimaryPricing(ctx context.Context, model string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refresh(ctx)
-	return hasKey(s.primary, model) || hasKey(s.overrides, model)
+	return hasKey(s.primary, model)
 }
 
 // GetSourcePricing keeps source-specific naming and vendor billing policy out of
