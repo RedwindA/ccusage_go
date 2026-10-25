@@ -95,7 +95,7 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 		p.StringVar(&f.week, "week", "", "Report week containing this date")
 	}
 	if kind == "session" {
-		p.StringVarP(&f.sessionID, "id", "i", "", "Show Claude session details by ID")
+		p.StringVarP(&f.sessionID, "id", "i", "", "Show session details by ID")
 	}
 	completeValues(cmd, "format", "table", "json", "csv")
 	completeValues(cmd, "order", "asc", "desc")
@@ -278,6 +278,16 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 			detected[entry.Agent] = true
 			o.DetectedAgents = append(o.DetectedAgents, entry.Agent)
 		}
+	}
+	if agent == "codex" && kind == "session" && f.sessionID != "" {
+		row, err := resolveCodexSession(entries, o, f.sessionID)
+		if err != nil {
+			return err
+		}
+		if f.format == "json" {
+			return writeCodexSessionDetail(cmd, row, o, f)
+		}
+		o.SessionID = row.Period
 	}
 	if agent == "claude" && kind == "session" && (f.sessionID != "" || f.sessionName != "" && f.format == "table") {
 		return writeClaudeSessionDetail(cmd, entries, o, f)

@@ -2,7 +2,9 @@ package commands
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/reports"
@@ -44,4 +46,41 @@ func writeClaudeSessionDetail(cmd *cobra.Command, entries []types.UsageEntry, o 
 	o.SessionName = ""
 	fmt.Fprintln(cmd.OutOrStdout(), "\nSource file breakdown")
 	return writeUsageTable(cmd, reports.Aggregate(entries, o), o)
+}
+
+var codexUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// resolveCodexSession accepts a Codex session's full ID, its rollout file name
+// (with or without .jsonl or .jsonl.zst), its trailing UUID or a
+// codex://threads/<uuid> URI. A UUID shared by several rollouts is an error
+// rather than a guess.
+func resolveCodexSession(entries []types.UsageEntry, o reports.Options, requested string) (*reports.Row, error) {
+	id := strings.TrimPrefix(requested, "codex://threads/")
+	id = strings.TrimSuffix(strings.TrimSuffix(id, ".zst"), ".jsonl")
+	o.SessionID = ""
+	var matches []*reports.Row
+	for _, row := range reports.Aggregate(entries, o) {
+		session := row.Period
+		if session == id || session[strings.LastIndex(session, "/")+1:] == id || codexUUID.MatchString(id) && strings.HasSuffix(session, "-"+id) {
+			matches = append(matches, row)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("No Codex session found with ID: %s", requested)
+	case 1:
+		return matches[0], nil
+	}
+	return nil, fmt.Errorf("Codex session ID '%s' is ambiguous and matches %d sessions.", requested, len(matches))
+}
+
+// writeCodexSessionDetail prints one session's report row on its own, with the
+// cost named totalCost as in the Claude session detail.
+func writeCodexSessionDetail(cmd *cobra.Command, row *reports.Row, o reports.Options, f *reportFlags) error {
+	detail := reports.FocusedJSONRows([]*reports.Row{row}, o)[0]
+	if cost, ok := detail["costUSD"]; ok {
+		detail["totalCost"] = cost
+		delete(detail, "costUSD")
+	}
+	return writeReportJSON(cmd, detail, f)
 }
