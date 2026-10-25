@@ -65,3 +65,21 @@ func TestIdentifySessionBlocksCostBreakdown(t *testing.T) {
 	assert.InDelta(t, 3.0, block.CacheCreateCostUSD, 0.001, "Cache create cost should be sum")
 	assert.InDelta(t, 1.5, block.CacheReadCostUSD, 0.001, "Cache read cost should be sum")
 }
+
+// Upstream rounds the remaining time to whole minutes before projecting, and
+// the projection to a whole token and to cents.
+func TestProjectBlockUsageRoundsLikeUpstream(t *testing.T) {
+	now := time.Now()
+	block := types.SessionBlock{
+		IsActive:    true,
+		EndTime:     now.Add(240*time.Minute + 17*time.Second),
+		Entries:     []types.UsageEntry{{Timestamp: now.Add(-37*time.Minute - 18*time.Second)}, {Timestamp: now.Add(-time.Minute - 42*time.Second)}},
+		TokenCounts: types.TokenCounts{InputTokens: 233332},
+		CostUSD:     2.22221,
+	}
+	projection := ProjectBlockUsage(block)
+	require.NotNil(t, projection)
+	assert.Equal(t, 240, projection.RemainingMinutes)
+	assert.Equal(t, 1806357, projection.TotalTokens) // 233332 + 233332/35.6*240
+	assert.Equal(t, 17.2, projection.TotalCost)
+}

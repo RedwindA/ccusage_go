@@ -1,6 +1,7 @@
 package calculator
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -235,26 +236,16 @@ func ProjectBlockUsage(block types.SessionBlock) *types.ProjectedUsage {
 		return nil
 	}
 
-	now := time.Now()
-	remainingTime := block.EndTime.Sub(now)
-	remainingMinutes := remainingTime.Minutes()
-	if remainingMinutes < 0 {
-		remainingMinutes = 0
-	}
-
-	// Current tokens plus projected additional tokens
-	currentTokens := block.TokenCounts.GetTotal()
-	additionalTokens := int(burnRate.TokensPerMinute * remainingMinutes)
-	totalTokens := currentTokens + additionalTokens
-
-	// Current cost plus projected additional cost
-	additionalCost := (burnRate.CostPerHour / 60) * remainingMinutes
-	totalCost := block.CostUSD + additionalCost
+	// As upstream, project over the remaining time rounded to whole
+	// minutes, then round to a whole token and to cents.
+	remainingMinutes := math.Round(time.Until(block.EndTime).Minutes())
+	totalTokens := float64(block.TokenCounts.GetTotal()) + burnRate.TokensPerMinute*remainingMinutes
+	totalCost := block.CostUSD + (burnRate.CostPerHour/60)*remainingMinutes
 
 	return &types.ProjectedUsage{
-		TotalTokens:      totalTokens,
-		TotalCost:        totalCost,
-		RemainingMinutes: remainingMinutes,
+		TotalTokens:      int(math.Round(totalTokens)),
+		TotalCost:        math.Round(totalCost*100) / 100,
+		RemainingMinutes: max(int(remainingMinutes), 0),
 	}
 }
 

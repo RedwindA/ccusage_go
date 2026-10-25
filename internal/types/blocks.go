@@ -41,7 +41,7 @@ type BurnRate struct {
 type ProjectedUsage struct {
 	TotalTokens      int     `json:"total_tokens"`
 	TotalCost        float64 `json:"total_cost"`
-	RemainingMinutes float64 `json:"remaining_minutes"`
+	RemainingMinutes int     `json:"remaining_minutes"`
 }
 
 // TokenLimitStatus represents the status of token usage against a limit
