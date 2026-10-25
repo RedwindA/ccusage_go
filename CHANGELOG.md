@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Windows installer: `irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 | iex` verifies the release's SHA-256 checksum, installs `ccusage_go.exe` into `%LOCALAPPDATA%\Programs\ccusage_go` without administrator rights, and adds it to the user PATH. Running `install.sh` from Git Bash now points to it.
+
+### Fixed
+
+- `ccusage_go update` on Windows no longer fails when an earlier update's old binary is still running, such as a `blocks --live` session, and the old binary left beside the new one is deleted on the next run instead of lingering until the next update.
+
 ## [v0.18.0] - 2026-09-27
 
 ### Added

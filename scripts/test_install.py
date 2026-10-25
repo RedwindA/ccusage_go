@@ -11,6 +11,7 @@ import unittest
 INSTALLER = Path(__file__).resolve().parents[1] / 'install.sh'
 
 
+@unittest.skipIf(os.name == 'nt', 'install.sh targets Linux and macOS')
 class InstallerTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

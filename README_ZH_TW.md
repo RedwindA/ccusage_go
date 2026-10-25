@@ -59,11 +59,29 @@ curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.18.0/inst
 INSTALL_DIR="$HOME/bin" sh install.sh v0.18.0
 ```
 
+### 快速安裝（Windows）
+
+在 PowerShell（Windows PowerShell 5.1 或 PowerShell 7）中執行：
+
+```powershell
+irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 | iex
+```
+
+腳本自動辨識 x64/arm64，驗證 SHA-256，將 `ccusage_go.exe` 安裝至 `%LOCALAPPDATA%\Programs\ccusage_go`，不需要系統管理員權限，並把該目錄加入使用者 PATH。安裝後請開啟新的終端機。`ccusage_go update` 的用法與 Linux/macOS 相同，即使另一個 `ccusage_go`（例如 `blocks --live`）仍在執行也能更新。
+
+指定版本或安裝目錄：
+
+```powershell
+$env:INSTALL_DIR = "$HOME\bin"
+& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.18.0
+```
+
+設定 `CCUSAGE_GO_NO_MODIFY_PATH=1` 可保留 PATH 不變。
+
 ### 預編譯版本
 
 從 [GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) 下載。
 支援 Linux、macOS、Windows 的 amd64 與 arm64，附 `checksums.txt`。
-Windows 請解壓縮對應 ZIP，將執行檔改名為 `ccusage_go.exe`。
 
 ### 從原始碼編譯
 

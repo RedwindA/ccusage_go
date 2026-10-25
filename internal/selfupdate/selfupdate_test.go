@@ -12,10 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func tarGz(t *testing.T, files map[string]string) []byte {
@@ -124,32 +125,131 @@ func TestDownloadRejectsBadChecksum(t *testing.T) {
 	}
 }
 
-func TestInstallReplacesAfterVersionCheck(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a shell script as the staged binary")
+// TestMain lets tests use this test binary as the downloaded release: with
+// FAKE_CCUSAGE_GO_VERSION set it prints that version, or with
+// FAKE_CCUSAGE_GO_SLEEP it keeps running like a blocks --live session.
+func TestMain(m *testing.M) {
+	if v := os.Getenv("FAKE_CCUSAGE_GO_VERSION"); v != "" {
+		fmt.Println("ccusage_go version " + v)
+		os.Exit(0)
 	}
+	if os.Getenv("FAKE_CCUSAGE_GO_SLEEP") != "" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// fakeRelease returns this test binary, which acts as a release reporting v.
+func fakeRelease(t *testing.T, v string) []byte {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CCUSAGE_GO_VERSION", v)
+	return binary
+}
+
+func installed(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestInstallReplacesAfterVersionCheck(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "ccusage_go")
+	exe := filepath.Join(dir, "ccusage_go.exe")
 	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := func(v string) []byte { return []byte("#!/bin/sh\necho ccusage_go version " + v + "\n") }
 
-	if err := Install(context.Background(), exe, script("v1.0.0"), "v2.0.0"); err == nil {
+	if err := Install(context.Background(), exe, fakeRelease(t, "v1.0.0"), "v2.0.0"); err == nil {
 		t.Fatal("installed a binary reporting the wrong version")
 	}
 	if b, _ := os.ReadFile(exe); string(b) != "old" {
 		t.Fatalf("failed install modified the binary: %q", b)
 	}
+	if names := installed(t, dir); len(names) != 1 {
+		t.Fatalf("failed install left files behind: %v", names)
+	}
 
-	if err := Install(context.Background(), exe, script("v2.0.0"), "v2.0.0"); err != nil {
+	binary := fakeRelease(t, "v2.0.0")
+	if err := Install(context.Background(), exe, binary, "v2.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(exe); !bytes.Equal(b, script("v2.0.0")) {
-		t.Fatalf("binary not replaced: %q", b)
+	if b, _ := os.ReadFile(exe); !bytes.Equal(b, binary) {
+		t.Fatal("binary not replaced")
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Fatalf("staging files left behind: %v", entries)
+	RemoveStale(exe)
+	if names := installed(t, dir); len(names) != 1 {
+		t.Fatalf("staging files left behind: %v", names)
+	}
+}
+
+// Updating twice while the original binary keeps running must work: on
+// Windows the second update cannot delete or reuse the first one's exe.old.
+func TestInstallWhileOldBinaryRuns(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "ccusage_go.exe")
+	binary := fakeRelease(t, "v2.0.0")
+	if err := os.WriteFile(exe, binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	running := exec.Command(exe)
+	running.Env = append(os.Environ(), "FAKE_CCUSAGE_GO_VERSION=", "FAKE_CCUSAGE_GO_SLEEP=1")
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { running.Process.Kill(); running.Wait() })
+
+	for i := 0; i < 2; i++ {
+		if err := Install(context.Background(), exe, binary, "v2.0.0"); err != nil {
+			t.Fatalf("update %d: %v", i+1, err)
+		}
+	}
+	running.Process.Kill()
+	running.Wait()
+	RemoveStale(exe)
+	if names := installed(t, dir); len(names) != 1 || names[0] != "ccusage_go.exe" {
+		t.Fatalf("files after updates: %v", names)
+	}
+}
+
+func TestReplaceAsideAvoidsStaleCopyInUse(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "ccusage_go.exe")
+	staged := filepath.Join(dir, "staged.exe")
+	os.WriteFile(exe, []byte("old"), 0o755)
+	os.WriteFile(staged, []byte("new"), 0o755)
+	// A directory stands in for an exe.old that cannot be deleted.
+	if err := os.Mkdir(exe+".old", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceAside(exe, staged); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new" {
+		t.Fatalf("exe = %q", b)
+	}
+	asides, _ := filepath.Glob(exe + ".old-*")
+	if len(asides) != 1 {
+		t.Fatalf("aside copies = %v", asides)
+	}
+	RemoveStale(exe)
+	if names := installed(t, dir); len(names) != 2 {
+		t.Fatalf("files after cleanup: %v", names)
 	}
 }
 

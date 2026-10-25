@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -226,16 +227,14 @@ func Executable() (string, error) {
 // is never left partially written.
 func Install(ctx context.Context, exe string, binary []byte, wantVersion string) error {
 	dir := filepath.Dir(exe)
-	if runtime.GOOS == "windows" {
-		_ = os.Remove(exe + ".old") // left by the previous update
-	}
 	pattern := ".ccusage_go-update-*"
 	if runtime.GOOS == "windows" {
+		RemoveStale(exe)
 		pattern += ".exe" // Windows only runs files with an executable extension
 	}
 	staged, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return fmt.Errorf("cannot write to %s: %w", dir, err)
+		return fmt.Errorf("cannot write to %s: %w (rerun with write access there, or reinstall into a user directory)", dir, err)
 	}
 	tmp := staged.Name()
 	defer os.Remove(tmp) // no-op once renamed into place
@@ -253,20 +252,59 @@ func Install(ctx context.Context, exe string, binary []byte, wantVersion string)
 		return err
 	}
 	if runtime.GOOS == "windows" {
-		// A running executable cannot be replaced, but it can be renamed.
-		if err := os.Rename(exe, exe+".old"); err != nil {
-			return fmt.Errorf("replace %s: %w", exe, err)
-		}
-		if err := os.Rename(tmp, exe); err != nil {
-			_ = os.Rename(exe+".old", exe)
-			return fmt.Errorf("replace %s: %w", exe, err)
-		}
-		return nil
+		return replaceAside(exe, tmp)
 	}
 	if err := os.Rename(tmp, exe); err != nil {
 		return fmt.Errorf("replace %s: %w", exe, err)
 	}
 	return nil
+}
+
+// replaceAside moves staged to exe on Windows, where a running executable
+// cannot be replaced but can be renamed. The old binary moves to exe.old,
+// which RemoveStale deletes once nothing runs it; while an earlier exe.old is
+// still running (say, a blocks --live session), it gets a unique name.
+func replaceAside(exe, staged string) error {
+	aside := exe + ".old"
+	if _, err := os.Lstat(aside); err == nil {
+		aside = fmt.Sprintf("%s.old-%d", exe, time.Now().UnixNano())
+	}
+	if err := rename(exe, aside); err != nil {
+		return fmt.Errorf("replace %s: %w", exe, err)
+	}
+	if err := rename(staged, exe); err != nil {
+		_ = rename(aside, exe)
+		return fmt.Errorf("replace %s: %w", exe, err)
+	}
+	return nil
+}
+
+// rename retries for a moment on Windows, where antivirus scanners briefly
+// lock a freshly written executable and the rename fails with access denied.
+func rename(from, to string) error {
+	err := os.Rename(from, to)
+	for i := 0; i < 20 && err != nil && runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission); i++ {
+		time.Sleep(50 * time.Millisecond)
+		err = os.Rename(from, to)
+	}
+	return err
+}
+
+// RemoveStale deletes the copies of exe that a Windows update or install.ps1
+// renamed aside. Each is deleted once no process runs it any more; the rest
+// stay for a later call.
+func RemoveStale(exe string) {
+	entries, err := os.ReadDir(filepath.Dir(exe))
+	if err != nil {
+		return
+	}
+	prefix := filepath.Base(exe) + ".old"
+	for _, e := range entries {
+		name := e.Name()
+		if (name == prefix || strings.HasPrefix(name, prefix+"-")) && !e.IsDir() {
+			_ = os.Remove(filepath.Join(filepath.Dir(exe), name))
+		}
+	}
 }
 
 // checkVersion runs the staged binary, which must print wantVersion.

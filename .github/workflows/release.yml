@@ -57,8 +57,8 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: |
-          cp install.sh dist/install.sh
-          (cd dist && sha256sum -- *.tar.gz *.zip install.sh > checksums.txt)
+          cp install.sh install.ps1 dist/
+          (cd dist && sha256sum -- *.tar.gz *.zip install.sh install.ps1 > checksums.txt)
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -68,7 +68,8 @@ jobs:
           if heading not in changelog:
               raise SystemExit(f'Missing changelog entry for {version}')
           notes = changelog.split(heading, 1)[1].split('\n', 1)[1].split('\n## [', 1)[0].strip()
-          notes += f'\n\n### Installation (Linux / macOS)\n\n```sh\ncurl -fsSL https://github.com/{os.environ["GITHUB_REPOSITORY"]}/releases/download/{version}/install.sh | sh -s -- {version}\n```\n\nWindows: download the matching ZIP. SHA-256 checksums are in `checksums.txt`.\n'
+          base = f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/releases/download/{version}'
+          notes += f'\n\n### Installation (Linux / macOS)\n\n```sh\ncurl -fsSL {base}/install.sh | sh -s -- {version}\n```\n\n### Installation (Windows PowerShell)\n\n```powershell\n& ([scriptblock]::Create((irm {base}/install.ps1))) {version}\n```\n\nAlready installed? Run `ccusage_go update`. SHA-256 checksums are in `checksums.txt`.\n'
           Path('release-notes.md').write_text(notes)
           PY
       - name: Publish release
@@ -83,5 +84,5 @@ jobs:
             gh release create "$VERSION" --verify-tag --draft \
               --title "ccusage_go $VERSION" --notes-file release-notes.md "${args[@]}"
           fi
-          gh release upload "$VERSION" dist/*.tar.gz dist/*.zip dist/checksums.txt dist/install.sh --clobber
+          gh release upload "$VERSION" dist/*.tar.gz dist/*.zip dist/checksums.txt dist/install.sh dist/install.ps1 --clobber
           gh release edit "$VERSION" --draft=false --notes-file release-notes.md "${args[@]}"

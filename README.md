@@ -63,11 +63,29 @@ curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.18.0/inst
 INSTALL_DIR="$HOME/bin" sh install.sh v0.18.0
 ```
 
+### Quick Install (Windows)
+
+In PowerShell (Windows PowerShell 5.1 or PowerShell 7):
+
+```powershell
+irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 | iex
+```
+
+The installer detects x64/arm64, verifies the release archive's SHA-256 checksum, installs `ccusage_go.exe` into `%LOCALAPPDATA%\Programs\ccusage_go` without administrator rights, and adds that directory to your user PATH. Open a new terminal afterwards. `ccusage_go update` works the same as on Linux and macOS, even while another `ccusage_go` (such as `blocks --live`) is running.
+
+To choose a version or installation directory:
+
+```powershell
+$env:INSTALL_DIR = "$HOME\bin"
+& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.18.0
+```
+
+Set `CCUSAGE_GO_NO_MODIFY_PATH=1` to leave PATH unchanged.
+
 ### Pre-built Binaries
 
 [GitHub Releases](https://github.com/RedwindA/ccusage_go/releases) includes Linux,
 macOS, and Windows archives for amd64 and arm64, plus `checksums.txt`.
-On Windows, extract the matching ZIP and rename the executable to `ccusage_go.exe`.
 
 ### From Source
 

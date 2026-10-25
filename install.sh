@@ -23,7 +23,9 @@ esac
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;
-  *) fail 'Supported systems: Linux and macOS. Download Windows ZIPs from GitHub Releases.' ;;
+  MINGW*|MSYS*|CYGWIN*)
+    fail 'On Windows, run this in PowerShell instead: irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 | iex' ;;
+  *) fail 'Supported systems: Linux and macOS; Windows uses install.ps1.' ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) arch=amd64 ;;

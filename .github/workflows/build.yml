@@ -30,9 +30,18 @@ jobs:
         run: go vet ./...
       - name: Build
         run: go build ./cmd/ccusage
-      - name: Test installer
-        if: runner.os != 'Windows'
+      - name: Test installers
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Install the latest release with install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:INSTALL_DIR = "$env:RUNNER_TEMP\ccusage_go"
+          $env:CCUSAGE_GO_NO_MODIFY_PATH = '1'
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:INSTALL_DIR\ccusage_go.exe" --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Check shell scripts
         if: runner.os == 'Linux'
         run: shellcheck install.sh scripts/build-release.sh

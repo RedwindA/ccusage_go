@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/debug"
 
 	"github.com/RedwindA/ccusage_go/internal/commands"
+	"github.com/RedwindA/ccusage_go/internal/selfupdate"
 )
 
 var version = "dev"
@@ -16,6 +18,13 @@ func main() {
 	// half as many collections is faster. An explicit GOGC still wins.
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(200)
+	}
+	// An update on Windows leaves the old binary beside the new one, since it
+	// was still running; delete it now that it has exited.
+	if runtime.GOOS == "windows" {
+		if exe, err := selfupdate.Executable(); err == nil {
+			selfupdate.RemoveStale(exe)
+		}
 	}
 	ctx := context.Background()
 
