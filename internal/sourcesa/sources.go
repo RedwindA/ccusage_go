@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/dirwalk"
 	"github.com/RedwindA/ccusage_go/internal/fileread"
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 	"github.com/RedwindA/ccusage_go/internal/types"
@@ -192,7 +193,7 @@ func discover(ctx context.Context, name string, paths []string) ([]string, []str
 			if !st.IsDir() {
 				dir = filepath.Dir(r)
 			}
-			e := filepath.WalkDir(r, func(p string, d fs.DirEntry, e error) error {
+			e := dirwalk.Walk(r, func(p string, d fs.DirEntry, e error) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}

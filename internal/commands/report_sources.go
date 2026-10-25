@@ -15,6 +15,7 @@ import (
 
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/config"
+	"github.com/RedwindA/ccusage_go/internal/dirwalk"
 	"github.com/RedwindA/ccusage_go/internal/loader"
 	"github.com/RedwindA/ccusage_go/internal/parallel"
 	"github.com/RedwindA/ccusage_go/internal/sourcesa"
@@ -382,7 +383,7 @@ func claudeFiles(ctx context.Context, paths []string) ([]string, error) {
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			continue
 		}
-		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		err := dirwalk.Walk(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

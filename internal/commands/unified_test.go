@@ -146,3 +146,52 @@ func TestNamedPiStoreAddsUsageWithDistinctAttribution(t *testing.T) {
 		t.Fatalf("stores collapsed session IDs %#v", p)
 	}
 }
+
+// A source directory that is a symlink, such as Claude's projects moved to
+// another disk, is read like upstream's read_dir reads it, and its files keep
+// the names they have under the link: sessions, projects and Qwen's
+// projects/<project>/chats layout come from those names.
+func TestSymlinkedSourceRootsAreRead(t *testing.T) {
+	home := isolateSourceHomes(t)
+	link := func(target, name string) {
+		if err := os.MkdirAll(filepath.Dir(name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, name); err != nil {
+			t.Skip(err)
+		}
+	}
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	sourceCLIWrite(t, filepath.Join(home, "claude-store/project-a/session-a.jsonl"), pruneUsageLine("2026-09-11T12:00:00.000Z", "session-a", "msg-1", "req-1", 1))
+	sourceCLIWrite(t, filepath.Join(home, "claude-store/project-a/session-a/subagents/agent-x.jsonl"), pruneSidechainLine("2026-09-11T12:05:00.000Z", "session-a", "msg-2", "req-2", 2))
+	link(filepath.Join(home, "claude-store"), filepath.Join(claude, "projects"))
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	sourceCLIWrite(t, filepath.Join(home, "codex-store/2026/09/11/rollout.jsonl"), sourceCodexRollout("2026-09-11T12:00:00Z", 100, 10))
+	link(filepath.Join(home, "codex-store"), filepath.Join(codex, "sessions"))
+	t.Setenv("PI_AGENT_DIR", filepath.Join(home, "pi"))
+	sourceCLIWrite(t, filepath.Join(home, "pi-store/work/s.jsonl"), sourcePiMessage("2026-09-11T12:00:00Z", 10, 5))
+	link(filepath.Join(home, "pi-store"), filepath.Join(home, "pi"))
+	qwen := filepath.Join(home, "qwen")
+	t.Setenv("QWEN_DATA_DIR", qwen)
+	sourceCLIWrite(t, filepath.Join(home, "qwen-store/work/chats/s.jsonl"), `{"type":"assistant","sessionId":"s","model":"test-model-1","timestamp":"2026-09-11T12:00:00Z","usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"totalTokenCount":120}}`)
+	link(filepath.Join(home, "qwen-store"), filepath.Join(qwen, "projects"))
+
+	for _, tc := range []struct {
+		args   []string
+		tokens float64
+	}{{[]string{"claude", "daily"}, 24}, {[]string{"codex", "daily"}, 110}, {[]string{"pi", "daily"}, 15}, {[]string{"qwen", "daily"}, 120}, {[]string{"daily"}, 269}} {
+		totals := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--timezone", "UTC")...)["totals"].(map[string]any)
+		if totals["totalTokens"] != tc.tokens {
+			t.Errorf("%v: totals %v, want %v tokens", tc.args, totals, tc.tokens)
+		}
+	}
+	sessions := sourceCLIJSON(t, "claude", "session", "--json", "--offline", "--timezone", "UTC")["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("claude sessions %v, want session-a with its subagent", sessions)
+	}
+	if s := sessions[0].(map[string]any); s["sessionId"] != "session-a" || s["projectPath"] != filepath.Join(claude, "projects", "project-a") {
+		t.Errorf("claude session %v", s)
+	}
+}

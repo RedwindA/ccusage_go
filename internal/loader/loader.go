@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/dirwalk"
 	"github.com/RedwindA/ccusage_go/internal/fileread"
 	"github.com/RedwindA/ccusage_go/internal/parallel"
 	"github.com/RedwindA/ccusage_go/internal/types"
@@ -583,12 +585,12 @@ func (l *Loader) createUniqueHash(raw map[string]interface{}) string {
 func (l *Loader) findJSONLFiles(basePath string) ([]string, error) {
 	var files []string
 
-	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+	err := dirwalk.Walk(basePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // Continue walking, ignore inaccessible files
 		}
 
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
 			files = append(files, path)
 		}
 
