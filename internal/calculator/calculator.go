@@ -106,10 +106,11 @@ func (c *Calculator) calculateSingleCost(ctx context.Context, entry *types.Usage
 	entry.WebFetchCost = 0
 	var p pricing.ModelPricing
 	var err error
-	if source, ok := c.pricingService.(interface {
+	source, hasSource := c.pricingService.(interface {
 		GetSourcePricing(context.Context, string, string, any, time.Time) (pricing.ModelPricing, error)
-	}); ok {
-		at := entry.Timestamp
+	})
+	at := entry.Timestamp
+	if hasSource {
 		if entry.Agent == "opencode" {
 			aggregate, _ := entry.Raw["session_aggregate"].(bool)
 			if aggregate || at.UnixMilli() == 0 {
@@ -141,6 +142,19 @@ func (c *Calculator) calculateSingleCost(ctx context.Context, entry *types.Usage
 		entry.Raw["missing_pricing_model"] = entry.Model
 		return
 	}
+	c.applyPricing(entry, p)
+	if hasSource && entry.Agent == "hermes" && entry.Cost == 0 {
+		// Like upstream's calculate_hermes_cost, a provider-qualified rate that
+		// bills nothing, such as LiteLLM's free zai/glm-4.7-flash, gives way to
+		// the raw model, which is what Hermes's own provider prices.
+		if p, err := source.GetSourcePricing(ctx, entry.Model, entry.Agent, "hermes", at); err == nil {
+			c.applyPricing(entry, p)
+		}
+	}
+}
+
+// applyPricing sets entry's cost fields from its tokens and p.
+func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricing) {
 	create5, create1 := entry.CacheCreationInputTokens, 0
 	raw := entry.Raw
 	if message, ok := raw["message"].(map[string]interface{}); ok {

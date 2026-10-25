@@ -91,6 +91,31 @@ func TestPiOverrideThroughAnAliasOfTheStoreLabel(t *testing.T) {
 		}
 	}
 }
+
+// Like upstream's calculate_hermes_cost, a provider-qualified rate that bills
+// nothing, such as LiteLLM's free zai/glm-4.7-flash, gives way to the raw
+// model, and leaves no missing-pricing flag when the raw model has no rate.
+func TestHermesSkipsAProviderRateThatBillsNothing(t *testing.T) {
+	s := pricing.NewService()
+	s.SetOffline(true)
+	zero := 0.0
+	s.SetOverrides(map[string]pricing.Override{"acme/private": {InputCostPerToken: &zero, OutputCostPerToken: &zero}})
+	c := New(s)
+	hermes := func(model string, provider any) types.UsageEntry {
+		e := types.UsageEntry{Agent: "hermes", Model: model, InputTokens: 1000, OutputTokens: 500, CacheReadInputTokens: 2000, Raw: map[string]interface{}{"provider": provider}}
+		_ = c.CalculateCost(&e)
+		return e
+	}
+	want := hermes("glm-4.7-flash", "hermes").Cost
+	for _, provider := range []string{"zai", "ZAI"} {
+		if e := hermes("glm-4.7-flash", provider); want <= 0 || e.Cost != want {
+			t.Errorf("%s: %v, want %v", provider, e.Cost, want)
+		}
+	}
+	if e := hermes("private", "acme"); e.Cost != 0 || e.Raw["missing_pricing"] != nil {
+		t.Errorf("free acme/private: %v %v", e.Cost, e.Raw)
+	}
+}
 func TestUnknownAndReasoning(t *testing.T) {
 	c := modernCalculator()
 	e := types.UsageEntry{Model: "not-a-real-model", InputTokens: 100}
