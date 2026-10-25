@@ -53,7 +53,7 @@ func projectCodexRows(t *testing.T, path string) []object {
 
 func checkCodexRows(t *testing.T, path string) {
 	t.Helper()
-	got, err := readCodexRows(path)
+	got, _, err := readCodexRows(path)
 	if err != nil {
 		t.Fatal(err)
 	}

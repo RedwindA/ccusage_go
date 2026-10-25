@@ -1,13 +1,12 @@
 module github.com/RedwindA/ccusage_go
 
-go 1.23.0
-
-toolchain go1.24.6
+go 1.25
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.4
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/term v0.2.1
+	github.com/klauspost/compress v1.20.3
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/olekukonko/tablewriter v1.0.9

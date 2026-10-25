@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/fileread"
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 	"github.com/RedwindA/ccusage_go/internal/types"
+	"github.com/klauspost/compress/zstd"
 )
 
 type codexUsage [6]int // inclusive input, cache read, cache creation, output, reasoning, total
@@ -77,11 +80,58 @@ func decodeCodexPayload(payload []byte) (interface{}, error) {
 	return fields, err
 }
 
-// readCodexRows is readLines restricted to the fields parseCodex uses.
-func readCodexRows(path string) ([]object, error) {
+// codexZstd decodes compressed rollouts; DecodeAll is safe for concurrent use.
+// codexDecoded reuses the decoded buffers, as fileread reuses file buffers.
+var (
+	codexZstd, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	codexDecoded = sync.Pool{New: func() any { return new([]byte) }}
+)
+
+// codexPlainPath is the .jsonl path of a rollout whatever its encoding.
+// Codex migrates cold rollouts to .jsonl.zst without changing the session.
+func codexPlainPath(p string) string {
+	if strings.HasSuffix(p, ".jsonl.zst") {
+		return strings.TrimSuffix(p, ".zst")
+	}
+	return p
+}
+
+// readCodexRollout reads a plain or compressed rollout and returns the path it
+// read: Codex may compress or restore the rollout between discovery and this
+// read, which then falls back to the other encoding.
+func readCodexRollout(path string) ([]byte, func(), string, error) {
+	b, release, err := readCodexEncoding(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		other := codexPlainPath(path)
+		if other == path {
+			other += ".zst"
+		}
+		if b, release, err := readCodexEncoding(other); err == nil {
+			return b, release, other, nil
+		}
+	}
+	return b, release, path, err
+}
+
+func readCodexEncoding(path string) ([]byte, func(), error) {
 	b, release, err := fileread.Read(path)
+	if err != nil || codexPlainPath(path) == path {
+		return b, release, err
+	}
+	defer release()
+	bp := codexDecoded.Get().(*[]byte)
+	// A damaged frame keeps the usage decoded before it: the line it cuts is
+	// invalid JSON and skipped, like a torn plain tail.
+	*bp, _ = codexZstd.DecodeAll(b, (*bp)[:0])
+	return *bp, func() { codexDecoded.Put(bp) }, nil
+}
+
+// readCodexRows is readLines restricted to the fields parseCodex uses. It also
+// returns the path readCodexRollout read.
+func readCodexRows(path string) ([]object, string, error) {
+	b, release, opened, err := readCodexRollout(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer release()
 	var rows []object
@@ -120,17 +170,18 @@ func readCodexRows(path string) ([]object, error) {
 		}
 		rows = append(rows, row)
 	}
-	return rows, nil
+	return rows, opened, nil
 }
 
 func parseCodex(p string) (codexSession, error) {
-	rows, err := readCodexRows(p)
+	rows, opened, err := readCodexRows(p)
 	s := codexSession{}
 	if err != nil {
 		return s, err
 	}
-	session := stem(p)
-	parts := strings.Split(filepath.ToSlash(p), "/")
+	plain := codexPlainPath(p)
+	session := stem(plain)
+	parts := strings.Split(filepath.ToSlash(plain), "/")
 	for i, part := range parts {
 		if (part == "sessions" || part == "archived_sessions") && i+1 < len(parts) {
 			session = strings.TrimSuffix(strings.Join(parts[i+1:], "/"), ".jsonl")
@@ -230,7 +281,7 @@ func parseCodex(p string) (codexSession, error) {
 			}
 			usage = parseCodexUsage(u)
 			if t.IsZero() {
-				t = fileTime(p)
+				t = fileTime(opened)
 			}
 		}
 		if parsedModel != "" {

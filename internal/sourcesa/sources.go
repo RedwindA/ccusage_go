@@ -207,7 +207,9 @@ func discover(ctx context.Context, name string, paths []string) ([]string, error
 				ok := false
 				b := d.Name()
 				switch name {
-				case "codex", "pi":
+				case "codex":
+					ok = strings.HasSuffix(b, ".jsonl") || strings.HasSuffix(b, ".jsonl.zst")
+				case "pi":
 					ok = strings.HasSuffix(b, ".jsonl")
 				case "amp":
 					ok = strings.HasSuffix(b, ".json")
@@ -222,16 +224,23 @@ func discover(ctx context.Context, name string, paths []string) ([]string, error
 				case "openclaw":
 					ok = strings.HasSuffix(b, ".jsonl") || strings.Contains(b, ".jsonl.deleted.") || strings.Contains(b, ".jsonl.reset.") || b == "openclaw-agent.sqlite"
 				}
-				if ok && !seen[p] {
+				id := p
+				if name == "codex" {
+					// A plain rollout wins over its .zst twin, which WalkDir visits
+					// after it, and the active copy over the archived one in either
+					// encoding, as in Codex.
+					id = codexPlainPath(p)
+				}
+				if ok && !seen[id] {
 					if name == "codex" && len(roots) > 1 {
-						rel, _ := filepath.Rel(r, p)
+						rel, _ := filepath.Rel(r, id)
 						key := root + "/" + rel
 						if archive[key] {
 							return nil
 						}
 						archive[key] = true
 					}
-					seen[p] = true
+					seen[id] = true
 					files = append(files, p)
 				}
 				return nil
