@@ -305,7 +305,7 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 	entries = []types.UsageEntry{}
 	if len(kept) > 0 {
 		if entries, err = l.LoadParallel(ctx, kept); err != nil {
-			return nil, false, err
+			entries = []types.UsageEntry{}
 		}
 	}
 	detected = len(entries) > 0
@@ -317,6 +317,11 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 		}
 		found, _ := l.LoadParallel(ctx, []string{file})
 		detected = len(found) > 0
+	}
+	// An unbounded load fails only when no file holds usage, so kept files
+	// that cannot be read are fatal only if no skipped file has any.
+	if err != nil && !detected {
+		return nil, false, err
 	}
 	return entries, detected, nil
 }

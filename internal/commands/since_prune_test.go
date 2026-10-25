@@ -345,6 +345,38 @@ func TestBoundedUnifiedReportsStillDetectClaudeWithOnlyStaleFiles(t *testing.T) 
 	}
 }
 
+// An unbounded load drops unreadable files as long as another file holds
+// usage, so a bounded one must not fail when the only files it keeps are
+// unreadable but a skipped one has usage.
+func TestBoundedReportsTolerateUnreadableKeptFiles(t *testing.T) {
+	root := pruneFixture(t)
+	old := pruneWrite(t, root, "projects/project-a/old.jsonl", pruneUsageLine("2026-09-01T12:00:00.000Z", "session-old", "msg-old", "req-old", 1))
+	pruneTouch(t, old, pruneTime("2026-09-01T12:00:00Z"))
+	// A dangling symlink has no mtime, so it is always kept.
+	if err := os.Symlink(filepath.Join(root, "missing.jsonl"), filepath.Join(root, "projects/project-a/dangling.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(t.TempDir(), "codex")
+	t.Setenv("CODEX_HOME", codex)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/09/11/rollout.jsonl"), sourceCodexRollout("2026-09-11T12:00:00Z", 100, 10))
+
+	if got := pruneTotalCost(t, pruneRun(t, "", append(append([]string{"claude", "daily"}, boundedArgs...), "--json")...)); got != 0 {
+		t.Fatalf("totalCost = %v, want 0", got)
+	}
+
+	cmd := NewRootCommand("test")
+	var out, diagnostics bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&diagnostics)
+	cmd.SetArgs(append([]string{"daily"}, boundedArgs...))
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Detected: Claude, Codex") || diagnostics.Len() > 0 {
+		t.Fatalf("%s\nstderr:\n%s", out.String(), diagnostics.String())
+	}
+}
+
 func TestStatuslineKeepsTheCurrentBlockBeforeFutureDatedEntries(t *testing.T) {
 	root := pruneFixture(t)
 	now := time.Now()
