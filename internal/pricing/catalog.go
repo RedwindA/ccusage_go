@@ -45,7 +45,7 @@ type fastOverrides struct {
 }
 
 // fastSnapshotOverrides decodes the embedded overrides once; fastMultiplier
-// runs for every LiteLLM model on each online refresh.
+// runs for every LiteLLM and models.dev model on each online refresh.
 var fastSnapshotOverrides = sync.OnceValue(func() fastOverrides {
 	var f fastOverrides
 	if err := json.Unmarshal(fastSnapshot, &f); err != nil {
@@ -54,16 +54,34 @@ var fastSnapshotOverrides = sync.OnceValue(func() fastOverrides {
 	return f
 })
 
+// fastMultiplier tries the whole id, then each '/' or ':' part and the
+// dotted provider suffixes of it (anthropic.claude-opus-4-7 also tries
+// claude-opus-4-7) with any release date removed; a normalized prefix
+// matches its last occurrence in the part, at a '-' or the end.
 func fastMultiplier(name string) float64 {
 	f := fastSnapshotOverrides()
-	for _, part := range strings.Split(name, "/") {
-		if mult, ok := f.Exact[canonical(part)]; ok {
-			return mult
+	if mult, ok := f.Exact[canonical(name)]; ok {
+		return mult
+	}
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == ':' }) {
+		candidates := []string{part}
+		for i := range len(part) {
+			if part[i] == '.' {
+				candidates = append(candidates, part[i+1:])
+			}
 		}
-		n := normalize(part)
-		for base, mult := range f.Prefix {
-			if n == base || strings.HasPrefix(n, base+"-") {
-				return mult
+		for _, c := range candidates {
+			base := stripDateSuffix(c)
+			for _, key := range []string{c, base, canonical(base)} {
+				if mult, ok := f.Exact[key]; ok {
+					return mult
+				}
+			}
+			n := normalize(c)
+			for prefix, mult := range f.Prefix {
+				if i := strings.LastIndex(n, prefix); i >= 0 && (i+len(prefix) == len(n) || n[i+len(prefix)] == '-') {
+					return mult
+				}
 			}
 		}
 	}

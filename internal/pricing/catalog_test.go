@@ -73,3 +73,28 @@ func TestPinnedSnapshotAndProviderFacts(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+// Ported from upstream's dated_openai_models_inherit_published_fast_multipliers,
+// applies_speed_multipliers_to_qualified_flat_models_dev_models and
+// embedded_pricing_includes_claude_fast_multiplier_for_provider_models.
+func TestFastMultiplierForDatedAndProviderIDs(t *testing.T) {
+	for model, want := range map[string]float64{"gpt-6-astra-2026-09-24": 2, "gpt-5.4-2026-03-05": 2, "openai/gpt-5.6-sol-20261001": 2, "gpt-5.6-terra-2026-10-01": 2, "gpt-5.6-luna-2026-10-01": 2, "global.openai.gpt-5.5-2026-04-23": 2.5, "gpt-5.2-codex-2026-01-14": 1, "gpt-5.4-unsupported": 1} {
+		p := litePricing([]byte(`{"` + model + `":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`))
+		if got := p[model].FastMultiplier; got != want {
+			t.Errorf("LiteLLM %s: %v, want %v", model, got, want)
+		}
+	}
+	for model, want := range map[string]float64{"openai/gpt-6-astra": 2, "openai.gpt-5.4": 2, "global.openai.gpt-6.1-sol": 2, "global.openai.gpt-5.4-mini-2026-03-17": 1, "openai.gpt-5.4-mini-extra": 1} {
+		p := modelsPricing([]byte(`{"` + model + `":{"cost":{"input":10,"output":50}}}`))
+		if got := p[model].FastMultiplier; got != want {
+			t.Errorf("models.dev %s: %v, want %v", model, got, want)
+		}
+	}
+	s := NewService()
+	s.SetOffline(true)
+	for model, want := range map[string]float64{"anthropic.claude-opus-4-6-v1": 6, "anthropic.claude-opus-4-7": 6, "anthropic.claude-opus-4-8": 2} {
+		if p, err := s.GetPricing(context.Background(), model, time.Time{}); err != nil || p.FastMultiplier != want {
+			t.Errorf("%s: %+v %v", model, p, err)
+		}
+	}
+}

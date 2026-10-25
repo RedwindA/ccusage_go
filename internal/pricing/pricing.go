@@ -482,7 +482,6 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 	if err := json.Unmarshal(payload, &data); err != nil {
 		panic(err)
 	}
-	fast := fastSnapshotOverrides()
 	all := make(map[string]ModelPricing, len(data))
 	perToken := func(v *float64) *float64 {
 		if v == nil {
@@ -492,7 +491,7 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 		return &p
 	}
 	for name, m := range data {
-		p := ModelPricing{InputCostPerToken: m.Cost.Input / 1e6, OutputCostPerToken: m.Cost.Output / 1e6, CacheCreationInputTokenCost: m.Cost.Input * 1.25 / 1e6, CacheReadInputTokenCost: m.Cost.Input * .1 / 1e6, FastMultiplier: 1, MaxInputTokens: m.Limit.Context, ExactOnly: m.ExactOnly, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest}
+		p := ModelPricing{InputCostPerToken: m.Cost.Input / 1e6, OutputCostPerToken: m.Cost.Output / 1e6, CacheCreationInputTokenCost: m.Cost.Input * 1.25 / 1e6, CacheReadInputTokenCost: m.Cost.Input * .1 / 1e6, FastMultiplier: fastMultiplier(name), MaxInputTokens: m.Limit.Context, ExactOnly: m.ExactOnly, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest}
 		if m.Cost.CacheRead != nil {
 			p.CacheReadInputTokenCost = *m.Cost.CacheRead / 1e6
 			p.cacheReadExplicit = true
@@ -508,17 +507,6 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 				p.OutputAbove = perToken(tier.Output)
 				p.CacheReadAbove = perToken(tier.CacheRead)
 				p.CacheCreateAbove = perToken(tier.CacheWrite)
-			}
-		}
-		for key, mult := range fast.Exact {
-			if canonical(name) == key || strings.HasSuffix(name, "/"+key) {
-				p.FastMultiplier = mult
-			}
-		}
-		n := normalize(name)
-		for key, mult := range fast.Prefix {
-			if n == key || strings.HasPrefix(n, key+"-") || strings.Contains(n, "/"+key) {
-				p.FastMultiplier = mult
 			}
 		}
 		all[name] = p
