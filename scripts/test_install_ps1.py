@@ -29,6 +29,7 @@ function Invoke-WebRequest {
   }
   throw "HTTP 404: $Uri"
 }
+if ($env:TEST_STRICT -eq '1') { Set-StrictMode -Version Latest }
 & $env:TEST_INSTALLER @args
 '''
 
@@ -54,7 +55,7 @@ class PowerShellInstallerTest:
         self.env = dict(os.environ, OS='Windows_NT', INSTALL_DIR=str(self.destination),
                         TEST_ASSETS=str(self.assets), TEST_INSTALLER=str(INSTALLER),
                         CCUSAGE_GO_NO_MODIFY_PATH='1', PROCESSOR_ARCHITECTURE='AMD64')
-        for name in ('VERSION', 'TEST_DOWNLOAD_FAIL', 'TEST_PS7_RESPONSE'):
+        for name in ('VERSION', 'TEST_DOWNLOAD_FAIL', 'TEST_PS7_RESPONSE', 'TEST_STRICT'):
             self.env.pop(name, None)
 
     def write_archives(self, payload, name=None):
@@ -96,6 +97,18 @@ class PowerShellInstallerTest:
     def test_latest_install_powershell7_response(self):
         self.env['TEST_PS7_RESPONSE'] = '1'
         self.assert_installed(self.run_installer())
+
+    def test_latest_install_under_callers_strict_mode(self):
+        self.env.update(TEST_STRICT='1', TEST_PS7_RESPONSE='1')
+        self.assert_installed(self.run_installer())
+
+    @unittest.skipIf(os.name == 'nt', 'needs a registry that rejects the PATH edit')
+    def test_path_failure_keeps_new_install(self):
+        # Outside Windows the registry API throws, like a locked-down HKCU.
+        del self.env['CCUSAGE_GO_NO_MODIFY_PATH']
+        result = self.run_installer('v0.15.0')
+        self.assert_installed(result)
+        self.assertIn('Could not add', result.stdout + result.stderr)
 
     def test_fresh_install_creates_directory(self):
         shutil.rmtree(self.destination)

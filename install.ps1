@@ -9,6 +9,7 @@
 # session when run through iex; errors throw instead of exiting its shell.
 & {
 param([string]$Version)
+Set-StrictMode -Off # a caller's strict mode would reject probing response shapes below
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue' # Windows PowerShell downloads crawl with a progress bar
 
@@ -40,8 +41,12 @@ switch ($osArch) {
   default { throw "Supported architectures: x64 and arm64 (found $osArch)." }
 }
 
-# Windows PowerShell 5.1 may not offer TLS 1.2 by default.
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Older .NET Framework defaults exclude TLS 1.2. The setting outlives this
+# script, so add TLS 1.2 only there; SystemDefault already negotiates it.
+$protocols = [Net.ServicePointManager]::SecurityProtocol
+if ($protocols -ne [Net.SecurityProtocolType]::SystemDefault -and -not ($protocols -band [Net.SecurityProtocolType]::Tls12)) {
+  [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
+}
 
 $installDir = $env:INSTALL_DIR
 if (-not $installDir) {
@@ -132,21 +137,26 @@ if ($env:CCUSAGE_GO_NO_MODIFY_PATH -eq '1') {
 } else {
   # Edit the raw registry value: [Environment]::SetEnvironmentVariable would
   # rewrite it as REG_SZ and freeze entries such as %USERPROFILE%\bin.
-  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
   try {
-    $userPath = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    $entries = @($userPath -split ';' | Where-Object { $_ })
-    $listed = $entries | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $installDir }
-    if (-not $listed) {
-      $key.SetValue('Path', (@($installDir) + $entries) -join ';', [Microsoft.Win32.RegistryValueKind]::ExpandString)
-      # Setting any user variable broadcasts WM_SETTINGCHANGE, so terminals
-      # opened from now on see the new PATH.
-      [Environment]::SetEnvironmentVariable('CCUSAGE_GO_INSTALL', '1', 'User')
-      [Environment]::SetEnvironmentVariable('CCUSAGE_GO_INSTALL', $null, 'User')
-      "Added $installDir to your user PATH."
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+      $userPath = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+      $entries = @($userPath -split ';' | Where-Object { $_ })
+      $listed = $entries | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $installDir }
+      if (-not $listed) {
+        $key.SetValue('Path', (@($installDir) + $entries) -join ';', [Microsoft.Win32.RegistryValueKind]::ExpandString)
+        # Setting any user variable broadcasts WM_SETTINGCHANGE, so terminals
+        # opened from now on see the new PATH.
+        [Environment]::SetEnvironmentVariable('CCUSAGE_GO_INSTALL', '1', 'User')
+        [Environment]::SetEnvironmentVariable('CCUSAGE_GO_INSTALL', $null, 'User')
+        "Added $installDir to your user PATH."
+      }
+    } finally {
+      $key.Dispose()
     }
-  } finally {
-    $key.Dispose()
+  } catch {
+    # The binary is installed; only the PATH entry is missing.
+    "Could not add $installDir to your user PATH ($($_.Exception.Message)); add it in Environment Variables."
   }
   if (-not $inSession) {
     $env:Path = "$installDir;$env:Path"
