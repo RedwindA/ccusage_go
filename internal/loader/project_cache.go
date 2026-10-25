@@ -212,7 +212,7 @@ func (ic *IncrementalCache) Update(
 	for _, pc := range ic.projects {
 		merged = append(merged, pc.Entries...)
 	}
-	merged = deduplicateUsage(merged)
+	merged = deduplicateUsage(merged, nil)
 
 	ic.mergedEntries = merged
 	return merged, true, nil

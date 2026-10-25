@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -267,6 +268,66 @@ func TestClaudeReportsAgreeOnRequestlessDedupe(t *testing.T) {
 				if got := payload["totals"].(map[string]any)["totalTokens"]; got != tc.total {
 					t.Errorf("claude %s: totalTokens = %v, want %v", report, got, tc.total)
 				}
+			}
+		})
+	}
+}
+
+// Upstream totals claude daily and unified daily, weekly and monthly reports
+// from its Claude daily loader, which matches a /btw replay with a new
+// request ID to its parent across timestamps and keeps the costlier of
+// equal copies. claude weekly, monthly and session and unified sessions use
+// its entry loader, which keeps that replay and the first equal copy.
+func TestClaudeDailyFamilyDedupesAsUpstreamsDailyLoader(t *testing.T) {
+	isolateSourceHomes(t)
+	for _, tc := range []struct {
+		name         string
+		lines        []string
+		daily, entry []float64
+	}{
+		{"sidechain replay with a new request ID", []string{
+			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"session-a","requestId":"req-parent","message":{"id":"msg-parent","model":"claude-sonnet-4-20250514","usage":{"input_tokens":0,"output_tokens":10,"cache_read_input_tokens":20}}}`,
+			`{"timestamp":"2026-09-10T12:00:01.000Z","sessionId":"session-a","isSidechain":true,"requestId":"req-sidechain-replay","message":{"id":"msg-parent","model":"claude-sonnet-4-20250514","usage":{"input_tokens":0,"output_tokens":10,"cache_read_input_tokens":50000}}}`,
+		}, []float64{30, 0.000156}, []float64{50040, 0.015306}},
+		{"equal copies", []string{
+			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`,
+			`{"timestamp":"2026-09-10T12:00:00.000Z","sessionId":"s","requestId":"req_1","costUSD":0.5,"message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":10}}}`,
+		}, []float64{110, 0.5}, []float64{110, 0.00045}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sourceCLIWrite(t, filepath.Join(root, "projects/p/session-a.jsonl"), strings.Join(tc.lines, "\n"))
+			totals := func(payload map[string]any) []float64 {
+				totals := payload["totals"].(map[string]any)
+				return []float64{totals["totalTokens"].(float64), math.Round(totals["totalCost"].(float64)*1e9) / 1e9}
+			}
+			for _, report := range []struct {
+				args  []string
+				daily bool
+			}{
+				{[]string{"claude", "daily"}, true},
+				{[]string{"claude", "daily", "--instances"}, true},
+				{[]string{"daily"}, true},
+				{[]string{"weekly"}, true},
+				{[]string{"monthly"}, true},
+				{[]string{"claude", "weekly"}, false},
+				{[]string{"claude", "monthly"}, false},
+				{[]string{"claude", "session"}, false},
+				{[]string{"session"}, false},
+			} {
+				want := tc.entry
+				if report.daily {
+					want = tc.daily
+				}
+				payload := sourceCLIJSON(t, append(report.args, "--data-path", root, "--timezone", "UTC", "--offline", "--json")...)
+				if got := totals(payload); !reflect.DeepEqual(got, want) {
+					t.Errorf("%v: totals = %v, want %v", report.args, got, want)
+				}
+			}
+			payload := sourceCLIJSON(t, "daily", "--sections", "session", "--data-path", root, "--timezone", "UTC", "--offline", "--json")
+			session := payload["session"].([]any)[0].(map[string]any)["totalTokens"]
+			if got := totals(payload); !reflect.DeepEqual(got, tc.daily) || session != tc.entry[0] {
+				t.Errorf("daily --sections session: totals = %v, session tokens = %v", got, session)
 			}
 		})
 	}

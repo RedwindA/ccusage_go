@@ -259,7 +259,7 @@ const statuslineSessionLength = 5 * time.Hour
 func statuslineTodayCost(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) (float64, error) {
 	today := now.In(loc).Format("2006-01-02")
 	bound, _ := time.ParseInLocation("2006-01-02", today, loc)
-	loaded, _, err := loadClaude(ctx, paths, loc, bound, "", debug, false)
+	loaded, _, err := loadClaude(ctx, paths, loc, bound, "", nil, debug, false)
 	if err != nil {
 		return 0, err
 	}
@@ -288,7 +288,7 @@ func loadStatuslineBlock(ctx context.Context, paths []string, loc *time.Location
 	for _, days := range statuslineBlockLookbackDays {
 		since := statuslineBlockSince(now, loc, days)
 		bound, _ := time.ParseInLocation("2006-01-02", since, loc)
-		loaded, _, err := loadClaude(ctx, paths, loc, bound, "", debug, false)
+		loaded, _, err := loadClaude(ctx, paths, loc, bound, "", nil, debug, false)
 		if err != nil {
 			return nil, err
 		}

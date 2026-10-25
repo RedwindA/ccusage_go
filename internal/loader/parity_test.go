@@ -277,6 +277,57 @@ func TestClaudeSpeedBreaksEqualUsageTie(t *testing.T) {
 		t.Fatal(entries)
 	}
 }
+
+// Upstream's daily loader, which serves daily, weekly and monthly totals,
+// matches a /btw sidechain replay with its parent on message and session
+// alone, so a replay with a new request ID and a later timestamp merges into
+// the parent. Its entry loader needs the parent's timestamp for that replay
+// and keeps both.
+func TestClaudeDailyDedupeMatchesSidechainReplaysAcrossTimestamps(t *testing.T) {
+	record := func(timestamp, request string, cacheRead int, side bool) map[string]interface{} {
+		r := nativeRecord("session-a", "msg-parent", request, 0, side)
+		r["timestamp"] = timestamp
+		usage := r["message"].(map[string]interface{})["usage"].(map[string]interface{})
+		usage["output_tokens"] = 10
+		usage["cache_read_input_tokens"] = cacheRead
+		return r
+	}
+	p := writeNative(t, t.TempDir(), "projects/p/session-a.jsonl",
+		record("2026-03-20T09:46:40.000Z", "req-parent", 20, false),
+		record("2026-03-20T09:46:41.000Z", "req-sidechain-replay", 50000, true))
+	daily := New()
+	daily.SetDailyDedupe(func(e *types.UsageEntry) float64 { return e.Cost })
+	entries, err := daily.LoadParallel(context.Background(), []string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Raw["request_id"] != "req-parent" || entries[0].CacheReadInputTokens != 20 {
+		t.Fatalf("daily: %+v", entries)
+	}
+	if entries := mustNative(t, p); len(entries) != 2 {
+		t.Fatalf("entries: %+v", entries)
+	}
+}
+
+// Upstream's daily loader breaks a tie in usage by the higher cost before
+// speed; its entry loader keeps the first of equal copies.
+func TestClaudeDailyDedupeBreaksEqualUsageTieByCost(t *testing.T) {
+	priced := nativeRecord("s", "msg_1", "req_1", 100, false)
+	priced["costUSD"] = 0.5
+	p := writeNative(t, t.TempDir(), "projects/p/s.jsonl", nativeRecord("s", "msg_1", "req_1", 100, false), priced)
+	daily := New()
+	daily.SetDailyDedupe(func(e *types.UsageEntry) float64 { return e.Cost })
+	entries, err := daily.LoadParallel(context.Background(), []string{p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Cost != 0.5 {
+		t.Fatalf("daily: %+v", entries)
+	}
+	if entries := mustNative(t, p); len(entries) != 1 || entries[0].HasCost {
+		t.Fatalf("entries: %+v", entries)
+	}
+}
 func TestClaudeAdvisorCallsHaveIndependentModelCostAndIDs(t *testing.T) {
 	root := t.TempDir()
 	r := nativeRecord("s", "m", "r", 1, false)

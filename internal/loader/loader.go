@@ -62,6 +62,7 @@ type Loader struct {
 	maxWorkers int
 	debug      bool
 	timezone   *time.Location
+	dailyCost  func(*types.UsageEntry) float64
 }
 
 func New() *Loader {
@@ -78,6 +79,14 @@ func (l *Loader) SetDebug(debug bool) {
 
 func (l *Loader) SetTimezone(timezone *time.Location) {
 	l.timezone = timezone
+}
+
+// SetDailyDedupe makes loads deduplicate as upstream's Claude daily loader,
+// which serves its daily, weekly and monthly totals, rather than its entry
+// loader: a /btw sidechain replay matches its parent on message and session
+// alone, and copies with equal usage keep the one cost prices higher.
+func (l *Loader) SetDailyDedupe(cost func(*types.UsageEntry) float64) {
+	l.dailyCost = cost
 }
 
 // SetMaxWorkers sets the maximum number of concurrent file read workers
@@ -247,7 +256,7 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	allEntries = deduplicateUsage(allEntries)
+	allEntries = deduplicateUsage(allEntries, l.dailyCost)
 
 	// Global backfill: apply session names across all entries
 	for i := range allEntries {

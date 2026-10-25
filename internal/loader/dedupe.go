@@ -20,7 +20,9 @@ import (
 // replay's match depends on earlier entries, so deduping each file first or
 // going by timestamp picks other survivors. The survivors are returned in
 // time order, which callers such as the monitor's recent activity rely on.
-func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
+// A non-nil dailyCost selects the rules of upstream's daily loader, which
+// prices copies with equal usage with it to keep the costlier one.
+func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEntry) float64) []types.UsageEntry {
 	// Sort indexes rather than the (large) entries themselves.
 	order := make([]int, len(entries))
 	for i := range order {
@@ -48,6 +50,15 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 		if !slices.Contains(route[k], r) {
 			route[k] = append(route[k], r)
 		}
+	}
+	costs := map[int]float64{}
+	cost := func(k int) float64 {
+		c, ok := costs[k]
+		if !ok {
+			c = dailyCost(&entries[k])
+			costs[k] = c
+		}
+		return c
 	}
 	key := dedupeKey
 	for _, k := range order {
@@ -80,9 +91,10 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				}
 				oldRequest, _ := old.Raw["request_id"].(string)
 				// Requestless replays match across timestamps; replays with
-				// a new request ID need the parent's timestamp.
+				// a new request ID need the parent's timestamp, except in
+				// the daily loader.
 				requestless := request == "" && oldRequest == ""
-				if session == eSession && (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
+				if session == eSession && (dailyCost != nil || requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
 					i, found = r.index, true
 					break
 				}
@@ -113,6 +125,8 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 				replace = old.IsSidechain
 			} else if e.TotalTokens != old.TotalTokens {
 				replace = e.TotalTokens > old.TotalTokens
+			} else if dailyCost != nil && cost(k) != cost(survivors[i]) {
+				replace = cost(k) > cost(survivors[i])
 			} else {
 				replace = e.Speed != "" && old.Speed == ""
 			}

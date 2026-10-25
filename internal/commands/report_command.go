@@ -202,11 +202,14 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	// them still skip the Claude sessions last written before it.
 	sessions := agent == "" && slices.Contains(kinds, "session")
 	bounded := !sessions || len(kinds) > 1
-	entries, sessionEntries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded, sessions)
+	// Upstream totals unified daily, weekly and monthly sections and claude
+	// daily from its Claude daily loader, which dedupes differently.
+	daily := agent == "" || agent == "claude" && kind == "daily"
+	scopes.price(prefetch)
+	entries, sessionEntries, detected, err := loadReportEntries(cmd, agent, scopes, cfg, bounded, daily, sessions)
 	if err != nil {
 		return err
 	}
-	scopes.price(prefetch)
 	if sessions {
 		debugPricing(cmd, sessionEntries, f, scopes)
 	} else {
