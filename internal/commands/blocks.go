@@ -24,7 +24,7 @@ func formatActiveBlockDetail(block types.SessionBlock, tokenLimit int, noColor b
 	output.WriteString("\n")
 	output.WriteString(" ╭───────────────────────────────────────────────╮\n")
 	output.WriteString(" │                                               │\n")
-	output.WriteString(" │  Current Session Block Status (WITH GO)  │\n")
+	output.WriteString(" │    Current Session Block Status (WITH GO)     │\n")
 	output.WriteString(" │                                               │\n")
 	output.WriteString(" ╰───────────────────────────────────────────────╯\n\n")
 

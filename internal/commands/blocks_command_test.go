@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestBlocksJSONCleanAndNoCost(t *testing.T) {
@@ -122,6 +123,22 @@ func TestBlocksTablesFollowColorSettings(t *testing.T) {
 		}
 		if tc.env != "" {
 			os.Unsetenv(tc.env)
+		}
+	}
+}
+
+// Every row of the active block's title box is as wide as its borders.
+func TestActiveBlockTitleBoxIsAligned(t *testing.T) {
+	now := time.Now()
+	root := blocksFixture(t, map[time.Time]int{now.Add(-30 * time.Minute): 10, now.Add(-10 * time.Minute): 10})
+	stdout, _, err := sourceCLIRun("blocks", "--data-path", root, "--offline", "--active", "--no-color")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := strings.Split(strings.TrimPrefix(stdout, "\n"), "\n")[:5]
+	for _, line := range box {
+		if utf8.RuneCountInString(line) != utf8.RuneCountInString(box[0]) {
+			t.Fatalf("title box rows differ in width:\n%s", strings.Join(box, "\n"))
 		}
 	}
 }
