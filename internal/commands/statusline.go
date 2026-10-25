@@ -18,6 +18,7 @@ import (
 
 	"github.com/RedwindA/ccusage_go/internal/calculator"
 	"github.com/RedwindA/ccusage_go/internal/config"
+	"github.com/RedwindA/ccusage_go/internal/loader"
 	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/spf13/cobra"
@@ -172,14 +173,20 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 	service := newPricingService(offline, prefetch)
 	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
 	calc := calculator.New(service)
+	// The session, today and block loads read each transcript once.
+	parsed := new(loader.ParsedFiles)
+	load := func(since time.Time) ([]types.UsageEntry, error) {
+		entries, _, err := loadClaude(cmd.Context(), paths, loc, since, "", nil, f.debug, false, parsed)
+		return entries, err
+	}
 	var entries []types.UsageEntry
 	if statuslineShowsUsageCost(hook, f) && loadErr == nil {
 		// A session can run over any span of history.
-		entries, loadErr = loadSource(cmd.Context(), "claude", paths, loc, f.debug, false)
+		entries, loadErr = load(time.Time{})
 		entries, _ = calc.CalculateCosts(cmd.Context(), entries)
 	}
-	today, todayErr := statuslineTodayCost(cmd.Context(), paths, loc, now, f.debug, calc)
-	block, blockErr := loadStatuslineBlock(cmd.Context(), paths, loc, now, f.debug, calc)
+	today, todayErr := statuslineTodayCost(cmd.Context(), load, loc, now, calc)
+	block, blockErr := loadStatuslineBlock(cmd.Context(), load, loc, now, calc)
 	if err := errors.Join(loadErr, todayErr, blockErr); err != nil && f.debug {
 		fmt.Fprintf(cmd.ErrOrStderr(), "statusline: %v\n", err)
 	}
@@ -255,11 +262,12 @@ var statuslineBlockLookbackDays = []int{1, 7, 30}
 const statuslineSessionLength = 5 * time.Hour
 
 // statuslineTodayCost totals the Claude usage dated today, skipping the
-// sessions last written over a day before it.
-func statuslineTodayCost(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) (float64, error) {
+// sessions last written over a day before it. load reads the Claude usage of
+// the sessions written since a time, or of every session for the zero time.
+func statuslineTodayCost(ctx context.Context, load func(since time.Time) ([]types.UsageEntry, error), loc *time.Location, now time.Time, calc *calculator.Calculator) (float64, error) {
 	today := now.In(loc).Format("2006-01-02")
 	bound, _ := time.ParseInLocation("2006-01-02", today, loc)
-	loaded, _, err := loadClaude(ctx, paths, loc, bound, "", nil, debug, false)
+	loaded, err := load(bound)
 	if err != nil {
 		return 0, err
 	}
@@ -283,12 +291,13 @@ func statuslineTodayCost(ctx context.Context, paths []string, loc *time.Location
 // Block boundaries chain from earlier entries until usage pauses for longer
 // than a session, so a bounded load only reproduces the unbounded blocks
 // once it reaches back past such a pause. Each window is widened until it
-// does, and the full history is read as a last resort.
-func loadStatuslineBlock(ctx context.Context, paths []string, loc *time.Location, now time.Time, debug bool, calc *calculator.Calculator) (*types.SessionBlock, error) {
+// does, and the full history is read as a last resort. load reads as for
+// statuslineTodayCost.
+func loadStatuslineBlock(ctx context.Context, load func(since time.Time) ([]types.UsageEntry, error), loc *time.Location, now time.Time, calc *calculator.Calculator) (*types.SessionBlock, error) {
 	for _, days := range statuslineBlockLookbackDays {
 		since := statuslineBlockSince(now, loc, days)
 		bound, _ := time.ParseInLocation("2006-01-02", since, loc)
-		loaded, _, err := loadClaude(ctx, paths, loc, bound, "", nil, debug, false)
+		loaded, err := load(bound)
 		if err != nil {
 			return nil, err
 		}
@@ -319,7 +328,7 @@ func loadStatuslineBlock(ctx context.Context, paths []string, loc *time.Location
 		entries, _ = calc.CalculateCosts(ctx, entries[first:])
 		return activeStatuslineBlock(calc, entries), nil
 	}
-	entries, err := loadSource(ctx, "claude", paths, loc, debug, false)
+	entries, err := load(time.Time{})
 	entries, _ = calc.CalculateCosts(ctx, entries)
 	return activeStatuslineBlock(calc, entries), err
 }

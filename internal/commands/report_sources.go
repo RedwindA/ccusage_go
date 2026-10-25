@@ -166,9 +166,15 @@ func loadReportEntries(cmd *cobra.Command, agent string, scopes sourceScopes, cf
 					cost = dailyDedupeCost(scope.calc)
 				}
 			}
-			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.project, cost, scope.f.debug, f.singleThread)
-			if whole && (!since.IsZero() || cost != nil) && err == nil {
-				history, _, err = loadClaude(ctx, job.paths, scope.loc, time.Time{}, scope.project, nil, scope.f.debug, f.singleThread)
+			// The whole history beside a bounded or daily view reads each
+			// transcript once for both.
+			var parsed *loader.ParsedFiles
+			if whole && (!since.IsZero() || cost != nil) {
+				parsed = new(loader.ParsedFiles)
+			}
+			entries, detected, err = loadClaude(ctx, job.paths, scope.loc, since, scope.project, cost, scope.f.debug, f.singleThread, parsed)
+			if parsed != nil && err == nil {
+				history, _, err = loadClaude(ctx, job.paths, scope.loc, time.Time{}, scope.project, nil, scope.f.debug, f.singleThread, parsed)
 			}
 		} else {
 			entries, err = loadSource(ctx, job.name, job.paths, scope.loc, scope.f.debug, f.singleThread)
@@ -321,7 +327,7 @@ func dailyDedupeCost(calc *calculator.Calculator) func(*types.UsageEntry) float6
 
 func loadSource(ctx context.Context, name string, paths []string, loc *time.Location, debug, singleThread bool) ([]types.UsageEntry, error) {
 	if name == "claude" {
-		entries, _, err := loadClaude(ctx, paths, loc, time.Time{}, "", nil, debug, singleThread)
+		entries, _, err := loadClaude(ctx, paths, loc, time.Time{}, "", nil, debug, singleThread, nil)
 		return entries, err
 	}
 	for _, n := range sourcesa.Names() {
@@ -366,10 +372,11 @@ func pathsOverlap(a, b string) bool {
 // since skips the sessions loader.SplitFilesBeforeSince rules out, so entries
 // dated before since may be missing and callers must discard them. A non-nil
 // dailyCost reads and dedupes as upstream's daily loader (see
-// Loader.SetDailyLoader).
+// Loader.SetDailyLoader). Loads sharing a non-nil parsed read each file
+// once between them; they must share loc and debug.
 // detected reports whether any file, read or skipped, holds usage, as an
 // unbounded load would see it.
-func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, project string, dailyCost func(*types.UsageEntry) float64, debug, singleThread bool) (entries []types.UsageEntry, detected bool, err error) {
+func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, project string, dailyCost func(*types.UsageEntry) float64, debug, singleThread bool, parsed *loader.ParsedFiles) (entries []types.UsageEntry, detected bool, err error) {
 	files, err := claudeFiles(ctx, paths)
 	if err != nil {
 		return nil, false, err
@@ -385,6 +392,7 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 	l.SetTimezone(loc)
 	l.SetDebug(debug)
 	l.SetDailyLoader(dailyCost)
+	l.SetParsedFiles(parsed)
 	if !singleThread {
 		l.SetMaxWorkers(runtime.GOMAXPROCS(0))
 	}

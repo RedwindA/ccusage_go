@@ -65,6 +65,7 @@ type Loader struct {
 	debug      bool
 	timezone   *time.Location
 	dailyCost  func(*types.UsageEntry) float64
+	parsed     *ParsedFiles
 }
 
 func New() *Loader {
@@ -206,43 +207,54 @@ func (l *Loader) LoadParallel(ctx context.Context, paths []string) ([]types.Usag
 }
 
 func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, options *LoaderOptions) ([]types.UsageEntry, error) {
-	type result struct {
-		entries      []types.UsageEntry
-		sessionNames map[string]string
-		debugMsg     string
-		err          error
-	}
-
 	// Results are merged in path order so the first session name that wins
 	// does not depend on worker scheduling.
-	results := make([]result, len(paths))
-	order := parallel.LargestFirst(ctx, l.maxWorkers, paths)
-	_ = parallel.Run(ctx, l.maxWorkers, order, func(i int) {
-		entries, sessionNames, debugMsg, err := l.parseFile(paths[i])
+	results := make([]parsedFile, len(paths))
+	// unparsed lists the paths no earlier load kept, and slots their indexes
+	// in paths.
+	var unparsed []string
+	var slots []int
+	for i, path := range paths {
+		if parsed, ok := l.parsed.lookup(path); ok {
+			results[i] = parsed
+		} else {
+			unparsed = append(unparsed, path)
+			slots = append(slots, i)
+		}
+	}
+	order := parallel.LargestFirst(ctx, l.maxWorkers, unparsed)
+	runErr := parallel.Run(ctx, l.maxWorkers, order, func(k int) {
+		parsed := l.parseFile(unparsed[k])
 
 		// Stream processing: calculate costs immediately if enabled
-		if options != nil && options.StreamProcessing && options.Calculator != nil && err == nil {
-			for i := range entries {
-				options.Calculator.CalculateCost(&entries[i])
-				clearRawExceptKeys(&entries[i], rawRetainKeys)
+		if options != nil && options.StreamProcessing && options.Calculator != nil && parsed.err == nil {
+			for i := range parsed.entries {
+				options.Calculator.CalculateCost(&parsed.entries[i])
+				clearRawExceptKeys(&parsed.entries[i], rawRetainKeys)
 			}
 		}
 
-		results[i] = result{entries: entries, sessionNames: sessionNames, debugMsg: debugMsg, err: err}
+		results[slots[k]] = parsed
 	})
+	if runErr == nil {
+		for k, i := range slots {
+			l.parsed.keep(unparsed[k], results[i])
+		}
+	}
 
 	var allEntries []types.UsageEntry
 	var errors []error
 	globalSessionNames := make(map[string]string)
 
 	for _, res := range results {
-		if res.debugMsg != "" {
-			fmt.Fprint(os.Stderr, res.debugMsg)
+		entries, debugMsg := res.usage(l.dailyCost != nil)
+		if debugMsg != "" {
+			fmt.Fprint(os.Stderr, debugMsg)
 		}
 		if res.err != nil {
 			errors = append(errors, res.err)
 		} else {
-			allEntries = append(allEntries, res.entries...)
+			allEntries = append(allEntries, entries...)
 			// Merge per-file session name maps (custom-title takes priority)
 			for sid, name := range res.sessionNames {
 				if _, exists := globalSessionNames[sid]; !exists {
@@ -283,19 +295,21 @@ func clearRawData(entries []types.UsageEntry) {
 }
 
 func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedupeMutex ...*sync.Mutex) ([]types.UsageEntry, map[string]string, error) {
-	entries, sessionNames, debugMsg, err := l.parseFile(path)
+	parsed := l.parseFile(path)
+	entries, debugMsg := parsed.usage(l.dailyCost != nil)
 	if debugMsg != "" {
 		fmt.Fprint(os.Stderr, debugMsg)
 	}
-	return entries, sessionNames, err
+	return entries, parsed.sessionNames, parsed.err
 }
 
-// parseFile loads one transcript. With debug enabled, debugMsg summarizes
-// its parse errors; callers print it so parallel loads can keep file order.
-func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]string, debugMsg string, _ error) {
+// parseFile loads one transcript for loads of either kind. With debug
+// enabled, its debug messages summarize the parse errors; callers print them
+// so parallel loads can keep file order.
+func (l *Loader) parseFile(path string) parsedFile {
 	data, release, err := fileread.Read(path)
 	if err != nil {
-		return nil, nil, "", types.LoaderError{Path: path, Err: err}
+		return parsedFile{err: types.LoaderError{Path: path, Err: err}}
 	}
 	defer release()
 
@@ -305,9 +319,11 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 	session := fileSessionID(path)
 
 	var entries []types.UsageEntry
+	var progress []bool
 	lineNum := 0
-	parseErrors := 0
-	firstError := ""
+	// Entry loads count an AgentProgress line as a parse error where daily
+	// loads read the record it wraps.
+	var entryErrors, dailyErrors parseErrors
 	sessionNameMap := make(map[string]string)
 	workspace := ""
 	var readErr error
@@ -333,15 +349,16 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 
 		raw, err := scanLine(line)
 		if err != nil {
-			parseErrors++
-			if firstError == "" && l.debug {
+			describe := func() string {
 				// Report encoding/json's wording, as before the scanner.
 				var full map[string]interface{}
 				if jsonErr := json.Unmarshal(line, &full); jsonErr != nil {
-					err = jsonErr
+					return fmt.Sprintf("Line %d: JSON parse error: %v", lineNum, jsonErr)
 				}
-				firstError = fmt.Sprintf("Line %d: JSON parse error: %v", lineNum, err)
+				return fmt.Sprintf("Line %d: JSON parse error: %v", lineNum, err)
 			}
+			entryErrors.add(l.debug, describe)
+			dailyErrors.add(l.debug, describe)
 			continue // Skip malformed JSON lines
 		}
 
@@ -383,27 +400,31 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 			}
 		}
 
-		// Try to parse entry according to TypeScript schema rules
+		// Try to parse entry according to TypeScript schema rules. Entry
+		// loads skip a line that fails; daily loads read the record an
+		// AgentProgress line wraps instead.
 		entry, err := l.parseEntry(raw, projectPath)
-		if err != nil && l.dailyCost != nil {
+		fromProgress := false
+		if err != nil {
 			if record := agentProgressRecord(raw); record != nil {
-				if progress, progressErr := l.parseEntry(record, projectPath); progressErr == nil {
-					entry, err = progress, nil
+				if recordEntry, recordErr := l.parseEntry(record, projectPath); recordErr == nil {
+					entry, fromProgress = recordEntry, true
 				}
 			}
-		}
-		entry.SourceFile = path
-		if err != nil {
 			// TypeScript version would skip this line silently
 			// Only count as parse error if it's an actual JSON structure we expect to handle
 			if l.shouldCountAsParseError(err, raw) {
-				parseErrors++
-				if firstError == "" && l.debug {
-					firstError = fmt.Sprintf("Line %d: Entry parse error: %v", lineNum, err)
+				describe := func() string { return fmt.Sprintf("Line %d: Entry parse error: %v", lineNum, err) }
+				entryErrors.add(l.debug, describe)
+				if !fromProgress {
+					dailyErrors.add(l.debug, describe)
 				}
 			}
-			continue // Skip entries that fail to parse
+			if !fromProgress {
+				continue // Skip entries that fail to parse
+			}
 		}
+		entry.SourceFile = path
 
 		// Skip entries with zero timestamp (invalid date)
 		if entry.Timestamp.IsZero() || entry.Timestamp.Year() < 2020 {
@@ -432,21 +453,20 @@ func (l *Loader) parseFile(path string) (_ []types.UsageEntry, _ map[string]stri
 			}
 			clearRawExceptKeys(&candidate, rawRetainKeys)
 			entries = append(entries, candidate)
+			progress = append(progress, fromProgress)
 		}
 	}
 
-	if l.debug && parseErrors > 0 {
-		debugMsg = fmt.Sprintf("Debug: File %s had %d parse errors\n", filepath.Base(path), parseErrors)
-		if firstError != "" {
-			debugMsg += fmt.Sprintf("  First error: %s\n", firstError)
-		}
+	var parsed parsedFile
+	if l.debug {
+		parsed.entryDebugMsg, parsed.dailyDebugMsg = entryErrors.summary(path), dailyErrors.summary(path)
 	}
-
 	if readErr != nil {
-		return nil, nil, debugMsg, types.LoaderError{Path: path, Err: readErr}
+		parsed.err = types.LoaderError{Path: path, Err: readErr}
+		return parsed
 	}
-
-	return entries, sessionNameMap, debugMsg, nil
+	parsed.entries, parsed.progress, parsed.sessionNames = entries, progress, sessionNameMap
+	return parsed
 }
 
 // agentProgressRecord returns the assistant record a line without usage of
