@@ -89,7 +89,7 @@ func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, pro
 	case "zcode":
 		lower := strings.ToLower(strings.TrimSpace(model))
 		providerName = strings.ToLower(strings.TrimSpace(providerName))
-		allowed := contains([]string{"zai", "z.ai", "zai-coding-plan", "builtin:zai-coding-plan", "builtin:bigmodel-coding-plan"}, providerName)
+		allowed := zcodeZaiProvider(providerName)
 		candidates = []string{model, lower}
 		if allowed || (providerName == "" && (strings.HasPrefix(lower, "glm-") || strings.HasPrefix(lower, "glm/"))) {
 			candidates = append(candidates, "zai/"+model, "zai/"+lower)
@@ -172,8 +172,15 @@ func zcodeIsZai(model string, provider any) bool {
 	name, _ := provider.(string)
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name != "" {
-		return contains([]string{"zai", "z.ai", "zai-coding-plan", "builtin:zai-coding-plan", "builtin:bigmodel-coding-plan"}, name)
+		return zcodeZaiProvider(name)
 	}
 	model = strings.ToLower(model)
 	return strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "glm/")
+}
+
+// zcodeZaiProvider expects a trimmed, lowercased provider id. Z.ai's current
+// plans are stored as account:zai-* and builtin:zai-* ids.
+func zcodeZaiProvider(name string) bool {
+	return contains([]string{"zai", "z.ai", "zai-coding-plan", "builtin:bigmodel-coding-plan"}, name) ||
+		strings.HasPrefix(name, "account:zai-") || strings.HasPrefix(name, "builtin:zai-")
 }

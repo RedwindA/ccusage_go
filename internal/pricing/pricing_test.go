@@ -88,6 +88,21 @@ func TestSourceAliasesAndZcodeOverrides(t *testing.T) {
 	}
 }
 
+// Ported from upstream's prices_current_zai_account_and_builtin_plan_ids.
+func TestZcodePricesCurrentZaiPlanProviders(t *testing.T) {
+	s := NewService()
+	s.SetOffline(true)
+	at := time.UnixMilli(1786909042666)
+	for _, provider := range []string{"account:zai-individual-coding-plan", "account:zai-start-plan", "builtin:zai-start-plan"} {
+		for _, model := range []string{"GLM-5.3", "GLM-5.3-Flash"} {
+			p, err := s.GetSourcePricing(context.Background(), model, "zcode", provider, at)
+			if err != nil || p.InputCostPerToken <= 0 || !p.CacheCreationAsInput {
+				t.Errorf("%s %s: %+v %v", provider, model, p, err)
+			}
+		}
+	}
+}
+
 // tableService prices from primary alone, without the embedded snapshots.
 func tableService(primary map[string]ModelPricing) *Service {
 	return &Service{primary: primary, models: map[string]ModelPricing{}, offline: true, overrides: map[string]Override{}, memo: map[string]lookupResult{}}
