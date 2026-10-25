@@ -153,3 +153,17 @@ func TestEmbeddedSnapshotPricesNewModels(t *testing.T) {
 		}
 	}
 }
+
+// LiteLLM no longer lists these ids: upstream bills the Claude ones at
+// LiteLLM's Bedrock entries (Sonnet 4 with their 200K split) rather than a
+// models.dev spelling, and the dated GPT-6 Sol at Azure's flat dated entry.
+func TestIDsLiteLLMLacksPriceLikeUpstream(t *testing.T) {
+	c := modernCalculator()
+	for model, cost := range map[string]float64{"claude-sonnet-4-20250514": 1.14, "claude-opus-4-1-20250805": 4.95, "gpt-6-sol-2026-09-22": .66} {
+		e := types.UsageEntry{Model: model, InputTokens: 250000, OutputTokens: 10000, CacheReadInputTokens: 50000, CacheCreationInputTokens: 20000}
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-cost) > 1e-9 {
+			t.Errorf("%s: %v, want %v", model, e.Cost, cost)
+		}
+	}
+}

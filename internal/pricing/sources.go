@@ -18,10 +18,8 @@ func (s *Service) exactPricing(ctx context.Context, model string, at time.Time) 
 		return p, nil
 	}
 	for _, candidate := range []string{model, ResolveModelName(model)} {
-		if _, ok := s.cache[candidate]; ok {
-			return p, nil
-		}
-		if _, ok := s.index().byNorm[normalize(candidate)]; ok {
+		n := normalizer.Replace(candidate)
+		if hasKey(s.primary, candidate) || hasKey(s.models, candidate) || s.primaryIndex().byNorm[n] != "" || s.index().byNorm[n] != "" {
 			return p, nil
 		}
 	}

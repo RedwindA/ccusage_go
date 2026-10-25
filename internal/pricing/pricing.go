@@ -63,13 +63,19 @@ type lookupResult struct {
 	price ModelPricing
 	found bool
 }
+
+// Service prices models from two tables, like upstream: primary holds the
+// LiteLLM snapshot (or its live refresh) and the built-in rates, and models
+// holds models.dev, which only prices what primary misses.
 type Service struct {
 	primary         map[string]ModelPricing
+	models          map[string]ModelPricing
 	modelsAttempted bool
 	modelsFailed    bool
 	modelsRetryAt   time.Time
 	memo            map[string]lookupResult
 	idx             *priceIndex
+	primaryIdx      *priceIndex
 	prefetch        *Prefetch
 	// prefetchedModelsUsed records that refreshModels consumed prefetch.models.
 	prefetchedModelsUsed bool
@@ -77,7 +83,6 @@ type Service struct {
 	mu                   sync.Mutex
 	offline              bool
 	attempted            bool
-	cache                map[string]ModelPricing
 	overrides            map[string]Override
 }
 
@@ -88,18 +93,10 @@ var snapshotPricing = sync.OnceValue(func() map[string]ModelPricing {
 })
 
 var embeddedOnce sync.Once
-var embeddedPrices, embeddedPrimary map[string]ModelPricing
+var embeddedPrimary map[string]ModelPricing
 
 func initEmbedded() {
-	fallback := snapshotPricing()
-	embeddedPrices = make(map[string]ModelPricing, len(fallback))
-	for model, p := range fallback {
-		embeddedPrices[model] = p
-	}
-	embeddedPrimary = cachedEmbedded("primary", func() map[string]ModelPricing { return primaryPricing(fallback) })
-	for model, p := range embeddedPrimary {
-		embeddedPrices[model] = p
-	}
+	embeddedPrimary = cachedEmbedded("primary", func() map[string]ModelPricing { return primaryPricing(snapshotPricing()) })
 }
 
 // Preload starts decoding the embedded price tables in the background, so a
@@ -109,15 +106,15 @@ func Preload() { go embeddedOnce.Do(initEmbedded) }
 
 func NewService() *Service {
 	embeddedOnce.Do(initEmbedded)
-	cache := make(map[string]ModelPricing, len(embeddedPrices))
+	models := make(map[string]ModelPricing, len(snapshotPricing()))
 	primary := make(map[string]ModelPricing, len(embeddedPrimary))
-	for model, p := range embeddedPrices {
-		cache[model] = p
+	for model, p := range snapshotPricing() {
+		models[model] = p
 	}
 	for model, p := range embeddedPrimary {
 		primary[model] = p
 	}
-	return &Service{client: &http.Client{Timeout: 10 * time.Second}, cache: cache, primary: primary, overrides: map[string]Override{}, memo: map[string]lookupResult{}}
+	return &Service{client: &http.Client{Timeout: 10 * time.Second}, models: models, primary: primary, overrides: map[string]Override{}, memo: map[string]lookupResult{}}
 }
 func (s *Service) SetOffline(v bool) { s.mu.Lock(); defer s.mu.Unlock(); s.offline = v }
 func (s *Service) SetOverrides(v map[string]Override) {
@@ -149,16 +146,7 @@ func (s *Service) GetPricing(ctx context.Context, model string, at time.Time) (M
 		s.modelsAttempted = true
 		s.refreshModels(ctx)
 	}
-	p, ok := s.primary[model]
-	if !ok {
-		p, ok = s.primary[canonical(model)]
-	}
-	if !ok && resolved != model {
-		p, ok = s.lookup(resolved)
-	}
-	if !ok {
-		p, ok = s.lookup(model)
-	}
+	p, ok := s.lookup(model, resolved)
 	override, hasOverride := s.overrides[model]
 	if !hasOverride {
 		override, hasOverride = s.overrides[resolved]
@@ -329,97 +317,182 @@ func canonical(model string) string {
 	return model
 }
 
-// priceIndex holds find's per-key work for one version of a price table:
-// keys in sorted order, each key's normalized date-less base, and the first
-// sorted key for every normalized spelling.
+// priceIndex holds lookup's per-key work for one version of a price table:
+// keys in sorted order with their separator-normalized spellings, and the key
+// for every normalized spelling, among all keys and among exact-only ones
+// ("" when two keys share a spelling, which then names neither).
 type priceIndex struct {
-	keys   []string
-	base   []string
-	byNorm map[string]string
+	keys      []string
+	norm      []string
+	byNorm    map[string]string
+	exactOnly map[string]string
 }
 
 func newPriceIndex(all map[string]ModelPricing) *priceIndex {
-	idx := &priceIndex{keys: make([]string, 0, len(all)), byNorm: make(map[string]string, len(all))}
+	idx := &priceIndex{keys: make([]string, 0, len(all)), byNorm: make(map[string]string, len(all)), exactOnly: map[string]string{}}
 	for key := range all {
 		idx.keys = append(idx.keys, key)
 	}
 	sort.Strings(idx.keys)
-	idx.base = make([]string, len(idx.keys))
-	for i, key := range idx.keys {
-		if n := normalize(key); !hasKey(idx.byNorm, n) {
-			idx.byNorm[n] = key
+	idx.norm = make([]string, len(idx.keys))
+	spell := func(m map[string]string, n, key string) {
+		if hasKey(m, n) {
+			m[n] = ""
+		} else {
+			m[n] = key
 		}
-		idx.base[i] = normalize(stripDateSuffix(key))
+	}
+	for i, key := range idx.keys {
+		idx.norm[i] = normalizer.Replace(key)
+		spell(idx.byNorm, idx.norm[i], key)
+		if all[key].ExactOnly {
+			spell(idx.exactOnly, idx.norm[i], key)
+		}
 	}
 	return idx
 }
 
-func hasKey(m map[string]string, key string) bool {
+func hasKey[V any](m map[string]V, key string) bool {
 	_, ok := m[key]
 	return ok
 }
 
-// index returns the priceIndex for s.cache; callers hold s.mu, and code that
-// changes s.cache resets s.idx.
+// index returns the priceIndex for s.models; callers hold s.mu, and code that
+// changes s.models resets s.idx.
 func (s *Service) index() *priceIndex {
 	if s.idx == nil {
-		s.idx = newPriceIndex(s.cache)
+		s.idx = newPriceIndex(s.models)
 	}
 	return s.idx
 }
 
-func find(all map[string]ModelPricing, idx *priceIndex, model string) (ModelPricing, bool) {
+// primaryIndex is index for s.primary, reset with s.primaryIdx.
+func (s *Service) primaryIndex() *priceIndex {
+	if s.primaryIdx == nil {
+		s.primaryIdx = newPriceIndex(s.primary)
+	}
+	return s.primaryIdx
+}
+
+// requiresExact reports whether model, or the built-in alias it names, is
+// any separator spelling of an exact-only models.dev id such as the
+// claude-opus-5-fast tier, which a fuzzy match would bill at another model's
+// rate.
+func (s *Service) requiresExact(model string) bool {
+	exactOnly := s.index().exactOnly
+	return hasKey(exactOnly, normalizer.Replace(model)) || hasKey(exactOnly, normalizer.Replace(canonical(model)))
+}
+
+// find looks model up in one table like upstream's find_entry_or_alias: the
+// id, its built-in alias, the exact-only id a separator spelling names and,
+// when fuzzy is set, the longest key matching it.
+func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool) (ModelPricing, bool) {
 	if p, ok := all[model]; ok {
 		return p, true
 	}
-	candidates := []string{canonical(model), strings.TrimSuffix(model, "-fast"), stripDateSuffix(model)}
-	for _, prefix := range []string{"anthropic.", "us.anthropic.", "eu.anthropic.", "global.anthropic.", "jp.anthropic.", "au.anthropic."} {
-		if strings.HasPrefix(model, prefix) {
-			tail := strings.TrimPrefix(model, prefix)
-			tail, _, _ = strings.Cut(tail, ":")
-			candidates = append(candidates, tail)
-		}
+	names := []string{model}
+	if alias := canonical(model); alias != model {
+		names = []string{alias, model}
 	}
-	if strings.HasPrefix(model, "[") {
-		if _, tail, ok := strings.Cut(model, "] "); ok {
-			candidates = append(candidates, tail)
-		}
-	}
-	if _, tail, ok := strings.Cut(model, "/"); ok {
-		candidates = append(candidates, tail)
-	}
-	for _, c := range append([]string{model}, candidates...) {
-		c = canonical(c)
-		if p, ok := all[c]; ok {
+	for _, name := range names {
+		if p, ok := all[name]; ok {
 			return p, true
 		}
-		n := normalize(c)
-		if key, ok := idx.byNorm[n]; ok {
-			return all[key], true
+		n := normalizer.Replace(name)
+		if id := idx.exactOnly[n]; id != "" {
+			return all[id], true
+		}
+		if !fuzzy || hasKey(idx.exactOnly, n) {
+			continue
 		}
 		best := ""
 		for i, key := range idx.keys {
-			if all[key].ExactOnly {
-				continue
-			}
-			base := idx.base[i]
-			if (n == base || strings.HasPrefix(n, base+"-")) && len(base) > len(best) {
-				best = base
-				model = key
+			if len(key) > len(best) && !all[key].ExactOnly && pricingKeyMatches(key, idx.norm[i], name, n) {
+				best = key
 			}
 		}
 		if best != "" {
-			return all[model], true
+			return all[best], true
 		}
 	}
 	return ModelPricing{}, false
 }
-func (s *Service) lookup(model string) (ModelPricing, bool) {
-	if result, ok := s.memo[model]; ok {
+
+// pricingKeyMatches reports whether one of key and model contains the other,
+// as written or with '.' and '@' read as '-'.
+func pricingKeyMatches(key, normKey, model, normModel string) bool {
+	return containsPricingKey(model, key) || containsPricingKey(key, model) || containsPricingKey(normModel, normKey) || containsPricingKey(normKey, normModel)
+}
+
+// containsPricingKey finds key in value between non-alphanumeric boundaries,
+// and not followed by a further version number: claude-opus-4 is not in
+// claude-opus-4-8, but claude-opus-4-1 is in claude-opus-4-1-20250805.
+func containsPricingKey(value, key string) bool {
+	for at := 0; at <= len(value); {
+		i := strings.Index(value[at:], key)
+		if i < 0 {
+			return false
+		}
+		i += at
+		if (i == 0 || !isAlphanumeric(value[i-1])) && suffixAllowsKey(key, value[i+len(key):]) {
+			return true
+		}
+		at = i + max(len(key), 1)
+	}
+	return false
+}
+
+func suffixAllowsKey(key, suffix string) bool {
+	if suffix == "" {
+		return true
+	}
+	if isAlphanumeric(suffix[0]) {
+		return false
+	}
+	if key == "" || !isDigit(key[len(key)-1]) || (suffix[0] != '-' && suffix[0] != '.') {
+		return true
+	}
+	digits := 1
+	for digits < len(suffix) && isDigit(suffix[digits]) {
+		digits++
+	}
+	digits--
+	// A release date continues the key; another version number does not.
+	return digits == 0 || (digits == 8 && (len(suffix) == 9 || !isAlphanumeric(suffix[9])))
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isAlphanumeric(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// lookup resolves model, or the CCUSAGE_MODEL_ALIASES target resolved, in
+// upstream's order: LiteLLM and built-in entries exactly, then fuzzily, and
+// models.dev only for what they miss, even when it spells the id exactly.
+func (s *Service) lookup(model, resolved string) (ModelPricing, bool) {
+	key := model + "\x00" + resolved
+	if result, ok := s.memo[key]; ok {
 		return result.price, result.found
 	}
-	p, ok := find(s.cache, s.index(), model)
-	s.memo[model] = lookupResult{p, ok}
+	names := []string{model}
+	if resolved != model {
+		names = append(names, resolved)
+	}
+	fuzzy := !s.requiresExact(model) && !s.requiresExact(resolved)
+	var p ModelPricing
+	ok := false
+	for _, allow := range []bool{false, fuzzy} {
+		for _, name := range names {
+			if !ok {
+				p, ok = find(s.primary, s.primaryIndex(), name, allow)
+			}
+		}
+	}
+	if !ok {
+		p, ok = find(s.models, s.index(), resolved, fuzzy)
+	}
+	s.memo[key] = lookupResult{p, ok}
 	return p, ok
 }
 
@@ -449,11 +522,10 @@ func (s *Service) refresh(ctx context.Context) {
 		live = fetchLite(ctx, s.client)
 	}
 	for model, p := range live {
-		s.cache[model] = p
 		s.primary[model] = p
 	}
 	s.memo = map[string]lookupResult{}
-	s.idx = nil
+	s.primaryIdx = nil
 }
 func modelsPricing(payload []byte) map[string]ModelPricing {
 	type cost struct {
