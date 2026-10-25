@@ -34,8 +34,19 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 	// sidechain on at least one side, so parent candidates only look through
 	// sidechain entries; gateways that reuse one message ID for every
 	// response then do not rescan every earlier entry.
-	replays := map[string][]int{}
-	sidechains := map[string][]int{}
+	type routeEntry struct {
+		index int
+		// session is the alias a cross-session match adds; empty means the
+		// session of the entry now in the slot.
+		session string
+	}
+	replays := map[string][]routeEntry{}
+	sidechains := map[string][]routeEntry{}
+	push := func(route map[string][]routeEntry, k string, r routeEntry) {
+		if !slices.Contains(route[k], r) {
+			route[k] = append(route[k], r)
+		}
+	}
 	key := dedupeKey
 	for _, k := range order {
 		e := entries[k]
@@ -58,14 +69,18 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			if e.IsSidechain {
 				route = replays
 			}
-			for _, candidate := range route[sideKey] {
-				old := out[candidate]
+			for _, r := range route[sideKey] {
+				old := out[r.index]
+				session := r.session
+				if session == "" {
+					session = old.SessionID
+				}
 				oldRequest, _ := old.Raw["request_id"].(string)
 				// Requestless replays match across timestamps; replays with
 				// a new request ID need the parent's timestamp.
 				requestless := request == "" && oldRequest == ""
-				if (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
-					i, found = candidate, true
+				if session == e.SessionID && (requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
+					i, found = r.index, true
 					break
 				}
 			}
@@ -74,18 +89,18 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			i = len(out)
 			out = append(out, e)
 			exact[exactKey] = i
-			replays[sideKey] = append(replays[sideKey], i)
+			replays[sideKey] = append(replays[sideKey], routeEntry{index: i})
 			if e.IsSidechain {
-				sidechains[sideKey] = append(sidechains[sideKey], i)
+				sidechains[sideKey] = append(sidechains[sideKey], routeEntry{index: i})
 			}
 		} else {
 			old := out[i]
 			if e.SessionID != old.SessionID {
 				// Cross-session copies can become the survivor, so keep
-				// this session's routes for later sidechain replays.
-				for _, route := range []map[string][]int{replays, sidechains} {
-					if !slices.Contains(route[sideKey], i) {
-						route[sideKey] = append(route[sideKey], i)
+				// both sessions' routes for later sidechain replays.
+				for _, session := range []string{e.SessionID, old.SessionID} {
+					for _, route := range []map[string][]routeEntry{replays, sidechains} {
+						push(route, key(message, session), routeEntry{i, session})
 					}
 				}
 			}
@@ -103,6 +118,14 @@ func deduplicateUsage(entries []types.UsageEntry) []types.UsageEntry {
 			if replace {
 				out[i] = e
 				exact[exactKey] = i
+				// Route the new survivor under its own session and
+				// sidechain flag, as if it were a new entry.
+				if e.SessionID != old.SessionID || e.IsSidechain != old.IsSidechain {
+					push(replays, sideKey, routeEntry{index: i})
+					if e.IsSidechain {
+						push(sidechains, sideKey, routeEntry{index: i})
+					}
+				}
 			}
 		}
 	}

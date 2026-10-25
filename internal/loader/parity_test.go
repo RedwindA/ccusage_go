@@ -178,6 +178,34 @@ func TestClaudeExactDedupeMatchesOnlyTheCurrentSurvivor(t *testing.T) {
 	}
 }
 
+// A replay route entry follows the session of the entry now in its slot, so
+// once a copy from another session wins, the slot is only found again under
+// that session's alias, which is added after the routes it was already on.
+func TestClaudeReplayRoutesFollowTheSurvivorsSession(t *testing.T) {
+	record := func(timestamp, session, request string, input int, side bool) map[string]interface{} {
+		r := nativeRecord(session, "g", request, input, side)
+		r["timestamp"] = timestamp
+		r["message"].(map[string]interface{})["usage"].(map[string]interface{})["output_tokens"] = 1
+		return r
+	}
+	root := t.TempDir()
+	entries := mustNative(t,
+		writeNative(t, root, "projects/p/a.jsonl", record("2026-09-11T12:00:00.000Z", "s1", "r1", 10, false)),
+		writeNative(t, root, "projects/p/b.jsonl", record("2026-09-11T12:05:00.000Z", "s1", "", 20, true)),
+		// The s2 copy of r1 replaces the s1 parent.
+		writeNative(t, root, "projects/p/c.jsonl", record("2026-09-11T12:00:00.000Z", "s2", "r1", 100, false)),
+		// This s1 replay now skips the parent's slot and replaces the
+		// requestless sidechain instead.
+		writeNative(t, root, "projects/p/d.jsonl", record("2026-09-11T12:00:00.000Z", "s1", "", 1000, true)))
+	total := 0
+	for _, e := range entries {
+		total += e.TotalTokens
+	}
+	if len(entries) != 2 || total != 101+1001 {
+		t.Fatalf("%d entries, %d tokens: %+v", len(entries), total, entries)
+	}
+}
+
 // Upstream dedupes files in path order and each file line by line, so a tie
 // keeps the first candidate in that order rather than the earliest one, and
 // which candidate a replay matches depends on what came before it.
