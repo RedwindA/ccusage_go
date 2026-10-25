@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.19.0] - 2026-10-25
+
 ### Added
 
 - Windows installer: `irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 | iex` verifies the release's SHA-256 checksum, installs `ccusage_go.exe` into `%LOCALAPPDATA%\Programs\ccusage_go` without administrator rights, and adds it to the user PATH. Running `install.sh` from Git Bash now points to it.

@@ -55,8 +55,8 @@ ccusage_go daily --offline
 指定版本或安裝目錄：
 
 ```sh
-curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.18.0/install.sh -o install.sh
-INSTALL_DIR="$HOME/bin" sh install.sh v0.18.0
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.19.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.19.0
 ```
 
 ### 快速安裝（Windows）
@@ -73,7 +73,7 @@ irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1 
 
 ```powershell
 $env:INSTALL_DIR = "$HOME\bin"
-& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.18.0
+& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.19.0
 ```
 
 設定 `CCUSAGE_GO_NO_MODIFY_PATH=1` 可保留 PATH 不變。

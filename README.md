@@ -59,8 +59,8 @@ Versions before v0.18.0 upgrade by re-running the install command.
 To choose a version or installation directory:
 
 ```sh
-curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.18.0/install.sh -o install.sh
-INSTALL_DIR="$HOME/bin" sh install.sh v0.18.0
+curl -fsSL https://github.com/RedwindA/ccusage_go/releases/download/v0.19.0/install.sh -o install.sh
+INSTALL_DIR="$HOME/bin" sh install.sh v0.19.0
 ```
 
 ### Quick Install (Windows)
@@ -77,7 +77,7 @@ To choose a version or installation directory:
 
 ```powershell
 $env:INSTALL_DIR = "$HOME\bin"
-& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.18.0
+& ([scriptblock]::Create((irm https://github.com/RedwindA/ccusage_go/releases/latest/download/install.ps1))) v0.19.0
 ```
 
 Set `CCUSAGE_GO_NO_MODIFY_PATH=1` to leave PATH unchanged.
