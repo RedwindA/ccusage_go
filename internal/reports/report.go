@@ -145,9 +145,19 @@ func sessionGroupKey(e types.UsageEntry, o Options) string {
 	user, _ := e.Raw["system_user"].(string)
 	key := e.SessionID + "\x00" + user + "\x00" + e.Agent
 	if e.Agent == "claude" || e.Agent == "pi" && o.Agent == "" {
-		key += "\x00" + e.ProjectPath
+		key += "\x00" + projectKey(e)
 	}
 	return key
+}
+
+// projectKey names the project an entry is grouped under. Upstream names a
+// Claude project by its directory under projects/, so one found under two
+// Claude roots, such as one config directory per account, is one project.
+func projectKey(e types.UsageEntry) string {
+	if e.Agent == "claude" {
+		return filepath.Base(e.ProjectPath)
+	}
+	return e.ProjectPath
 }
 func activityTime(v any) time.Time {
 	switch value := v.(type) {
@@ -283,7 +293,7 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 		project := ""
 		if o.Instances {
 			project = filepath.Base(e.ProjectPath)
-			key += "\x00" + e.ProjectPath
+			key += "\x00" + projectKey(e)
 		}
 		// Sessions from different sources must remain independent.
 		if o.Kind == "session" {
@@ -359,7 +369,7 @@ func dropEmptyAgentDays(entries []types.UsageEntry, o Options) []types.UsageEntr
 		user, _ := e.Raw["system_user"].(string)
 		k := e.Timestamp.In(o.window(e.Agent).Location).Format("2006-01-02") + "\x00" + user + "\x00" + e.Agent
 		if o.Instances {
-			k += "\x00" + e.ProjectPath
+			k += "\x00" + projectKey(e)
 		}
 		return k
 	}

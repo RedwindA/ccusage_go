@@ -119,10 +119,14 @@ func TestModelsPreserveAgentLabelsFastAndAliases(t *testing.T) {
 		t.Fatal("report normalization mutated input")
 	}
 }
-func TestInstancesDoNotCollapseSameBasename(t *testing.T) {
-	entries := []types.UsageEntry{reportEntry("claude", "a", "/alice/project", "2026-01-01T00:00:00Z", 1), reportEntry("claude", "b", "/bob/project", "2026-01-01T00:00:00Z", 2)}
+
+// Upstream groups --instances rows by the project's directory under
+// projects/, whichever Claude root holds it; system users stay apart.
+func TestInstancesMergeAClaudeProjectAcrossRoots(t *testing.T) {
+	entries := []types.UsageEntry{reportEntry("claude", "a", "/alice/.claude/projects/project", "2026-01-01T00:00:00Z", 1), reportEntry("claude", "b", "/alice/.config/claude/projects/project", "2026-01-01T00:00:00Z", 2), reportEntry("claude", "c", "/bob/.claude/projects/project", "2026-01-01T00:00:00Z", 4)}
+	entries[2].Raw = map[string]any{"system_user": "bob"}
 	rows := Aggregate(entries, Options{Kind: "daily", Instances: true})
-	if len(rows) != 2 {
+	if len(rows) != 2 || rows[0].Total+rows[1].Total != 7 || rows[0].Total != 3 && rows[1].Total != 3 {
 		t.Fatal(rows)
 	}
 }

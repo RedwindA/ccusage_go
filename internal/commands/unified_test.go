@@ -211,3 +211,29 @@ func TestSymlinkedClaudeTranscriptsAreSkipped(t *testing.T) {
 		}
 	}
 }
+
+// Upstream names a Claude project by its directory under projects/, so a
+// project or a session found under two Claude roots, such as one config
+// directory per account, is one row.
+func TestClaudeRootsShareProjectsAndSessions(t *testing.T) {
+	isolateSourceHomes(t)
+	work, personal := t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", work+","+personal)
+	pruneWrite(t, work, "projects/-home-u-app/session-a.jsonl", pruneUsageLine("2026-10-01T12:00:00.000Z", "session-a", "msg-1", "req-1", 1))
+	pruneWrite(t, personal, "projects/-home-u-app/session-a.jsonl", pruneUsageLine("2026-10-01T13:00:00.000Z", "session-a", "msg-2", "req-2", 2))
+	args := []string{"--json", "--offline", "--timezone", "UTC"}
+	projects := sourceCLIJSON(t, append([]string{"claude", "daily", "--instances"}, args...)...)["projects"].(map[string]any)
+	if rows, _ := projects["-home-u-app"].([]any); len(projects) != 1 || len(rows) != 1 || rows[0].(map[string]any)["totalCost"] != 3.0 {
+		t.Errorf("claude daily --instances projects %v, want one -home-u-app day costing 3", projects)
+	}
+	for _, report := range [][]string{{"claude", "session"}, {"session"}} {
+		payload := sourceCLIJSON(t, append(report, args...)...)
+		rows, _ := payload["sessions"].([]any)
+		if len(report) == 1 {
+			rows, _ = payload["session"].([]any)
+		}
+		if len(rows) != 1 || rows[0].(map[string]any)["totalCost"] != 3.0 {
+			t.Errorf("%v rows %v, want one session-a costing 3", report, rows)
+		}
+	}
+}
