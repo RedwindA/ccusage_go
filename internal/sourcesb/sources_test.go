@@ -270,3 +270,41 @@ func TestAntigravityRetriesScalarOrderAndSchemaErrors(t *testing.T) {
 		t.Fatal("missing gen_metadata must fail")
 	}
 }
+func antigravityDB(t *testing.T, p, model string, modelID uint64, id string) {
+	t.Helper()
+	db := database(t, p, `CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);`)
+	var usage []byte
+	if modelID > 0 {
+		usage = varint(1, modelID)
+	}
+	usage = append(usage, varint(2, 10)...)
+	usage = append(usage, varint(3, 5)...)
+	usage = append(usage, blob(11, []byte(id))...)
+	var chat []byte
+	if model != "" {
+		chat = blob(19, []byte(model))
+	}
+	chat = append(chat, blob(4, usage)...)
+	chat = append(chat, blob(9, blob(4, varint(1, 1778000000)))...)
+	if _, e := db.Exec("INSERT INTO gen_metadata VALUES(1,?)", blob(1, chat)); e != nil {
+		t.Fatal(e)
+	}
+}
+func TestAntigravitySkipsZeroByteDatabases(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "conversations/empty.db"), "")
+	if e := mustLoad(t, "antigravity", dir); len(e) != 0 {
+		t.Fatal(e)
+	}
+	antigravityDB(t, filepath.Join(dir, "conversations/session.db"), "gemini-3-pro", 0, "valid-response")
+	if e := mustLoad(t, "antigravity", dir); len(e) != 1 || e[0].ID != "valid-response" {
+		t.Fatalf("%+v", e)
+	}
+	db := database(t, filepath.Join(dir, "conversations/malformed.db"), `CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);`)
+	if _, e := db.Exec("INSERT INTO gen_metadata VALUES(1,?)", []byte{0x0a, 0x01, 0x80}); e != nil {
+		t.Fatal(e)
+	}
+	if _, err := Load(context.Background(), "antigravity", []string{dir}, time.UTC); err == nil {
+		t.Fatal("malformed database next to an empty one must fail")
+	}
+}

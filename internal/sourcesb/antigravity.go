@@ -174,6 +174,14 @@ func loadAntigravity(ctx context.Context, file string) ([]types.UsageEntry, erro
 		return nil, err
 	}
 	defer db.Close()
+	// Antigravity can leave a zero-byte database before initializing it.
+	var pages int
+	if err := db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); err != nil {
+		return nil, err
+	}
+	if pages == 0 {
+		return nil, nil
+	}
 	if !table(ctx, db, "gen_metadata") {
 		return nil, fmt.Errorf("missing gen_metadata table")
 	}
