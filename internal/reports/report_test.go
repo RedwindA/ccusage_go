@@ -48,7 +48,8 @@ func TestUnifiedTotalsAndBreakdowns(t *testing.T) {
 	if len(rows) != 1 || rows[0].Total != 65 || rows[0].Cost != 3 || rows[0].Period != "2026-03-08" || len(rows[0].Agents) != 2 {
 		t.Fatalf("bad rows %+v", rows)
 	}
-	o.Kind = "session"
+	// Unified Claude sessions are bounded by their UTC date.
+	o.Kind, o.Since, o.Until = "session", "", ""
 	rows = Aggregate(entries, o)
 	if len(rows) != 2 {
 		t.Fatal("sessions from different sources merged")

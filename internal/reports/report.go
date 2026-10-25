@@ -207,18 +207,30 @@ func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
 	}
 	out := make([]types.UsageEntry, 0, len(candidates))
 	for _, e := range candidates {
-		t := e.Timestamp
-		if wholeSessionDate(e, o) {
-			t = latest[sessionGroupKey(e, o)]
-		}
 		w := o.window(e.Agent)
-		date := t.In(w.Location).Format("2006-01-02")
+		if wholeSessionDate(e, o) {
+			if wholeSessionInWindow(latest[sessionGroupKey(e, o)], w) {
+				out = append(out, e)
+			}
+			continue
+		}
+		date := e.Timestamp.In(w.Location).Format("2006-01-02")
 		if w.Since != "" && date < w.Since || w.Until != "" && date > w.Until {
 			continue
 		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// wholeSessionInWindow reports whether a session last active at last falls
+// in w. Upstream compares the UTC RFC3339 last activity, dashes stripped,
+// with the YYYYMMDD bounds as strings, so the bounds are UTC dates whatever
+// the timezone, and a session last active on the --until day sorts after it
+// and drops.
+func wholeSessionInWindow(last time.Time, w Window) bool {
+	date := last.UTC().Format("2006-01-02")
+	return (w.Since == "" || date >= w.Since) && (w.Until == "" || date < w.Until)
 }
 
 func displayModel(e types.UsageEntry) string {

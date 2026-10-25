@@ -3,6 +3,7 @@ package reports
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func TestSessionDateScopeMatchesEachSource(t *testing.T) {
 		for _, focused := range []bool{false, true} {
 			t.Run(agent+map[bool]string{false: "/unified", true: "/focused"}[focused], func(t *testing.T) {
 				entries := []types.UsageEntry{reportEntry(agent, "s", "p", "2026-01-01T12:00:00Z", 10), reportEntry(agent, "s", "p", "2026-01-03T12:00:00Z", 20)}
-				o := Options{Kind: "session", Since: "2026-01-03", Until: "2026-01-03", Location: time.UTC}
+				o := Options{Kind: "session", Since: "2026-01-03", Until: "2026-01-04", Location: time.UTC}
 				if focused {
 					o.Agent = agent
 				}
@@ -61,11 +62,41 @@ func TestSessionGroupingScopeAndSystemUsers(t *testing.T) {
 		}
 	}
 }
-func TestWholeSessionDateRespectsTimezoneAndOtherAgents(t *testing.T) {
-	entries := []types.UsageEntry{reportEntry("qwen", "s", "p", "2026-01-01T12:00:00Z", 10), reportEntry("qwen", "s", "p", "2026-01-03T01:00:00Z", 20), reportEntry("codex", "s", "p", "2026-01-02T12:00:00Z", 100)}
-	rows := Aggregate(entries, Options{Kind: "session", Agent: "qwen", Since: "2026-01-02", Until: "2026-01-02", Location: time.FixedZone("west", -7*3600)})
-	if len(rows) != 1 || rows[0].Total != 30 {
-		t.Fatal(rows)
+
+// Upstream dates a whole session by its UTC RFC3339 last activity, dashes
+// stripped and compared as a string with the YYYYMMDD bounds, so the report
+// timezone does not move it and --until drops a session last active that day.
+func TestWholeSessionDateComparesUTCLastActivity(t *testing.T) {
+	west := time.FixedZone("west", -8*3600)
+	for _, tc := range []struct{ agent, focused string }{{"claude", ""}, {"qwen", ""}, {"qwen", "qwen"}} {
+		entries := []types.UsageEntry{
+			reportEntry(tc.agent, "s1", "p", "2026-01-01T12:00:00Z", 10),
+			reportEntry(tc.agent, "s1", "p", "2026-01-03T12:00:00Z", 20),
+			reportEntry(tc.agent, "s2", "p", "2026-01-04T01:00:00Z", 5),
+			reportEntry("codex", "s2", "p", "2026-01-02T12:00:00Z", 100),
+		}
+		for _, bounds := range []struct {
+			since, until string
+			want         []string
+		}{
+			{"", "2026-01-03", nil},
+			{"", "2026-01-04", []string{"s1"}},
+			{"2026-01-03", "", []string{"s1", "s2"}},
+			{"2026-01-04", "", []string{"s2"}},
+			{"2026-01-01", "2026-01-02", nil},
+		} {
+			o := Options{Kind: "session", Agent: tc.focused, Since: bounds.since, Until: bounds.until, Location: west}
+			var got []string
+			for _, row := range Aggregate(entries, o) {
+				if row.Agent == tc.agent {
+					got = append(got, row.Period)
+				}
+			}
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, bounds.want) {
+				t.Errorf("%s focused=%q since=%q until=%q: got %v, want %v", tc.agent, tc.focused, bounds.since, bounds.until, got, bounds.want)
+			}
+		}
 	}
 }
 func TestModelsPreserveAgentLabelsFastAndAliases(t *testing.T) {
