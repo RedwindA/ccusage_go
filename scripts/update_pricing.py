@@ -1,7 +1,7 @@
 """Refresh internal/pricing's embedded snapshots from an upstream ccusage checkout.
 
-The models.dev pricing, its catalog rules and the Fast multiplier overrides
-are copied verbatim. The LiteLLM table is downloaded at the revision the
+The models.dev pricing, its catalog rules and the Fast and Flex multiplier
+overrides are copied verbatim. The LiteLLM table is downloaded at the revision the
 checkout's flake.lock pins and reduced the way upstream's
 rust/crates/ccusage-pricing-snapshots/build.rs reduces it, keeping LiteLLM's
 own field names so internal/pricing reads the snapshot and a live download
@@ -25,6 +25,7 @@ COPIED = {
     'rust/crates/ccusage-pricing-snapshots/src/models-dev-pricing.json': 'models-dev-pricing.json',
     'rust/crates/ccusage-pricing-snapshots/src/models-dev-catalog-rules.json': 'models-dev-catalog-rules.json',
     'rust/crates/ccusage-core/src/fast-multiplier-overrides.json': 'fast-multiplier-overrides.json',
+    'rust/crates/ccusage-core/src/flex-multiplier-overrides.json': 'flex-multiplier-overrides.json',
 }
 
 # The fields upstream's build.rs keeps, plus the provider entry it reads the

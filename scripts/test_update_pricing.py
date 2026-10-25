@@ -1,6 +1,7 @@
 """Check the pricing snapshot refresh offline against small upstream fixtures."""
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -53,6 +54,12 @@ class CompactTest(unittest.TestCase):
         })
         self.assertTrue(compact.startswith('{\n  "claude-opus-5-5": {\n    "input_cost_per_token": 4e-06,'))
         self.assertTrue(compact.endswith('\n}\n'))
+
+    def test_copies_every_embedded_snapshot_but_litellm(self):
+        embedded = set()
+        for source in update_pricing.PRICING_DIR.glob('*.go'):
+            embedded.update(re.findall(r'^//go:embed (\S+\.json)$', source.read_text(encoding='utf-8'), re.M))
+        self.assertEqual(sorted(embedded - {'litellm-pricing.json'}), sorted(update_pricing.COPIED.values()))
 
     def test_committed_snapshot_is_generator_output(self):
         committed = (update_pricing.PRICING_DIR / 'litellm-pricing.json').read_text(encoding='utf-8')
