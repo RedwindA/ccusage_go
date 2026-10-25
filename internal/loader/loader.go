@@ -242,7 +242,13 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 		}
 	}
 
-	var allEntries []types.UsageEntry
+	// Entries are large; growing the slice file by file copies them over
+	// and over.
+	n := 0
+	for _, res := range results {
+		n += len(res.entries)
+	}
+	allEntries := make([]types.UsageEntry, 0, n)
 	var errors []error
 	globalSessionNames := make(map[string]string)
 
