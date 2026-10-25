@@ -23,7 +23,7 @@ import (
 // by the build alone.
 
 // parsedCacheFormat versions the encoding below.
-const parsedCacheFormat = "ccusage-go parsed prices v1"
+const parsedCacheFormat = "ccusage-go parsed prices v2"
 
 // buildIdentity names the code that parses price lists, or "" when the build
 // cannot be identified (uncommitted changes, no VCS or module version), which
@@ -168,7 +168,7 @@ func encodePrices(prices map[string]ModelPricing) []byte {
 		set(p.CacheCreateAbove != nil, flagCacheCreateAbove)
 		set(p.CacheReadAbove != nil, flagCacheReadAbove)
 		out = append(out, flags)
-		for _, v := range []float64{p.InputCostPerToken, p.OutputCostPerToken, p.CacheCreationInputTokenCost, p.CacheReadInputTokenCost, p.FastMultiplier, p.WebSearchCostPerRequest, p.WebFetchCostPerRequest} {
+		for _, v := range []float64{p.InputCostPerToken, p.OutputCostPerToken, p.CacheCreationInputTokenCost, p.CacheReadInputTokenCost, p.FastMultiplier, p.FlexMultiplier, p.WebSearchCostPerRequest, p.WebFetchCostPerRequest} {
 			putFloat(v)
 		}
 		for _, v := range []*float64{p.InputAbove, p.OutputAbove, p.CacheCreateAbove, p.CacheReadAbove} {
@@ -203,6 +203,7 @@ func decodePrices(b []byte) (map[string]ModelPricing, error) {
 		p.CacheCreationInputTokenCost = d.float()
 		p.CacheReadInputTokenCost = d.float()
 		p.FastMultiplier = d.float()
+		p.FlexMultiplier = d.float()
 		p.WebSearchCostPerRequest = d.float()
 		p.WebFetchCostPerRequest = d.float()
 		p.InputAbove = d.optionalFloat(flags&flagInputAbove != 0)

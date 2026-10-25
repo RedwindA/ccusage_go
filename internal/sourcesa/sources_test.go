@@ -189,7 +189,7 @@ func TestCodexCumulativeDeltasAndRecordedSpeed(t *testing.T) {
 {"type":"event_msg","timestamp":"2026-08-01T00:00:01Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"priority"}}}
 {"type":"event_msg","timestamp":"2026-08-01T00:00:02Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":25,"output_tokens":20,"reasoning_output_tokens":10},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":25,"output_tokens":20,"reasoning_output_tokens":10}}}}
 {"type":"event_msg","timestamp":"2026-08-01T00:00:03Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":20},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":25,"output_tokens":20,"reasoning_output_tokens":10}}}}
-{"type":"event_msg","timestamp":"2026-08-01T00:00:04Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"flex"}}}
+{"type":"event_msg","timestamp":"2026-08-01T00:00:04Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"unknown"}}}
 {"type":"event_msg","timestamp":"2026-08-01T00:00:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":110,"cached_input_tokens":40,"cache_write_input_tokens":25,"output_tokens":25,"reasoning_output_tokens":10}}}}`)
 	entries := loadTest(t, "codex", root)
 	if len(entries) != 2 {
@@ -199,6 +199,36 @@ func TestCodexCumulativeDeltasAndRecordedSpeed(t *testing.T) {
 	requireTokens(t, entries[1], 10, 5, 0, 0, 15)
 	if entries[0].Speed != "fast" || entries[1].Speed != "" || entries[0].ProjectPath != "/work" {
 		t.Fatal(entries)
+	}
+}
+func TestCodexRecordsFlexTierAndKeepsExplicitCopyTiers(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	rollout := func(tier string) string {
+		settings := ""
+		if tier != "" {
+			settings = `{"type":"event_msg","timestamp":"2026-07-22T00:00:04Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"` + tier + `"}}}` + "\n"
+		}
+		return settings + `{"type":"event_msg","timestamp":"2026-07-22T00:00:05Z","payload":{"type":"token_count","info":{"model":"gpt-5.4","last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}`
+	}
+	// Each session is copied into a second Codex home, which is read later.
+	want := map[string]string{}
+	for _, tc := range []struct{ session, first, second, want string }{
+		{"flex", "flex", "", "flex"}, {"unmarked-then-flex", "", "flex", "flex"}, {"flex-then-fast", "flex", "priority", "fast"}, {"fast-then-flex", "priority", "flex", "fast"}, {"flex-then-standard", "flex", "default", "standard"},
+	} {
+		fixture(t, first, "sessions/"+tc.session+".jsonl", rollout(tc.first))
+		if tc.second != "" {
+			fixture(t, second, "sessions/"+tc.session+".jsonl", rollout(tc.second))
+		}
+		want[tc.session] = tc.want
+	}
+	entries, err := Load(context.Background(), "codex", []string{first, second}, time.UTC)
+	if err != nil || len(entries) != len(want) {
+		t.Fatal(entries, err)
+	}
+	for _, e := range entries {
+		if e.Speed != want[e.SessionID] || e.InputTokens != 10 {
+			t.Errorf("%s: speed %q, want %q", e.SessionID, e.Speed, want[e.SessionID])
+		}
 	}
 }
 func TestCodexHeadlessAliasesAndAutoReviewFallback(t *testing.T) {

@@ -49,6 +49,11 @@ func TestZeroAndPartialOverrides(t *testing.T) {
 	if p, err = s.GetPricing(context.Background(), "free", time.Time{}); err != nil || p.InputCostPerToken != 0 {
 		t.Fatalf("free: %+v %v", p, err)
 	}
+	flex := .25
+	s.SetOverrides(map[string]Override{"gpt-5.4": {FlexMultiplier: &flex}})
+	if p, err = s.GetPricing(context.Background(), "gpt-5.4", time.Time{}); err != nil || p.FlexMultiplier != flex || p.FastMultiplier != 2 {
+		t.Fatalf("flex override: %+v %v", p, err)
+	}
 }
 
 // Like upstream's apply_override, an override builds only on the entry its

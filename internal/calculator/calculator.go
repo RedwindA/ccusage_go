@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
@@ -36,7 +37,7 @@ func New(pricingService PricingService) *Calculator {
 // SetMode selects auto (recorded cost preferred), calculate, or display.
 func (c *Calculator) SetMode(mode string) { c.mode = mode }
 
-// SetSpeed overrides recorded speed when set to fast or standard.
+// SetSpeed overrides recorded Codex speed when set to standard, fast or flex.
 func (c *Calculator) SetSpeed(speed string) { c.speed = speed }
 func (c *Calculator) CalculateCosts(ctx context.Context, entries []types.UsageEntry) ([]types.UsageEntry, error) {
 	for i := range entries {
@@ -130,6 +131,7 @@ func (c *Calculator) calculateSingleCost(ctx context.Context, entry *types.Usage
 	} else {
 		p.InputCostPerToken, p.OutputCostPerToken, p.CacheCreationInputTokenCost, p.CacheReadInputTokenCost, p.WebSearchCostPerRequest, p.WebFetchCostPerRequest, err = c.pricingService.GetModelPrice(ctx, entry.Model)
 		p.FastMultiplier = 1
+		p.FlexMultiplier = 1
 	}
 	if err != nil {
 		if entry.Model == "" || (entry.InputTokens+entry.OutputTokens+entry.CacheReadInputTokens+entry.CacheCreationInputTokens+entry.ReasoningTokens == 0 && number(entry.Raw["extra_output_tokens"]) == 0) {
@@ -194,12 +196,15 @@ func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricin
 		return float64(tokens) * base
 	}
 	speed := entry.Speed
-	if (entry.Agent == "codex" || entry.Agent == "") && (c.speed == "fast" || c.speed == "standard") {
+	if (entry.Agent == "codex" || entry.Agent == "") && (c.speed == "fast" || c.speed == "standard" || c.speed == "flex") {
 		speed = c.speed
 	}
 
 	multiplier := 1.0
-	if speed == "fast" || speed == "priority" || (speed != "standard" && strings.HasSuffix(entry.Model, "-fast")) {
+	switch {
+	case speed == "flex":
+		multiplier = p.FlexMultiplier
+	case speed == "fast" || speed == "priority" || (speed != "standard" && strings.HasSuffix(entry.Model, "-fast")):
 		multiplier = p.FastMultiplier
 	}
 	outputTokens := entry.OutputTokens
@@ -223,24 +228,50 @@ func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricin
 
 // DetectCodexSpeed reads only the supplied Codex home roots. It deliberately
 // ignores process-global environment so all-user scans retain user attribution.
+// Any root requesting Fast wins; otherwise any root requesting Flex does.
 func DetectCodexSpeed(homes []string) string {
+	speed := "standard"
 	for _, home := range homes {
 		data, err := os.ReadFile(filepath.Join(strings.TrimSpace(home), "config.toml"))
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line, _, _ = strings.Cut(line, "#")
-			key, value, ok := strings.Cut(line, "=")
-			if ok && strings.TrimSpace(key) == "service_tier" {
-				value = strings.Trim(strings.TrimSpace(value), "\"'")
-				if value == "fast" || value == "priority" {
-					return "fast"
-				}
-			}
+		switch codexConfigSpeed(data) {
+		case "fast":
+			return "fast"
+		case "flex":
+			speed = "flex"
 		}
 	}
-	return "standard"
+	return speed
+}
+
+// codexConfigSpeed returns the tier a config.toml requests, or "": the
+// top-level service_tier, overridden by a named profile only when the
+// top-level profile selects it. A profile chosen with --profile or in another
+// file is invisible here and needs an explicit --speed.
+func codexConfigSpeed(data []byte) string {
+	var config map[string]any
+	if toml.Unmarshal(data, &config) != nil {
+		return ""
+	}
+	tier := config["service_tier"]
+	if name, ok := config["profile"].(string); ok {
+		profiles, _ := config["profiles"].(map[string]any)
+		profile, _ := profiles[name].(map[string]any)
+		if selected, ok := profile["service_tier"]; ok {
+			tier = selected
+		}
+	}
+	switch value, _ := tier.(string); value {
+	case "default", "standard":
+		return "standard"
+	case "fast", "priority":
+		return "fast"
+	case "flex":
+		return "flex"
+	}
+	return ""
 }
 
 func (c *Calculator) GenerateDailyReport(entries []types.UsageEntry, date time.Time) types.UsageReport {

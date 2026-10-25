@@ -230,3 +230,97 @@ func TestIDsLiteLLMLacksPriceLikeUpstream(t *testing.T) {
 		}
 	}
 }
+func TestCodexFlexPricing(t *testing.T) {
+	c := modernCalculator()
+	price := func(speed, agent string) float64 {
+		e := types.UsageEntry{Agent: agent, Model: "gpt-5.4", InputTokens: 1000, OutputTokens: 100, Speed: speed}
+		_ = c.CalculateCost(&e)
+		return e.Cost
+	}
+	standard := price("standard", "codex")
+	if got := price("flex", "codex"); math.Abs(got-standard/2) > 1e-12 {
+		t.Fatalf("recorded flex: %v, standard %v", got, standard)
+	}
+	c.SetSpeed("flex")
+	for _, speed := range []string{"", "standard", "fast"} {
+		if got := price(speed, "codex"); math.Abs(got-standard/2) > 1e-12 {
+			t.Errorf("forced flex over %q: %v, standard %v", speed, got, standard)
+		}
+	}
+	if got := price("", "claude"); got != standard {
+		t.Fatalf("Codex speed changed Claude pricing: %v", got)
+	}
+}
+func TestCodexSpeedDetectionFollowsSelectedProfile(t *testing.T) {
+	for _, tc := range []struct{ config, want string }{
+		{`service_tier = "fast"`, "fast"},
+		{`service_tier = 'priority' # use higher tier`, "fast"},
+		{`service_tier = "flex"`, "flex"},
+		{`service_tier_override = "fast"`, "standard"},
+		{`service_tier = "breakfast"`, "standard"},
+		// Inactive profiles do not affect pricing.
+		{`service_tier = "standard"
+[profiles.flex]
+service_tier = "flex"`, "standard"},
+		{`[profiles.fast]
+service_tier = "priority"`, "standard"},
+		{`profile = "work"
+[profiles.work]
+model = "gpt-5.4"
+[profiles.other]
+service_tier = "priority"`, "standard"},
+		// The selected profile overrides the top-level tier.
+		{`service_tier = "standard"
+profile = "flex.#"
+[profiles."flex.#"]
+service_tier = "flex"
+[profiles.fast]
+service_tier = "priority"`, "flex"},
+		{`service_tier = "priority"
+profile = "standard"
+[profiles.standard]
+service_tier = "default"`, "standard"},
+		// A selected profile without a tier inherits the top-level tier.
+		{`service_tier = "flex"
+profile = "work"
+[profiles.work]
+model = "gpt-6.1-sol"
+[profiles.fast]
+service_tier = "priority"`, "flex"},
+		{`service_tier = "standard"
+instructions = '''
+service_tier = "priority"
+'''`, "standard"},
+		{`service_tier = "fast`, "standard"},
+	} {
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tc.config), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := DetectCodexSpeed([]string{home}); got != tc.want {
+			t.Errorf("%q: got %q, want %q", tc.config, got, tc.want)
+		}
+	}
+}
+func TestCodexSpeedDetectionPrefersFastThenFlexAcrossRoots(t *testing.T) {
+	roots := map[string]string{}
+	for _, tier := range []string{"standard", "flex", "priority"} {
+		roots[tier] = t.TempDir()
+		if err := os.WriteFile(filepath.Join(roots[tier], "config.toml"), []byte(`service_tier = "`+tier+`"`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		roots []string
+		want  string
+	}{
+		{[]string{roots["standard"], roots["flex"]}, "flex"},
+		{[]string{roots["flex"], roots["standard"]}, "flex"},
+		{[]string{roots["flex"], roots["priority"]}, "fast"},
+		{[]string{roots["priority"], roots["flex"]}, "fast"},
+	} {
+		if got := DetectCodexSpeed(tc.roots); got != tc.want {
+			t.Errorf("%v: got %q, want %q", tc.roots, got, tc.want)
+		}
+	}
+}

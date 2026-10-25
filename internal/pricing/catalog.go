@@ -39,53 +39,70 @@ func contains(list []string, v string) bool {
 	return false
 }
 
-type fastOverrides struct {
+type speedOverrides struct {
 	Exact  map[string]float64 `json:"exact"`
 	Prefix map[string]float64 `json:"normalized_prefix"`
 }
 
-// fastSnapshotOverrides decodes the embedded overrides once; fastMultiplier
-// runs for every LiteLLM and models.dev model on each online refresh.
-var fastSnapshotOverrides = sync.OnceValue(func() fastOverrides {
-	var f fastOverrides
-	if err := json.Unmarshal(fastSnapshot, &f); err != nil {
+// The embedded overrides are decoded once; their multipliers are looked up
+// for every LiteLLM and models.dev model on each online refresh.
+var fastSnapshotOverrides = sync.OnceValue(func() speedOverrides { return decodeSpeedOverrides(fastSnapshot) })
+var flexSnapshotOverrides = sync.OnceValue(func() speedOverrides { return decodeSpeedOverrides(flexSnapshot) })
+
+func decodeSpeedOverrides(data []byte) speedOverrides {
+	var o speedOverrides
+	if err := json.Unmarshal(data, &o); err != nil {
 		panic(err)
 	}
-	return f
-})
+	return o
+}
 
-// fastMultiplier tries the whole id, then each '/' or ':' part and the
-// dotted provider suffixes of it (anthropic.claude-opus-4-7 also tries
-// claude-opus-4-7) with any release date removed; a normalized prefix
-// matches its last occurrence in the part, at a '-' or the end.
-func fastMultiplier(name string) float64 {
-	f := fastSnapshotOverrides()
-	if mult, ok := f.Exact[canonical(name)]; ok {
+func fastMultiplier(name string) float64 { return fastSnapshotOverrides().multiplier(name) }
+func flexMultiplier(name string) float64 { return flexSnapshotOverrides().multiplier(name) }
+
+// multiplier returns the service-tier multiplier for a model, or 1. It tries
+// the whole id and the variant a default family alias points to, then each
+// '/' or ':' part and the dotted provider suffixes of it
+// (global.openai.gpt-5.5 also tries gpt-5.5) with any release date removed; a
+// normalized prefix matches its last occurrence in the part, at a '-' or the
+// end.
+func (o speedOverrides) multiplier(name string) float64 {
+	if mult, ok := o.Exact[name]; ok {
 		return mult
 	}
-	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == ':' }) {
-		candidates := []string{part}
-		for i := range len(part) {
-			if part[i] == '.' {
-				candidates = append(candidates, part[i+1:])
+	if mult, ok := o.Exact[canonical(name)]; ok {
+		return mult
+	}
+	for part := range strings.FieldsFuncSeq(name, func(r rune) bool { return r == '/' || r == ':' }) {
+		// Keep decimal model versions intact while trying dotted provider suffixes.
+		for {
+			if mult, ok := o.match(part); ok {
+				return mult
 			}
-		}
-		for _, c := range candidates {
-			base := stripDateSuffix(c)
-			for _, key := range []string{c, base, canonical(base)} {
-				if mult, ok := f.Exact[key]; ok {
-					return mult
-				}
+			dot := strings.IndexByte(part, '.')
+			if dot < 0 {
+				break
 			}
-			n := normalize(c)
-			for prefix, mult := range f.Prefix {
-				if i := strings.LastIndex(n, prefix); i >= 0 && (i+len(prefix) == len(n) || n[i+len(prefix)] == '-') {
-					return mult
-				}
-			}
+			part = part[dot+1:]
 		}
 	}
 	return 1
+}
+
+func (o speedOverrides) match(part string) (float64, bool) {
+	base := stripDateSuffix(part)
+	for _, key := range [...]string{part, base, canonical(base)} {
+		if mult, ok := o.Exact[key]; ok {
+			return mult, true
+		}
+	}
+	n := normalize(part)
+	for prefix, mult := range o.Prefix {
+		if i := strings.LastIndex(n, prefix); i >= 0 && (i+len(prefix) == len(n) || n[i+len(prefix)] == '-') {
+			return mult, true
+		}
+	}
+	return 0, false
 }
 
 // rawFields is json.Unmarshal into map[string]json.RawMessage without the
@@ -134,11 +151,18 @@ func litePricing(data []byte) map[string]ModelPricing {
 		p.cacheReadExplicit = fields["cache_read_input_token_cost"] != nil
 		p.cacheCreateExplicit = fields["cache_creation_input_token_cost"] != nil
 		p.FastMultiplier = fastMultiplier(name)
+		p.FlexMultiplier = flexMultiplier(name)
 		var provider struct {
 			Fast *float64 `json:"fast"`
+			Flex *float64 `json:"flex"`
 		}
-		if json.Unmarshal(fields["provider_specific_entry"], &provider) == nil && provider.Fast != nil {
-			p.FastMultiplier = *provider.Fast
+		if json.Unmarshal(fields["provider_specific_entry"], &provider) == nil {
+			if provider.Fast != nil {
+				p.FastMultiplier = *provider.Fast
+			}
+			if provider.Flex != nil {
+				p.FlexMultiplier = *provider.Flex
+			}
 		}
 		p.WebSearchCostPerRequest = AnthropicWebSearchCostPerRequest
 		out[name] = p
@@ -159,7 +183,7 @@ func primaryPricing(fallback map[string]ModelPricing) map[string]ModelPricing {
 		force := name == "gpt-5.1-codex" || name == "gpt-5.2-codex" || name == "gpt-5.2"
 		if !exists || force {
 			// Rates only: the snapshot's context limit still stands.
-			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), cacheReadExplicit: true, cacheCreateExplicit: true, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest, MaxInputTokens: p.MaxInputTokens}
+			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), FlexMultiplier: flexMultiplier(name), cacheReadExplicit: true, cacheCreateExplicit: true, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest, MaxInputTokens: p.MaxInputTokens}
 			if name == "claude-sonnet-4" {
 				i, o, c, r := 6e-6, 22.5e-6, 7.5e-6, .6e-6
 				p.InputAbove = &i

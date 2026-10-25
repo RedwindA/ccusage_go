@@ -54,7 +54,7 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 	p.IntVar(&f.last, "last", 0, "Include the most recent N calendar periods")
 	p.StringVarP(&f.order, "order", "o", "", "Sort order: asc or desc")
 	p.StringVarP(&f.mode, "mode", "m", "auto", "Cost mode: auto, calculate, display")
-	p.StringVar(&f.speed, "speed", "auto", "Codex pricing tier: auto, standard, fast")
+	p.StringVar(&f.speed, "speed", "auto", "Codex pricing tier: auto, standard, flex, fast")
 	p.StringVarP(&f.startOfWeek, "start-of-week", "w", "monday", "First weekday for weekly reports")
 	p.BoolVarP(&f.breakdown, "breakdown", "b", false, "Include model breakdown rows")
 	p.BoolVar(&f.noCost, "no-cost", false, "Remove cost fields and columns")
@@ -100,7 +100,7 @@ func registerReportFlags(cmd *cobra.Command, f *reportFlags, kind string) {
 	completeValues(cmd, "format", "table", "json", "csv")
 	completeValues(cmd, "order", "asc", "desc")
 	completeValues(cmd, "mode", "auto", "calculate", "display")
-	completeValues(cmd, "speed", "auto", "standard", "fast")
+	completeValues(cmd, "speed", "auto", "standard", "flex", "fast")
 	completeValues(cmd, "start-of-week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 	completeList(cmd, "sections", "daily", "weekly", "monthly", "session")
 	completeDir(cmd, "data-path", "pi-path", "openclaw-path", "open-claw-path")
@@ -197,7 +197,7 @@ func runReport(cmd *cobra.Command, kind, agent string, f *reportFlags) error {
 	if f.debugSamples < 0 {
 		return fmt.Errorf("--debug-samples must be nonnegative")
 	}
-	if f.speed != "auto" && f.speed != "standard" && f.speed != "fast" {
+	if f.speed != "auto" && f.speed != "standard" && f.speed != "flex" && f.speed != "fast" {
 		return fmt.Errorf("invalid --speed %q", f.speed)
 	}
 	if f.json || f.jq != "" {

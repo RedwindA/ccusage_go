@@ -22,6 +22,9 @@ var snapshot []byte
 //go:embed fast-multiplier-overrides.json
 var fastSnapshot []byte
 
+//go:embed flex-multiplier-overrides.json
+var flexSnapshot []byte
+
 const AnthropicWebSearchCostPerRequest = 0.01
 const AnthropicWebFetchCostPerRequest = 0.0
 
@@ -37,6 +40,7 @@ type ModelPricing struct {
 	CacheReadAbove              *float64 `json:"cache_read_input_token_cost_above_200k_tokens,omitempty"`
 	LongContextThreshold        int      `json:"long_context_threshold,omitempty"`
 	FastMultiplier              float64  `json:"fast_multiplier,omitempty"`
+	FlexMultiplier              float64  `json:"flex_multiplier,omitempty"`
 	MaxInputTokens              int      `json:"max_input_tokens,omitempty"`
 	WebSearchCostPerRequest     float64  `json:"web_search_cost_per_request,omitempty"`
 	WebFetchCostPerRequest      float64  `json:"web_fetch_cost_per_request,omitempty"`
@@ -56,6 +60,7 @@ type Override struct {
 	CacheCreateAbove            *float64 `json:"cacheCreationInputTokenCostAbove200kTokens,omitempty"`
 	CacheReadAbove              *float64 `json:"cacheReadInputTokenCostAbove200kTokens,omitempty"`
 	FastMultiplier              *float64 `json:"fastMultiplier,omitempty"`
+	FlexMultiplier              *float64 `json:"flexMultiplier,omitempty"`
 	MaxInputTokens              *int     `json:"maxInputTokens,omitempty"`
 }
 type LiteLLMResponse map[string]ModelPricing
@@ -196,6 +201,9 @@ func (s *Service) pricing(ctx context.Context, model string, at time.Time, looku
 	if p.FastMultiplier == 0 {
 		p.FastMultiplier = 1
 	}
+	if p.FlexMultiplier == 0 {
+		p.FlexMultiplier = 1
+	}
 	identity := deepseekV4Identity(model)
 	if identity == "" {
 		identity = deepseekV4Identity(resolved)
@@ -287,6 +295,9 @@ func apply(p ModelPricing, o Override) ModelPricing {
 	}
 	if o.FastMultiplier != nil {
 		p.FastMultiplier = *o.FastMultiplier
+	}
+	if o.FlexMultiplier != nil {
+		p.FlexMultiplier = *o.FlexMultiplier
 	}
 	if o.MaxInputTokens != nil {
 		p.MaxInputTokens = *o.MaxInputTokens
@@ -728,7 +739,7 @@ func modelsPricing(payload []byte) map[string]ModelPricing {
 		return &p
 	}
 	for name, m := range data {
-		p := ModelPricing{InputCostPerToken: m.Cost.Input / 1e6, OutputCostPerToken: m.Cost.Output / 1e6, CacheCreationInputTokenCost: m.Cost.Input * 1.25 / 1e6, CacheReadInputTokenCost: m.Cost.Input * .1 / 1e6, FastMultiplier: fastMultiplier(name), MaxInputTokens: m.Limit.Context, ExactOnly: m.ExactOnly, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest}
+		p := ModelPricing{InputCostPerToken: m.Cost.Input / 1e6, OutputCostPerToken: m.Cost.Output / 1e6, CacheCreationInputTokenCost: m.Cost.Input * 1.25 / 1e6, CacheReadInputTokenCost: m.Cost.Input * .1 / 1e6, FastMultiplier: fastMultiplier(name), FlexMultiplier: flexMultiplier(name), MaxInputTokens: m.Limit.Context, ExactOnly: m.ExactOnly, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest}
 		if m.Cost.CacheRead != nil {
 			p.CacheReadInputTokenCost = *m.Cost.CacheRead / 1e6
 			p.cacheReadExplicit = true

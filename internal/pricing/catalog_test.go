@@ -134,3 +134,65 @@ func TestLiveModelsDevPricesBeforeTheEmbeddedSnapshot(t *testing.T) {
 		t.Errorf("context limit: %d %v, want 2000", limit, ok)
 	}
 }
+
+func TestLiteLLMServiceTierMultipliers(t *testing.T) {
+	p := litePricing([]byte(`{"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"provider_specific_entry":{"fast":2,"flex":0.5}},"gpt-flex-only":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"provider_specific_entry":{"fast":null,"flex":0.25}}}`))
+	if both := p["gpt-test"]; both.FastMultiplier != 2 || both.FlexMultiplier != .5 {
+		t.Errorf("gpt-test: %+v", both)
+	}
+	if flexOnly := p["gpt-flex-only"]; flexOnly.FastMultiplier != 1 || flexOnly.FlexMultiplier != .25 {
+		t.Errorf("gpt-flex-only: %+v", flexOnly)
+	}
+}
+func TestFlexMultiplierOnlyForSupportedOpenAIModelNames(t *testing.T) {
+	for model, want := range map[string]float64{
+		"gpt-6-astra-2026-09-24":               .5,
+		"gpt-6.1-sol-20260924":                 .5,
+		"openai/gpt-5.5":                       .5,
+		"openrouter/openai/gpt-5.4-2026-03-05": .5,
+		"azure/gpt-5.2":                        .5,
+		"openai/gpt-5-mini-2025-08-07":         .5,
+		"o3-2025-04-16":                        .5,
+		"openai/o4-mini-2025-04-16":            .5,
+		"gpt-5.6":                              .5,
+		"openai/gpt-reserve":                   .5,
+		"gpt-4.1":                              1,
+		"gpt-5-pro":                            1,
+		"gpt-5.2-pro":                          1,
+		"gpt-5.1-codex":                        1,
+		"gpt-5.2-codex":                        1,
+		"gpt-5.3-codex":                        1,
+		"gpt-5.4-mini-extra":                   1,
+		"gpt-6-astra-unsupported":              1,
+		"o3-mini":                              1,
+		"o3-pro":                               1,
+		"openai/o4-mini-deep-research":         1,
+		"gpt-unknown":                          1,
+	} {
+		p := litePricing([]byte(`{"` + model + `":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}`))
+		if got := p[model].FlexMultiplier; got != want {
+			t.Errorf("%s: flex %v, want %v", model, got, want)
+		}
+	}
+}
+func TestFlexMultiplierForQualifiedModelsDevModels(t *testing.T) {
+	p := modelsPricing([]byte(`{"openai/gpt-6-astra":{"cost":{"input":10,"output":50}},"openai.gpt-5.4":{"cost":{"input":10,"output":50}},"global.openai.gpt-6.1-sol":{"cost":{"input":10,"output":50}},"global.openai.gpt-5.4-mini-2026-03-17":{"cost":{"input":10,"output":50}},"openai.gpt-5.4-mini-extra":{"cost":{"input":10,"output":50}}}`))
+	for model, want := range map[string]float64{"openai/gpt-6-astra": .5, "openai.gpt-5.4": .5, "global.openai.gpt-6.1-sol": .5, "global.openai.gpt-5.4-mini-2026-03-17": .5, "openai.gpt-5.4-mini-extra": 1} {
+		if got := p[model].FlexMultiplier; got != want {
+			t.Errorf("%s: flex %v, want %v", model, got, want)
+		}
+	}
+}
+func TestEmbeddedPricingIncludesOpenAIFlexModels(t *testing.T) {
+	s := NewService()
+	s.SetOffline(true)
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-pro", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "o3", "o4-mini"} {
+		p, err := s.GetPricing(context.Background(), model, time.Time{})
+		if err != nil || p.FlexMultiplier != .5 {
+			t.Errorf("%s: %+v %v", model, p, err)
+		}
+	}
+	if p, _ := s.GetPricing(context.Background(), "claude-opus-4-6", time.Time{}); p.FlexMultiplier != 1 {
+		t.Errorf("claude-opus-4-6 flex: %v", p.FlexMultiplier)
+	}
+}

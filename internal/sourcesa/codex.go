@@ -310,6 +310,8 @@ func parseCodex(p string) (codexSession, error) {
 						speed = "standard"
 					case "priority", "fast":
 						speed = "fast"
+					case "flex":
+						speed = "flex"
 					}
 				}
 				continue
@@ -454,9 +456,11 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 			result = append(result, e)
 		}
 	}
-	// Copied sessions with different tier metadata retain the conservative
-	// explicit tier. Copies of a compaction request share its response ID,
+	// Copied sessions keep an explicit tier over an unclassified copy, and
+	// conflicting tiers resolve to Standard, then Fast, then Flex, whatever
+	// the file order. Copies of a compaction request share its response ID,
 	// and the first copy keeps its session, time and model.
+	tierRank := map[string]int{"flex": 1, "fast": 2, "standard": 3}
 	indexes := map[[2]string]int{}
 	var merged []types.UsageEntry
 	for _, e := range result {
@@ -465,8 +469,7 @@ func loadCodex(ctx context.Context, files []string, loc *time.Location) ([]types
 			key = [2]string{id, ""}
 		}
 		if i, ok := indexes[key]; ok {
-			old := merged[i].Speed
-			if old == "" || (old == "fast" && e.Speed == "standard") {
+			if tierRank[e.Speed] > tierRank[merged[i].Speed] {
 				merged[i].Speed = e.Speed
 			}
 			continue

@@ -31,6 +31,22 @@ func TestPrecedenceAndFieldMerge(t *testing.T) {
 		t.Fatal("Options mutated original config")
 	}
 }
+func TestPricingOverridesMergeSpeedMultipliers(t *testing.T) {
+	c, err := Load(fixture(t, `{"defaults":{"pricingOverrides":{"model-a":{"inputCostPerToken":3,"fastMultiplier":2,"flexMultiplier":0.75},"model-b":{"fastMultiplier":2,"flexMultiplier":0.75}}},"commands":{"daily":{"pricingOverrides":{"model-a":{"inputCostPerToken":2,"fastMultiplier":3,"flexMultiplier":0.5},"model-b":{"maxInputTokens":1000000},"new-model":{"inputCostPerToken":1,"flexMultiplier":0.5}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := c.PricingOverrides("daily", "codex")
+	for name, want := range map[string][2]float64{"model-a": {3, .5}, "model-b": {2, .75}} {
+		p := overrides[name]
+		if p.FastMultiplier == nil || *p.FastMultiplier != want[0] || p.FlexMultiplier == nil || *p.FlexMultiplier != want[1] {
+			t.Errorf("%s: %+v", name, p)
+		}
+	}
+	if p := overrides["new-model"]; p.FlexMultiplier == nil || *p.FlexMultiplier != .5 || p.InputCostPerToken == nil || *p.InputCostPerToken != 1 {
+		t.Errorf("new-model: %+v", p)
+	}
+}
 func TestValidation(t *testing.T) {
 	for _, s := range []string{`{"defaults":{"since":"2026-02-30"}}`, `{"defaults":{"mode":"bad"}}`, `{"defaults":{"pricingOverrides":{"x":{"inputCostPerToken":-1}}}}`, `{"pi":{"stores":[{"name":"codex","path":"/tmp"}]}}`, `{"pi":{"stores":[{"name":"custom","path":""}]}}`} {
 		if c, err := Load(fixture(t, s)); err == nil && c.Validate("daily", "") == nil {

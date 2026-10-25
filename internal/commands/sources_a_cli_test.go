@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"path/filepath"
 	"strings"
@@ -96,5 +97,42 @@ func TestNativeSourcesACLI(t *testing.T) {
 				t.Fatalf("session: %#v", sessions)
 			}
 		})
+	}
+}
+
+func TestCodexServiceTiersAcrossReports(t *testing.T) {
+	isolateSourceHomes(t)
+	cfg := filepath.Join(t.TempDir(), "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"pricingOverrides":{"test-model-1":{"inputCostPerToken":0.000001,"outputCostPerToken":0.000002,"fastMultiplier":2,"flexMultiplier":0.5},"deepseek-v4-flash":{"fastMultiplier":2,"flexMultiplier":0.5}}}}`)
+	// Costs for Auto with Standard, Flex and Fast fallbacks, then forced Flex.
+	for model, want := range map[string][4]float64{"test-model-1": {45e-6, 40e-6, 55e-6, 20e-6}, "deepseek-v4-flash": {9.9e-6, 8.8e-6, 12.1e-6, 4.4e-6}} {
+		dir := t.TempDir()
+		for i, tier := range []string{"default", "flex", "priority", "unknown"} {
+			at := fmt.Sprintf("2026-08-16T17:00:%02d.000Z", i+1)
+			sourceCLIWrite(t, filepath.Join(dir, "sessions", tier+".jsonl"), `{"timestamp":"`+at+`","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"`+tier+`"}}}
+{"timestamp":"`+at+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"`+model+`","last_token_usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10}}}}`)
+		}
+		// Only the unclassified rollout follows config.toml; --speed overrides every tier.
+		for _, tc := range []struct {
+			config, speed string
+			want          float64
+		}{
+			{"", "auto", want[0]},
+			{"profile = \"work\"\n[profiles.work]\nmodel = \"gpt-5.4\"\n[profiles.other]\nservice_tier = \"priority\"", "auto", want[0]},
+			{`service_tier = "flex"`, "auto", want[1]},
+			{`service_tier = "priority"`, "auto", want[2]},
+			{`service_tier = "priority"`, "flex", want[3]},
+		} {
+			sourceCLIWrite(t, filepath.Join(dir, "config.toml"), tc.config)
+			for _, kind := range []string{"daily", "weekly", "monthly", "session"} {
+				for _, threads := range [][]string{nil, {"--single-thread"}} {
+					args := append([]string{"codex", kind, "--json", "--offline", "--data-path", dir, "--config", cfg, "--timezone", "UTC", "--speed", tc.speed}, threads...)
+					totals := sourceCLIJSON(t, args...)["totals"].(map[string]any)
+					if got, _ := totals["costUSD"].(float64); totals["totalTokens"] != 40.0 || math.Abs(got-tc.want) > 1e-12 {
+						t.Errorf("%s %q %v: %#v, want cost %v", model, tc.config, args[1:], totals, tc.want)
+					}
+				}
+			}
+		}
 	}
 }

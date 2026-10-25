@@ -25,6 +25,7 @@ func TestFlagValueCompletion(t *testing.T) {
 		{[]string{"--sections", "daily,"}, []string{"daily,weekly", "daily,monthly", "daily,session"}},
 		{[]string{"claude", "statusline", "--cost-source", ""}, []string{"auto", "ccusage", "cc", "both"}},
 		{[]string{"blocks", "--token-limit", ""}, []string{"max"}},
+		{[]string{"codex", "daily", "--speed", ""}, []string{"auto", "standard", "flex", "fast"}},
 	} {
 		out, err := executeReport(append([]string{"__complete"}, tc.args...)...)
 		if err != nil {
