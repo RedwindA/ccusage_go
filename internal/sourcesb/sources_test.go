@@ -308,3 +308,16 @@ func TestAntigravitySkipsZeroByteDatabases(t *testing.T) {
 		t.Fatal("malformed database next to an empty one must fail")
 	}
 }
+func TestAntigravityDefaultRootsNeedConversationsDirectory(t *testing.T) {
+	home := t.TempDir()
+	for _, root := range []string{".gemini/antigravity-cli", ".gemini/antigravity"} {
+		database(t, filepath.Join(home, root, "conversation_summaries.db"), `CREATE TABLE summaries(id INTEGER PRIMARY KEY);`)
+	}
+	for _, root := range []string{".gemini/antigravity-cli", ".gemini/antigravity-ide", ".gemini/antigravity-backup", ".gemini/antigravity-acp", ".config/antigravity"} {
+		antigravityDB(t, filepath.Join(home, root, "conversations/s.db"), "gemini-3-pro", 0, root)
+	}
+	entries := mustLoad(t, "antigravity", DefaultPathsForHome("antigravity", home)...)
+	if len(entries) != 5 {
+		t.Fatalf("%+v", entries)
+	}
+}
