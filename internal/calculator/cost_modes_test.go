@@ -41,6 +41,37 @@ func TestLongContextAndFast(t *testing.T) {
 		t.Fatalf("fast: %v / %v", a.Cost, b.Cost)
 	}
 }
+
+// Upstream applies the Fast multiplier only to usage that records Fast
+// speed; a model id ending in -fast, like Copilot's claude-opus-4.6-fast or
+// a models.dev -fast entry, is priced as written. Expected costs are
+// upstream ccusage's.
+func TestFastSuffixedModelsArePricedAsWritten(t *testing.T) {
+	c := modernCalculator()
+	for _, tc := range []struct {
+		agent, model, speed string
+		cost                float64
+	}{
+		{"claude", "claude-opus-4-8", "", 1.31375},
+		{"claude", "claude-opus-4-8", "fast", 2.6275},
+		{"claude", "claude-opus-4-8-fast", "", 2.6275},
+		{"claude", "claude-opus-4-6-fast", "", 1.31375},
+		{"claude", "anthropic/claude-opus-5-fast", "", 1.31375},
+		{"claude", "gpt-5.5-fast", "", 2.60375},
+		{"claude", "openai/gpt-5.5-fast", "", 2.60375},
+	} {
+		e := types.UsageEntry{Agent: tc.agent, Model: tc.model, Speed: tc.speed, InputTokens: 250000, OutputTokens: 1000, CacheCreationInputTokens: 3000, CacheReadInputTokens: 40000}
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-tc.cost) > 1e-9 {
+			t.Errorf("%s %s speed %q: %v, want %v", tc.agent, tc.model, tc.speed, e.Cost, tc.cost)
+		}
+	}
+	e := types.UsageEntry{Agent: "copilot", Model: "claude-opus-4.6-fast", InputTokens: 1000000}
+	_ = c.CalculateCost(&e)
+	if math.Abs(e.Cost-5) > 1e-9 {
+		t.Errorf("copilot claude-opus-4.6-fast: %v, want 5", e.Cost)
+	}
+}
 func TestCacheTTLAndRawModelOverride(t *testing.T) {
 	s := pricing.NewService()
 	s.SetOffline(true)

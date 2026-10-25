@@ -210,7 +210,7 @@ func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricin
 	switch {
 	case speed == "flex":
 		multiplier = p.FlexMultiplier
-	case speed == "fast" || speed == "priority" || (speed != "standard" && strings.HasSuffix(entry.Model, "-fast")):
+	case speed == "fast" || speed == "priority":
 		multiplier = p.FastMultiplier
 	}
 	outputTokens := entry.OutputTokens
