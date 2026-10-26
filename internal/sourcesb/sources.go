@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/RedwindA/ccusage_go/internal/dirwalk"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"io/fs"
 	"os"
@@ -119,7 +120,7 @@ func LoadUntil(ctx context.Context, name string, paths []string, loc *time.Locat
 		if name == "opencode" && info.IsDir() {
 			selectedDB = openCodeDB(root)
 		}
-		err = filepath.WalkDir(root, func(p string, d fs.DirEntry, e error) error {
+		err = dirwalk.Walk(root, func(p string, d fs.DirEntry, e error) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
