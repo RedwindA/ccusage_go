@@ -20,10 +20,11 @@ func main() {
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(200)
 	}
-	// Like upstream, a TZ holding a POSIX rule such as CST-8 sets the system
-	// timezone, where Go would group reports by UTC days.
-	if loc, ok := posixLocation(os.Getenv("TZ")); ok {
-		time.Local = loc
+	// Like upstream, TZ sets the system timezone on every platform.
+	if tz, ok := os.LookupEnv("TZ"); ok {
+		if loc, ok := tzLocation(tz); ok {
+			time.Local = loc
+		}
 	}
 	// An update on Windows leaves the old binary beside the new one, since it
 	// was still running; delete it now that it has exited.

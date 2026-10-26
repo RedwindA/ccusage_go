@@ -15,12 +15,12 @@ var zoneDirs = []string{"/usr/share/zoneinfo", "/usr/share/lib/zoneinfo", "/etc/
 
 //go:generate go run gen_zone_names.go $GOROOT/lib/time/zoneinfo.zip
 
-// loadTimezone resolves a --timezone or configured timezone as ccusage
+// LoadTimezone resolves a --timezone, configured timezone or TZ as ccusage
 // does: "local" is the system timezone, and an IANA name matches the zone
 // database's in any case and takes its spelling. Windows has no zone
 // directory, and jiff bundles its database there, so a name also matches
 // one of zoneNames.
-func loadTimezone(name string) (*time.Location, error) {
+func LoadTimezone(name string) (*time.Location, error) {
 	if name == "local" {
 		return time.Local, nil
 	}

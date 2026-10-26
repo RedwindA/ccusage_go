@@ -19,28 +19,54 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// Like upstream, whose jiff reads a POSIX TZ rule as the system timezone,
-// TZ=CST-8 groups usage by days eight hours ahead of UTC.
-func TestPOSIXTimezoneGroupsReports(t *testing.T) {
+// reportDate returns the day claude daily, run as the binary runs with the
+// environment variable TZ set to tz, groups a usage line at the time at.
+func reportDate(t *testing.T, tz, at string) string {
+	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "projects/p"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	line := `{"timestamp":"2026-07-15T20:00:00.000Z","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}`
+	line := `{"timestamp":"` + at + `","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}`
 	if err := os.WriteFile(filepath.Join(root, "projects/p/s.jsonl"), []byte(line+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "claude", "daily", "--data-path", root, "--offline", "--json")
 	home := t.TempDir()
-	cmd.Env = append(os.Environ(), "CCUSAGE_RUN_MAIN=1", "TZ=CST-8", "CLAUDE_CONFIG_DIR="+root, "HOME="+home, "USERPROFILE="+home)
+	cmd.Env = append(os.Environ(), "CCUSAGE_RUN_MAIN=1", "TZ="+tz, "CLAUDE_CONFIG_DIR="+root, "HOME="+home, "USERPROFILE="+home)
 	cmd.Dir = home
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var report struct{ Daily []struct{ Date string } }
-	if err := json.Unmarshal(out, &report); err != nil || len(report.Daily) != 1 || report.Daily[0].Date != "2026-07-16" {
-		t.Fatalf("TZ=CST-8: %v %s", err, out)
+	if err := json.Unmarshal(out, &report); err != nil || len(report.Daily) != 1 {
+		t.Fatalf("TZ=%s: %v %s", tz, err, out)
+	}
+	return report.Daily[0].Date
+}
+
+// Like upstream, whose jiff reads a POSIX TZ rule as the system timezone,
+// TZ=CST-8 groups usage by days eight hours ahead of UTC.
+func TestPOSIXTimezoneGroupsReports(t *testing.T) {
+	if got := reportDate(t, "CST-8", "2026-07-15T20:00:00.000Z"); got != "2026-07-16" {
+		t.Fatalf("TZ=CST-8: %s", got)
+	}
+}
+
+// Like upstream, whose jiff reads TZ on every platform, a zone name in any
+// case, after an optional ':', sets the system timezone, and an empty TZ is
+// UTC. Go reads TZ only on Unix, and a name only in its own case.
+func TestTimezoneNamesGroupReports(t *testing.T) {
+	for _, tc := range []struct{ tz, at, want string }{
+		{"asia/kolkata", "2026-07-15T20:00:00.000Z", "2026-07-16"},
+		{":ASIA/KOLKATA", "2026-07-15T20:00:00.000Z", "2026-07-16"},
+		{"America/New_York", "2026-07-15T02:00:00.000Z", "2026-07-14"},
+		{"", "2026-07-15T20:00:00.000Z", "2026-07-15"},
+	} {
+		if got := reportDate(t, tc.tz, tc.at); got != tc.want {
+			t.Errorf("TZ=%s: %s, want %s", tc.tz, got, tc.want)
+		}
 	}
 }
 

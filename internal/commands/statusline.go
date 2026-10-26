@@ -129,7 +129,7 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags, agent string) error {
 	}
 	loc := time.Local
 	if f.timezone != "" {
-		loc, err = loadTimezone(f.timezone)
+		loc, err = LoadTimezone(f.timezone)
 		if err != nil {
 			return err
 		}

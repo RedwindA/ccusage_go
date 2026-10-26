@@ -5,7 +5,24 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/RedwindA/ccusage_go/internal/commands"
 )
+
+// tzLocation returns the timezone TZ sets as jiff, upstream's source of the
+// system timezone, reads it on every platform: empty is UTC, and a POSIX
+// rule or, after an optional ':', a zone name in any case is that zone. Go
+// reads TZ only on Unix, and a zone name only in its own case.
+func tzLocation(tz string) (*time.Location, bool) {
+	if tz == "" {
+		return time.UTC, true
+	}
+	if loc, ok := posixLocation(tz); ok {
+		return loc, true
+	}
+	loc, err := commands.LoadTimezone(strings.TrimPrefix(tz, ":"))
+	return loc, err == nil
+}
 
 // posixTZ matches the POSIX TZ rules that jiff, upstream's source of the
 // system timezone, reads TZ as: a standard name and offset, and a daylight

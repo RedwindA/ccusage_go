@@ -45,7 +45,7 @@ func newSourceScope(cmd *cobra.Command, kind string, f *reportFlags, start time.
 	s := &sourceScope{f: f, loc: time.Local, project: f.project}
 	var err error
 	if f.timezone != "" {
-		if s.loc, err = loadTimezone(f.timezone); err != nil {
+		if s.loc, err = LoadTimezone(f.timezone); err != nil {
 			return nil, fmt.Errorf("invalid timezone: %w", err)
 		}
 	}

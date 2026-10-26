@@ -491,11 +491,11 @@ func TestTimezoneNamesInAnyCaseWithoutZoneDirectories(t *testing.T) {
 	zoneDirs = nil
 	t.Cleanup(func() { zoneDirs = dirs })
 	for name, want := range map[string]string{"utc": "UTC", "asia/tokyo": "Asia/Tokyo", "ETC/gmt+5": "Etc/GMT+5", "America/New_York": "America/New_York"} {
-		if loc, err := loadTimezone(name); err != nil || loc.String() != want {
+		if loc, err := LoadTimezone(name); err != nil || loc.String() != want {
 			t.Errorf("%s: %v, %v, want %s", name, loc, err, want)
 		}
 	}
-	if _, err := loadTimezone("mars/olympus_mons"); err == nil {
+	if _, err := LoadTimezone("mars/olympus_mons"); err == nil {
 		t.Error("an unknown zone resolved")
 	}
 }
