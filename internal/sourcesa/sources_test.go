@@ -224,6 +224,17 @@ func TestOpenClawArchivesTrackModelsAndZeroCost(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+// Upstream reads a null message timestamp as none, so the record's dates the
+// message instead of the file's modification time.
+func TestOpenClawNullMessageTimestampFallsBackToTheRecords(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "agents/main/sessions/s.jsonl", `{"type":"message","timestamp":"2026-09-17T13:43:59.762Z","message":{"role":"assistant","timestamp":null,"model":"claude-sonnet-4-5","usage":{"input":1000,"output":100}}}`)
+	entries := loadTest(t, "openclaw", root)
+	if len(entries) != 1 || !entries[0].Timestamp.Equal(time.Date(2026, 9, 17, 13, 43, 59, 762e6, time.UTC)) {
+		t.Fatal(entries)
+	}
+}
 func TestOpenClawSQLiteWinsMigrationAndResetsModelState(t *testing.T) {
 	root := t.TempDir()
 	p := fixture(t, root, "agents/main/agent/openclaw-agent.sqlite", "")

@@ -31,8 +31,9 @@ func (state *clawState) parse(p, session string, r object, fallback time.Time) *
 	if typ != "message" || str(m["role"]) != "assistant" || u == nil {
 		return nil
 	}
-	v, ok := m["timestamp"]
-	if !ok {
+	// Like upstream, a null message timestamp is none.
+	v := m["timestamp"]
+	if v == nil {
 		v = r["timestamp"]
 	}
 	t := timestamp(v)
