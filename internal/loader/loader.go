@@ -444,11 +444,6 @@ func (l *Loader) parseFile(path string) parsedFile {
 			continue
 		}
 
-		// Skip synthetic model entries (matches TypeScript behavior)
-		if entry.Model == "<synthetic>" {
-			continue
-		}
-
 		candidates := []types.UsageEntry{entry}
 		for _, advisor := range advisors {
 			if child, err := l.parseEntry(advisor, projectPath); err == nil {

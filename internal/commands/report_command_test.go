@@ -361,6 +361,42 @@ func TestClaudeAdvisorCostIgnoresTheParentsCacheWrites(t *testing.T) {
 	}
 }
 
+// Like upstream, a Claude <synthetic> entry, such as an older API error line,
+// is usage without a model: it counts toward totals, blocks and a session's
+// last activity but lists no model. Current API error lines hold a null speed,
+// which upstream rejects.
+func TestClaudeSyntheticEntriesCountWithoutAModel(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), strings.Join([]string{
+		`{"timestamp":"2025-01-10T10:00:00.000Z","sessionId":"s","requestId":"r1","costUSD":0.001,"message":{"id":"m1","model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":40}}}`,
+		`{"timestamp":"2025-01-11T11:00:00.000Z","sessionId":"s","requestId":"r2","costUSD":0.02,"message":{"id":"m2","model":"<synthetic>","usage":{"input_tokens":7,"output_tokens":3}}}`,
+		`{"timestamp":"2025-01-12T11:00:00.000Z","sessionId":"s","isApiErrorMessage":true,"message":{"id":"m3","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"speed":null}}}`,
+	}, "\n"))
+	report := func(args ...string) map[string]any {
+		return sourceCLIJSON(t, append(args, "--data-path", root, "--timezone", "UTC", "--offline", "--json")...)
+	}
+	daily := report("claude", "daily")
+	rows := daily["daily"].([]any)
+	if totals := daily["totals"].(map[string]any); len(rows) != 2 || totals["totalTokens"] != 150.0 || math.Abs(totals["totalCost"].(float64)-0.021) > 1e-12 {
+		t.Fatalf("claude daily: %v", daily)
+	}
+	if row := rows[1].(map[string]any); row["totalTokens"] != 10.0 || len(row["modelsUsed"].([]any)) != 0 || len(row["modelBreakdowns"].([]any)) != 0 {
+		t.Errorf("claude daily synthetic row: %v", row)
+	}
+	session := report("claude", "session")["sessions"].([]any)[0].(map[string]any)
+	if session["lastActivity"] != "2025-01-11T11:00:00.000Z" || !reflect.DeepEqual(session["modelsUsed"], []any{"claude-opus-4-6"}) {
+		t.Errorf("claude session: %v", session)
+	}
+	blocks := report("blocks")["blocks"].([]any)
+	if len(blocks) != 3 {
+		t.Fatalf("blocks: %v", blocks)
+	}
+	if block := blocks[2].(map[string]any); block["entries"] != 1.0 || len(block["models"].([]any)) != 0 || block["totalTokens"] != 10.0 {
+		t.Errorf("synthetic block: %v", block)
+	}
+}
+
 // Without --order, each section of a unified report lists its rows as the
 // standalone report does, as upstream's finish_rows: sessions by cost,
 // highest first, and periods oldest first.

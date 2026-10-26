@@ -427,6 +427,11 @@ func (a *accumulator) add(e types.UsageEntry) {
 		r.ProjectPath = e.ProjectPath
 		r.SessionName = e.SessionName
 	}
+	// Like upstream, a Claude <synthetic> entry, such as an API error, has
+	// no model: it counts toward the row but none of its models.
+	if e.Model == "<synthetic>" {
+		return
+	}
 	name := e.Model
 	if name == "" {
 		name = "unknown"
