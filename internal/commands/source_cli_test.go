@@ -200,7 +200,9 @@ func TestReportsSkipSourceFilesThatCannotBeRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { os.Chmod(path, 0700) })
-		if _, err := os.Open(path); err == nil {
+		// An open handle would keep Windows from removing the directory.
+		if f, err := os.Open(path); err == nil {
+			f.Close()
 			t.Skip("file permissions do not keep this user from reading, as for root or on Windows")
 		}
 	}
