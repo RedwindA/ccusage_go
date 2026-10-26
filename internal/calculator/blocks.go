@@ -16,9 +16,10 @@ const (
 	BlocksWarningThreshold = 0.8 // 80%
 )
 
-// floorToHour floors a timestamp to the beginning of the hour
+// floorToHour floors a timestamp to the beginning of its UTC hour, as
+// upstream floors epoch milliseconds, whatever offset the timestamp carries.
 func floorToHour(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
+	return t.Truncate(time.Hour)
 }
 
 // IdentifySessionBlocks groups entries into time-based blocks with gap detection

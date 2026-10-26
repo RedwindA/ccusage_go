@@ -112,3 +112,22 @@ func TestBlocksListModelsUnderTheirAliases(t *testing.T) {
 	require.Len(t, blocks, 1)
 	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6"}, blocks[0].Models)
 }
+
+// As upstream, a block starts on the UTC hour, so a timestamp written with a
+// half-hour offset does not move its block's boundaries by half an hour.
+func TestBlocksStartOnTheUTCHourWhateverTheOffset(t *testing.T) {
+	first, err := time.Parse(time.RFC3339, "2026-09-05T07:10:00+05:30")
+	require.NoError(t, err)
+	second, err := time.Parse(time.RFC3339, "2026-09-05T06:20:00Z")
+	require.NoError(t, err)
+	entries := []types.UsageEntry{
+		{Timestamp: first, InputTokens: 1000},
+		{Timestamp: second, InputTokens: 2000},
+	}
+	blocks := New(nil).IdentifySessionBlocks(entries, 5)
+	require.Len(t, blocks, 2)
+	assert.True(t, blocks[0].StartTime.Equal(time.Date(2026, 9, 5, 1, 0, 0, 0, time.UTC)), blocks[0].StartTime.String())
+	assert.Equal(t, 1000, blocks[0].TokenCounts.InputTokens)
+	assert.True(t, blocks[1].StartTime.Equal(time.Date(2026, 9, 5, 6, 0, 0, 0, time.UTC)), blocks[1].StartTime.String())
+	assert.Equal(t, 2000, blocks[1].TokenCounts.InputTokens)
+}
