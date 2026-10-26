@@ -193,11 +193,11 @@ func loadCopilot(file string) ([]types.UsageEntry, error) {
 		c := contexts[tr]
 		sess, _ := copilotSession(a)
 		sess = first(sess, s(c["session"]), tr, "unknown-session")
-		e := types.UsageEntry{SourceFile: file, Model: copilotModel(first(s(pick(a, "gen_ai.response.model", "gen_ai.request.model")), s(c["model"]), "unknown")), SessionID: sess, Timestamp: copilotTime(r, mtime(file)), InputTokens: n(a["gen_ai.usage.input_tokens"]), OutputTokens: n(a["gen_ai.usage.output_tokens"]), CacheReadInputTokens: n(a["gen_ai.usage.cache_read.input_tokens"]), CacheCreationInputTokens: n(pick(a, "gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens")), Raw: obj{"rank": rank, "trace": tr, "response": s(a["gen_ai.response.id"]), "request_count": 1, "reasoning_output_tokens": n(pick(a, "gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"))}}
+		e := types.UsageEntry{SourceFile: file, Model: copilotModel(first(s(pick(a, "gen_ai.response.model", "gen_ai.request.model")), s(c["model"]), "unknown")), SessionID: sess, Timestamp: copilotTime(r, mtime(file)), InputTokens: n(a["gen_ai.usage.input_tokens"]), OutputTokens: n(a["gen_ai.usage.output_tokens"]), CacheReadInputTokens: n(a["gen_ai.usage.cache_read.input_tokens"]), CacheCreationInputTokens: positive(a, "gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens"), Raw: obj{"rank": rank, "trace": tr, "response": s(a["gen_ai.response.id"]), "request_count": 1, "reasoning_output_tokens": positive(a, "gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens")}}
 		// Copilot counts cache reads and writes in the input tokens, as it does
 		// in session-state inputTokens.
 		e.InputTokens = max(0, e.InputTokens-e.CacheReadInputTokens-e.CacheCreationInputTokens)
-		finish(&e, n(pick(a, "gen_ai.usage.total_tokens", "gen_ai.usage.total.token_count")))
+		finish(&e, positive(a, "gen_ai.usage.total_tokens", "gen_ai.usage.total.token_count"))
 		if e.TotalTokens == 0 {
 			continue
 		}

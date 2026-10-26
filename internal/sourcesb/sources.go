@@ -310,6 +310,18 @@ func pick(m obj, keys ...string) interface{} {
 	}
 	return nil
 }
+
+// positive returns the first of the counts keys name that is positive, as
+// upstream reads Codebuff and Copilot token aliases: a zero alias does not
+// hide the next.
+func positive(m obj, keys ...string) int {
+	for _, k := range keys {
+		if v := n(m[k]); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
 func first(values ...string) string {
 	for _, v := range values {
 		if v != "" {

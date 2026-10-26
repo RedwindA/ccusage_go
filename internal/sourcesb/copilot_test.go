@@ -89,6 +89,21 @@ func TestCopilotSplitsOtelInputLikeSessionState(t *testing.T) {
 	}
 }
 
+// Like upstream's attr_number_first, a cache write, reasoning or total alias
+// counts only when positive, so a zero one falls through to the next.
+func TestCopilotAliasesFallThroughToAPositiveOne(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "copilot.jsonl")
+	write(t, file, `{"type":"span","traceId":"t1","spanId":"s1","name":"chat claude-sonnet-4-6","endTime":[1791117000,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"claude-sonnet-4-6","gen_ai.conversation.id":"sess-1","gen_ai.usage.input_tokens":20000,"gen_ai.usage.output_tokens":100,"gen_ai.usage.cache_read.input_tokens":12000,"gen_ai.usage.cache_write.input_tokens":0,"gen_ai.usage.cache_creation.input_tokens":7990,"gen_ai.usage.reasoning.output_tokens":0,"gen_ai.usage.reasoning_tokens":40,"gen_ai.usage.total_tokens":0,"gen_ai.usage.total.token_count":25000}}`)
+	entries, err := loadCopilot(file)
+	if err != nil || len(entries) != 1 {
+		t.Fatal(entries, err)
+	}
+	e := entries[0]
+	if e.InputTokens != 10 || e.CacheCreationInputTokens != 7990 || e.Raw["reasoning_output_tokens"] != 40 || e.TotalTokens != 25000 {
+		t.Fatalf("%+v", e)
+	}
+}
+
 // copilotShutdown is a shutdown whose test-model breakdown reports requests
 // requests of 100 input tokens each.
 func copilotShutdown(id, timestamp string, requests int) string {

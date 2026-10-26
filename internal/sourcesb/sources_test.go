@@ -218,6 +218,18 @@ func TestCodebuffMetadataAndRunState(t *testing.T) {
 		t.Fatalf("%+v", e)
 	}
 }
+
+// Like upstream's pick_u64, a usage alias counts only when positive, so a
+// zero alias falls through to the next; and like its message_timestamp, a
+// timestamp that does not parse falls through to createdAt.
+func TestCodebuffAliasesFallThroughToAUsableOne(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "projects/project/chats/2026-10-05T12-30-00.000Z/chat-messages.json"), `[{"id":"one","variant":"ai","timestamp":"bad","createdAt":"2026-09-01T12:30:00.000Z","metadata":{"model":"claude-sonnet-4-6","usage":{"inputTokens":0,"input_tokens":1000,"outputTokens":200,"totalTokens":0,"total":1500}}}]`)
+	e := mustLoad(t, "codebuff", dir)
+	if len(e) != 1 || e[0].InputTokens != 1000 || e[0].OutputTokens != 200 || e[0].TotalTokens != 1500 || e[0].DateKey != "2026-09-01" {
+		t.Fatalf("%+v", e)
+	}
+}
 func TestCopilotReconciliation(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "session-state/s/events.jsonl"), `{"type":"session.shutdown","id":"a","timestamp":"2026-05-05T10:00:00Z","data":{"modelMetrics":{"gpt-5-1m":{"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":30,"cacheWriteTokens":10,"reasoningTokens":5},"requests":{"count":2}}}}}

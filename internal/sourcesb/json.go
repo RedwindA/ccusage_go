@@ -73,9 +73,9 @@ func loadKimi(file string) ([]types.UsageEntry, error) {
 	return out, nil
 }
 func codeUsage(u obj) types.UsageEntry {
-	e := types.UsageEntry{Model: s(u["model"]), Credits: max(0, f(u["credits"])), InputTokens: n(pick(u, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens")), OutputTokens: n(pick(u, "outputTokens", "output_tokens", "completionTokens", "completion_tokens")), CacheCreationInputTokens: n(pick(u, "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens", "cachedTokensCreated", "cached_tokens_created")), CacheReadInputTokens: n(pick(u, "cacheReadInputTokens", "cache_read_input_tokens"))}
+	e := types.UsageEntry{Model: s(u["model"]), Credits: max(0, f(u["credits"])), InputTokens: positive(u, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens"), OutputTokens: positive(u, "outputTokens", "output_tokens", "completionTokens", "completion_tokens"), CacheCreationInputTokens: positive(u, "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens", "cachedTokensCreated", "cached_tokens_created"), CacheReadInputTokens: positive(u, "cacheReadInputTokens", "cache_read_input_tokens")}
 	e.CacheReadInputTokens = max(e.CacheReadInputTokens, n(object(u["promptTokensDetails"])["cachedTokens"]), n(object(u["prompt_tokens_details"])["cached_tokens"]))
-	finish(&e, n(pick(u, "totalTokens", "total_tokens", "total")))
+	finish(&e, positive(u, "totalTokens", "total_tokens", "total"))
 	return e
 }
 func mergeCode(e *types.UsageEntry, x types.UsageEntry) {
@@ -146,7 +146,12 @@ func loadCodebuff(file string) ([]types.UsageEntry, error) {
 			continue
 		}
 		e.Model = first(e.Model, "codebuff-unknown")
-		e.Timestamp = ts(pick(r, "timestamp", "createdAt"))
+		// Like upstream, each timestamp that does not parse falls through to
+		// the next.
+		e.Timestamp = ts(r["timestamp"])
+		if e.Timestamp.IsZero() {
+			e.Timestamp = ts(r["createdAt"])
+		}
 		if e.Timestamp.IsZero() {
 			e.Timestamp = ts(md["timestamp"])
 		}
