@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/commands"
 	"github.com/RedwindA/ccusage_go/internal/selfupdate"
@@ -18,6 +19,11 @@ func main() {
 	// half as many collections is faster. An explicit GOGC still wins.
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(200)
+	}
+	// Like upstream, a TZ holding a POSIX rule such as CST-8 sets the system
+	// timezone, where Go would group reports by UTC days.
+	if loc, ok := posixLocation(os.Getenv("TZ")); ok {
+		time.Local = loc
 	}
 	// An update on Windows leaves the old binary beside the new one, since it
 	// was still running; delete it now that it has exited.
