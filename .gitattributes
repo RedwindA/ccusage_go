@@ -1,2 +1,5 @@
 # Terminal snapshots compare exact bytes, including LF line endings.
 internal/reports/testdata/*.txt text eol=lf
+# go mod tidy -diff compares LF output, so keep module files LF on Windows checkouts.
+go.mod text eol=lf
+go.sum text eol=lf
