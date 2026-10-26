@@ -120,6 +120,24 @@ func TestModelsPreserveAgentLabelsFastAndAliases(t *testing.T) {
 	}
 }
 
+// Like upstream's Claude loader, Fast usage is <model>-fast even when the
+// model's name already ends in -fast, so it stays apart from the model's
+// standard usage.
+func TestFastUsageOfAFastNamedModelIsItsOwnModel(t *testing.T) {
+	entries := []types.UsageEntry{reportEntry("claude", "s", "p", "2026-01-01T00:00:00Z", 10), reportEntry("claude", "s", "p", "2026-01-01T00:00:00Z", 20)}
+	for i := range entries {
+		entries[i].Model = "x-ai/grok-4.1-fast"
+	}
+	entries[1].Speed = "fast"
+	got := map[string]int{}
+	for _, r := range Aggregate(entries, Options{Kind: "model", Location: time.UTC}) {
+		got[r.Period] = r.Input
+	}
+	if want := map[string]int{"x-ai/grok-4.1-fast": 10, "x-ai/grok-4.1-fast-fast": 20}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("model rows %v, want %v", got, want)
+	}
+}
+
 // Upstream groups --instances rows by the project's directory under
 // projects/, whichever Claude root holds it; system users stay apart.
 func TestInstancesMergeAClaudeProjectAcrossRoots(t *testing.T) {

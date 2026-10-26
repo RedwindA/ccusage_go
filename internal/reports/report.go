@@ -248,7 +248,9 @@ func displayModel(e types.UsageEntry) string {
 	if model == "" {
 		model = "unknown"
 	}
-	if e.Agent == "claude" && e.Speed == "fast" && !strings.HasSuffix(model, "-fast") {
+	// Claude's Fast usage is its own <model>-fast model, as upstream's loader
+	// names it, even when model already ends in -fast.
+	if e.Agent == "claude" && e.Speed == "fast" {
 		model += "-fast"
 	}
 	format, _ := e.Raw["source_format"].(string)

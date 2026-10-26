@@ -85,14 +85,16 @@ func TestProjectBlockUsageRoundsLikeUpstream(t *testing.T) {
 }
 
 // As in the other reports and upstream, Claude's Fast usage is listed as its
-// own -fast model.
+// own -fast model, even for a model whose name already ends in -fast.
 func TestBlocksListFastClaudeUsageAsItsOwnModel(t *testing.T) {
 	ts := time.Now().Add(-time.Hour)
 	entries := []types.UsageEntry{
 		{Agent: "claude", Timestamp: ts, Model: "claude-opus-4-6", Speed: "fast", InputTokens: 10},
 		{Agent: "claude", Timestamp: ts.Add(5 * time.Minute), Model: "claude-opus-4-6", InputTokens: 10},
+		{Agent: "claude", Timestamp: ts.Add(6 * time.Minute), Model: "x-ai/grok-4.1-fast", Speed: "fast", InputTokens: 10},
+		{Agent: "claude", Timestamp: ts.Add(7 * time.Minute), Model: "x-ai/grok-4.1-fast", InputTokens: 10},
 	}
 	blocks := New(nil).IdentifySessionBlocks(entries, 5)
 	require.Len(t, blocks, 1)
-	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6"}, blocks[0].Models)
+	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6", "x-ai/grok-4.1-fast-fast", "x-ai/grok-4.1-fast"}, blocks[0].Models)
 }
