@@ -81,6 +81,24 @@ func TestDroidSettingsAndSidecar(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+// Like upstream's normalize_droid_provider, a providerLock is matched in any
+// case and with hyphens for underscores when it names the model.
+func TestDroidProviderLockNamesTheModelWithHyphens(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	for session, provider := range map[string]string{"a": "vertex-ai", "b": "X-AI", "c": "google-ai"} {
+		fixture(t, root, "sessions/w/"+session+".settings.json", `{"cwd":"/w","providerLock":"`+provider+`","providerLockTimestamp":"2026-09-10T10:01:00.000Z","tokenUsage":{"inputTokens":1000,"outputTokens":100}}`)
+	}
+	models := map[string]string{}
+	for _, e := range loadTest(t, "droid", filepath.Join(root, "sessions")) {
+		models[e.SessionID] = e.Model
+	}
+	if want := map[string]string{"a": "gemini-unknown", "b": "grok-unknown", "c": "gemini-unknown"}; !reflect.DeepEqual(models, want) {
+		t.Fatalf("models %v, want %v", models, want)
+	}
+}
 func TestGeminiDistinguishesDirectAndStatsCacheSemantics(t *testing.T) {
 	root := t.TempDir()
 	fixture(t, root, "chat.json", `{"sessionId":"a","messages":[{"type":"gemini","id":"m1","model":"gemini-2.5-pro","timestamp":"2026-01-02T00:00:00Z","tokens":{"input":100,"output":20,"cached":40,"thoughts":10,"total":130}},{"type":"gemini","id":"m2","model":"gemini-2.5-pro","timestamp":"2026-01-02T00:01:00Z","tokens":{"input":100,"output":20,"cached":40,"thoughts":10,"total":170}}]}`)

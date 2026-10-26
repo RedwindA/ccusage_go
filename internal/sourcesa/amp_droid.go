@@ -145,7 +145,8 @@ func loadDroid(p string) ([]types.UsageEntry, error) {
 		return nil, nil
 	}
 	model := str(m["model"])
-	provider := strings.ToLower(str(m["providerLock"]))
+	// Like upstream's normalize_droid_provider, vertex-ai is vertex_ai.
+	provider := strings.ReplaceAll(strings.ToLower(str(m["providerLock"])), "-", "_")
 	cwd, _ := m["cwd"].(string)
 	home, _ := os.UserHomeDir()
 	custom, _ := readObject(filepath.Join(home, ".factory/settings.json"))
