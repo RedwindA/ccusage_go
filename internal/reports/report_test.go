@@ -3,6 +3,7 @@ package reports
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,5 +138,40 @@ func TestModelBreakdownsTrackStoredCost(t *testing.T) {
 		if b, _ := json.Marshal(FocusedJSONRows(rows, o)); strings.Contains(string(b), "storedCost") {
 			t.Errorf("--no-cost kept storedCost: %s", b)
 		}
+	}
+}
+
+func TestFormatDay(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Kolkata")
+	for _, at := range []time.Time{
+		time.Date(2026, 3, 9, 23, 59, 59, 0, time.UTC), time.Date(2026, 12, 31, 20, 0, 0, 0, time.UTC).In(loc),
+		time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(999, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(-1, 6, 15, 0, 0, 0, 0, time.UTC), {},
+	} {
+		if got, want := formatDay(at), at.Format("2006-01-02"); got != want {
+			t.Errorf("formatDay(%v) = %q, want %q", at, got, want)
+		}
+	}
+}
+
+func BenchmarkAggregate(b *testing.B) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	agents, models := []string{"claude", "codex", "pi"}, []string{"claude-opus-4-5", "claude-sonnet-4-5", "gpt-5.4"}
+	entries := make([]types.UsageEntry, 30000)
+	for i := range entries {
+		entries[i] = types.UsageEntry{
+			Agent: agents[i%3], Model: models[i%len(models)], Timestamp: start.Add(time.Duration(i) * time.Minute),
+			SessionID: "session-" + strconv.Itoa(i/100), ProjectPath: "/home/user/.claude/projects/p" + strconv.Itoa(i%7),
+			InputTokens: 3, OutputTokens: 400, CacheReadInputTokens: 40000, TotalTokens: 40403, Cost: 0.05,
+			Raw: map[string]any{"message_id": "msg_" + strconv.Itoa(i), "request_id": "req_" + strconv.Itoa(i), "service_tier": "standard"},
+		}
+	}
+	for _, kind := range []string{"daily", "session"} {
+		b.Run(kind, func(b *testing.B) {
+			o := Options{Kind: kind, Location: time.UTC, Order: "asc"}
+			for b.Loop() {
+				Aggregate(entries, o)
+			}
+		})
 	}
 }

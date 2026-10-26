@@ -135,29 +135,108 @@ func LastSince(kind string, n int, now time.Time, start time.Weekday) (string, e
 	return now.Format("2006-01-02"), nil
 }
 
+// item is an entry as reports filter and group it. agent is the entry's,
+// or the report's for an entry without one; the other fields hold what the
+// reports read from its Raw, read once, since Raw maps are scattered over
+// the heap and each pass over them misses the cache again.
+type item struct {
+	e                                     *types.UsageEntry
+	agent, user, format                   string
+	aggregate, advisor, fallback, missing bool
+	requests                              int
+	first, last                           time.Time
+	window                                Window
+	// day is the entry's date in its window's location, and session its
+	// sessionGroupKey, once built.
+	day, session string
+}
+
+func newItems(entries []types.UsageEntry, o Options) []item {
+	items := make([]item, len(entries))
+	for i := range entries {
+		e, it := &entries[i], &items[i]
+		it.e, it.agent = e, e.Agent
+		if it.agent == "" && o.Agent != "" {
+			it.agent = o.Agent
+		}
+		it.window = o.window(it.agent)
+		it.requests = 1
+		// One walk over a small Raw beats a lookup of each field.
+		var first, last any
+		for key, v := range e.Raw {
+			switch key {
+			case "system_user":
+				it.user, _ = v.(string)
+			case "source_format":
+				it.format, _ = v.(string)
+			case "session_aggregate":
+				it.aggregate, _ = v.(bool)
+			case "advisor":
+				it.advisor = v != nil
+			case "is_fallback":
+				it.fallback, _ = v.(bool)
+			case "missing_pricing":
+				it.missing, _ = v.(bool)
+			case "request_count":
+				switch count := v.(type) {
+				case int:
+					it.requests = count
+				case float64:
+					it.requests = int(count)
+				}
+			case "first_activity":
+				first = v
+			case "last_activity":
+				last = v
+			}
+		}
+		it.first, it.last = activityBounds(e.Timestamp, first, last)
+	}
+	return items
+}
+
+// date returns the item's date in its window's location.
+func (it *item) date() string {
+	if it.day == "" {
+		it.day = formatDay(it.e.Timestamp.In(it.window.Location))
+	}
+	return it.day
+}
+
+// formatDay is t.Format("2006-01-02") without parsing the layout.
+func formatDay(t time.Time) string {
+	y, m, d := t.Date()
+	if y < 0 || y > 9999 {
+		return t.Format("2006-01-02")
+	}
+	b := [10]byte{byte('0' + y/1000), byte('0' + y/100%10), byte('0' + y/10%10), byte('0' + y%10), '-', byte('0' + m/10), byte('0' + m%10), '-', byte('0' + d/10), byte('0' + d%10)}
+	return string(b[:])
+}
+
 // Native sources disagree on the scope of a session date bound. Qwen and
 // unified Claude select complete sessions by latest activity; the other
 // adapters (including focused Claude) select usage events before grouping.
-func wholeSessionDate(e types.UsageEntry, o Options) bool {
-	return o.Kind == "session" && (e.Agent == "qwen" || e.Agent == "claude" && o.Agent == "")
+func wholeSessionDate(agent string, o Options) bool {
+	return o.Kind == "session" && (agent == "qwen" || agent == "claude" && o.Agent == "")
 }
-func sessionGroupKey(e types.UsageEntry, o Options) string {
-	user, _ := e.Raw["system_user"].(string)
-	key := e.SessionID + "\x00" + user + "\x00" + e.Agent
-	if e.Agent == "claude" || e.Agent == "pi" && o.Agent == "" {
-		key += "\x00" + projectKey(e)
+func sessionGroupKey(it *item, o Options) string {
+	if it.session == "" {
+		it.session = it.e.SessionID + "\x00" + it.user + "\x00" + it.agent
+		if it.agent == "claude" || it.agent == "pi" && o.Agent == "" {
+			it.session += "\x00" + projectKey(it.agent, it.e.ProjectPath)
+		}
 	}
-	return key
+	return it.session
 }
 
 // projectKey names the project an entry is grouped under. Upstream names a
 // Claude project by its directory under projects/, so one found under two
 // Claude roots, such as one config directory per account, is one project.
-func projectKey(e types.UsageEntry) string {
-	if e.Agent == "claude" {
-		return filepath.Base(e.ProjectPath)
+func projectKey(agent, projectPath string) string {
+	if agent == "claude" {
+		return filepath.Base(projectPath)
 	}
-	return e.ProjectPath
+	return projectPath
 }
 func activityTime(v any) time.Time {
 	switch value := v.(type) {
@@ -173,62 +252,75 @@ func activityTime(v any) time.Time {
 	}
 	return time.Time{}
 }
-func activityBounds(e types.UsageEntry) (time.Time, time.Time) {
-	first, last := e.Timestamp, e.Timestamp
-	if t := activityTime(e.Raw["first_activity"]); !t.IsZero() && t.Before(first) {
+
+// activityBounds widens an entry's timestamp to the first and last activity
+// its Raw records.
+func activityBounds(at time.Time, firstActivity, lastActivity any) (time.Time, time.Time) {
+	first, last := at, at
+	if t := activityTime(firstActivity); !t.IsZero() && t.Before(first) {
 		first = t
 	}
-	if t := activityTime(e.Raw["last_activity"]); !t.IsZero() && t.After(last) {
+	if t := activityTime(lastActivity); !t.IsZero() && t.After(last) {
 		last = t
 	}
 	return first, last
 }
 func Filter(entries []types.UsageEntry, o Options) []types.UsageEntry {
-	candidates := make([]types.UsageEntry, 0, len(entries))
+	items := filter(newItems(entries, o), o)
+	out := make([]types.UsageEntry, len(items))
+	for i := range items {
+		out[i] = *items[i].e
+		out[i].Agent = items[i].agent
+	}
+	return out
+}
+
+// filter keeps the items Filter keeps, reusing items.
+func filter(items []item, o Options) []item {
+	candidates := items[:0]
 	latest := map[string]time.Time{}
-	for _, e := range entries {
-		if e.Agent == "" && o.Agent != "" {
-			e.Agent = o.Agent
-		}
-		if o.Agent != "" && o.Agent != "all" && e.Agent != o.Agent {
+	for i := range items {
+		it := &items[i]
+		if o.Agent != "" && o.Agent != "all" && it.agent != o.Agent {
 			continue
 		}
-		w := o.window(e.Agent)
-		if aggregate, _ := e.Raw["session_aggregate"].(bool); aggregate && (o.Kind != "session" || w.Since != "" || w.Until != "") {
+		w := it.window
+		if it.aggregate && (o.Kind != "session" || w.Since != "" || w.Until != "") {
 			continue
 		}
-		if w.Project != "" && e.ProjectPath != w.Project && filepath.Base(e.ProjectPath) != w.Project {
+		if w.Project != "" && it.e.ProjectPath != w.Project && filepath.Base(it.e.ProjectPath) != w.Project {
 			continue
 		}
-		if o.SessionID != "" && e.SessionID != o.SessionID && e.RecordedSessionID != o.SessionID {
+		if o.SessionID != "" && it.e.SessionID != o.SessionID && it.e.RecordedSessionID != o.SessionID {
 			continue
 		}
-		if o.SessionName != "" && e.SessionName != o.SessionName {
+		if o.SessionName != "" && it.e.SessionName != o.SessionName {
 			continue
 		}
-		candidates = append(candidates, e)
-		if wholeSessionDate(e, o) {
-			_, last := activityBounds(e)
-			key := sessionGroupKey(e, o)
-			if last.After(latest[key]) {
-				latest[key] = last
+		candidates = append(candidates, *it)
+		if wholeSessionDate(it.agent, o) {
+			key := sessionGroupKey(it, o)
+			if it.last.After(latest[key]) {
+				latest[key] = it.last
 			}
 		}
 	}
-	out := make([]types.UsageEntry, 0, len(candidates))
-	for _, e := range candidates {
-		w := o.window(e.Agent)
-		if wholeSessionDate(e, o) {
-			if wholeSessionInWindow(latest[sessionGroupKey(e, o)], w) {
-				out = append(out, e)
+	out := candidates[:0]
+	for i := range candidates {
+		it := &candidates[i]
+		w := it.window
+		if wholeSessionDate(it.agent, o) {
+			if wholeSessionInWindow(latest[sessionGroupKey(it, o)], w) {
+				out = append(out, *it)
 			}
 			continue
 		}
-		date := e.Timestamp.In(w.Location).Format("2006-01-02")
-		if w.Since != "" && date < w.Since || w.Until != "" && date > w.Until {
-			continue
+		if w.Since != "" || w.Until != "" {
+			if date := it.date(); w.Since != "" && date < w.Since || w.Until != "" && date > w.Until {
+				continue
+			}
 		}
-		out = append(out, e)
+		out = append(out, *it)
 	}
 	return out
 }
@@ -243,51 +335,61 @@ func wholeSessionInWindow(last time.Time, w Window) bool {
 	return (w.Since == "" || date >= w.Since) && (w.Until == "" || date < w.Until)
 }
 
-func displayModel(e types.UsageEntry) string {
-	model := e.Model
+// modelNames memoizes pricing.ResolveModelName over a report's entries,
+// which name few models.
+type modelNames map[string]string
+
+func (names modelNames) displayModel(it *item) string {
+	model := it.e.Model
 	if model == "" {
 		model = "unknown"
 	}
 	// Claude's Fast usage is its own <model>-fast model, as upstream's loader
 	// names it, even when model already ends in -fast. A <synthetic> entry
 	// has no model to name, and an advisor call keeps its model as written.
-	if e.Agent == "claude" && e.Speed == "fast" && model != "<synthetic>" && e.Raw["advisor"] == nil {
+	if it.agent == "claude" && it.e.Speed == "fast" && model != "<synthetic>" && !it.advisor {
 		model += "-fast"
 	}
-	format, _ := e.Raw["source_format"].(string)
-	if (e.Agent == "pi" || format == "pi" || e.Agent == "openclaw") && !strings.HasPrefix(model, "[") {
-		model = "[" + e.Agent + "] " + model
+	if (it.agent == "pi" || it.format == "pi" || it.agent == "openclaw") && !strings.HasPrefix(model, "[") {
+		model = "[" + it.agent + "] " + model
 	}
 	// The Codex loader already names a model by its alias.
-	if e.Agent == "codex" {
+	if it.agent == "codex" {
 		return model
 	}
-	return pricing.ResolveModelName(model)
+	name, ok := names[model]
+	if !ok {
+		name = pricing.ResolveModelName(model)
+		names[model] = name
+	}
+	return name
 }
 
 func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 	groups := map[string]*accumulator{}
-	entries = Filter(entries, o)
+	items := filter(newItems(entries, o), o)
 	if o.Agent == "" && (o.Kind == "daily" || o.Kind == "weekly" || o.Kind == "monthly") {
-		entries = dropEmptyAgentDays(entries, o)
+		items = dropEmptyAgentDays(items, o)
 	}
-	for _, e := range entries {
-		e.Model = displayModel(e)
-		t := e.Timestamp.In(o.window(e.Agent).Location)
+	names := modelNames{}
+	for i := range items {
+		it := &items[i]
+		e := it.e
+		model := names.displayModel(it)
 		var period string
 		switch o.Kind {
 		case "monthly":
-			period = t.Format("2006-01")
+			period = e.Timestamp.In(it.window.Location).Format("2006-01")
 		case "weekly":
-			period = WeekStart(t, o.WeekStart).Format("2006-01-02")
+			period = WeekStart(e.Timestamp.In(it.window.Location), o.WeekStart).Format("2006-01-02")
 		case "session":
 			period = e.SessionID
 		case "model":
-			period = e.Model
+			period = model
 			// A Claude <synthetic> entry, such as an API error, has no
 			// model: its usage, if any, is unknown.
 			if period == "<synthetic>" {
-				if entryTokens(e) == 0 && e.Cost == 0 {
+				if entryTokens(it) == 0 && e.Cost == 0 {
 					continue
 				}
 				period = "unknown"
@@ -298,21 +400,20 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 				period = "unknown"
 			}
 		default:
-			period = t.Format("2006-01-02")
+			period = it.date()
 		}
 		if period == "" {
 			period = "unknown"
 		}
-		user, _ := e.Raw["system_user"].(string)
-		key := period + "\x00" + user
+		key := period + "\x00" + it.user
 		project := ""
 		if o.Instances {
 			project = filepath.Base(e.ProjectPath)
-			key += "\x00" + projectKey(e)
+			key += "\x00" + projectKey(it.agent, e.ProjectPath)
 		}
 		// Sessions from different sources must remain independent.
 		if o.Kind == "session" {
-			key = sessionGroupKey(e, o)
+			key = sessionGroupKey(it, o)
 		}
 		a := groups[key]
 		if a == nil {
@@ -321,19 +422,19 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 				agent = "all"
 			}
 			if o.Kind == "session" {
-				agent = e.Agent
+				agent = it.agent
 			}
-			a = &accumulator{row: Row{Period: period, Agent: agent, User: user, Project: project}, models: map[string]*Model{}, agents: map[string]*accumulator{}}
+			a = &accumulator{row: Row{Period: period, Agent: agent, User: it.user, Project: project}, models: map[string]*Model{}, agents: map[string]*accumulator{}}
 			groups[key] = a
 		}
-		a.add(e)
+		a.add(it, model)
 		if o.Agent == "" && o.Kind != "session" {
-			sub := a.agents[e.Agent]
+			sub := a.agents[it.agent]
 			if sub == nil {
-				sub = &accumulator{row: Row{Period: period, Agent: e.Agent, User: user, Project: project}, models: map[string]*Model{}}
-				a.agents[e.Agent] = sub
+				sub = &accumulator{row: Row{Period: period, Agent: it.agent, User: it.user, Project: project}, models: map[string]*Model{}}
+				a.agents[it.agent] = sub
 			}
-			sub.add(e)
+			sub.add(it, model)
 		}
 	}
 	rows := make([]*Row, 0, len(groups))
@@ -379,25 +480,23 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 // and upstream drops an agent's day with neither tokens nor cost before
 // merging. A Copilot credit row that --mode calculate prices at $0 must not
 // list Copilot or its unknown model on a day another agent used.
-func dropEmptyAgentDays(entries []types.UsageEntry, o Options) []types.UsageEntry {
-	key := func(e types.UsageEntry) string {
-		user, _ := e.Raw["system_user"].(string)
-		k := e.Timestamp.In(o.window(e.Agent).Location).Format("2006-01-02") + "\x00" + user + "\x00" + e.Agent
-		if o.Instances {
-			k += "\x00" + projectKey(e)
-		}
-		return k
-	}
+func dropEmptyAgentDays(items []item, o Options) []item {
+	keys := make([]string, len(items))
 	used := map[string]bool{}
-	for _, e := range entries {
-		if entryTokens(e) != 0 || e.Cost != 0 {
-			used[key(e)] = true
+	for i := range items {
+		it := &items[i]
+		keys[i] = it.date() + "\x00" + it.user + "\x00" + it.agent
+		if o.Instances {
+			keys[i] += "\x00" + projectKey(it.agent, it.e.ProjectPath)
+		}
+		if entryTokens(it) != 0 || it.e.Cost != 0 {
+			used[keys[i]] = true
 		}
 	}
-	out := make([]types.UsageEntry, 0, len(entries))
-	for _, e := range entries {
-		if used[key(e)] {
-			out = append(out, e)
+	out := items[:0]
+	for i := range items {
+		if used[keys[i]] {
+			out = append(out, items[i])
 		}
 	}
 	return out
@@ -406,51 +505,46 @@ func dropEmptyAgentDays(entries []types.UsageEntry, o Options) []types.UsageEntr
 // entryTokens is an entry's total, the sum of its tokens when it records
 // none. Codex's is the total it records even when that is zero, as upstream
 // counts it.
-func entryTokens(e types.UsageEntry) int {
-	if e.TotalTokens != 0 || e.Agent == "codex" {
+func entryTokens(it *item) int {
+	e := it.e
+	if e.TotalTokens != 0 || it.agent == "codex" {
 		return e.TotalTokens
 	}
 	return e.InputTokens + e.OutputTokens + e.CacheCreationInputTokens + e.CacheReadInputTokens
 }
 
-func (a *accumulator) add(e types.UsageEntry) {
+// add counts it, named model, toward a.
+func (a *accumulator) add(it *item, model string) {
+	e := it.e
 	r := &a.row
 	r.Input += e.InputTokens
 	r.Output += e.OutputTokens
 	r.Reasoning += e.ReasoningTokens
 	r.CacheCreate += e.CacheCreationInputTokens
 	r.CacheRead += e.CacheReadInputTokens
-	total := entryTokens(e)
+	total := entryTokens(it)
 	r.Total += total
 	r.Cost += e.Cost
 	r.APICost += e.APICost
 	r.CacheCreateCost += e.CacheCreateCost
 	r.CacheReadCost += e.CacheReadCost
 	r.Credits += e.Credits
-	requests := 1
-	switch count := e.Raw["request_count"].(type) {
-	case int:
-		requests = count
-	case float64:
-		requests = int(count)
+	r.Requests += it.requests
+	if a.first.IsZero() || it.first.Before(a.first) {
+		a.first = it.first
 	}
-	r.Requests += requests
-	first, last := activityBounds(e)
-	if a.first.IsZero() || first.Before(a.first) {
-		a.first = first
-	}
-	if a.last.IsZero() || last.After(a.last) {
-		a.last = last
+	if a.last.IsZero() || it.last.After(a.last) {
+		a.last = it.last
 		r.Workspace = e.Workspace
 		r.ProjectPath = e.ProjectPath
 		r.SessionName = e.SessionName
 	}
 	// Like upstream, a Claude <synthetic> entry, such as an API error, has
 	// no model: it counts toward the row but none of its models.
-	if e.Model == "<synthetic>" {
+	if model == "<synthetic>" {
 		return
 	}
-	name := e.Model
+	name := model
 	if name == "" {
 		name = "unknown"
 	}
@@ -462,7 +556,7 @@ func (a *accumulator) add(e types.UsageEntry) {
 	m.Input += e.InputTokens
 	m.Output += e.OutputTokens
 	m.Reasoning += e.ReasoningTokens
-	if fallback, _ := e.Raw["is_fallback"].(bool); fallback {
+	if it.fallback {
 		m.IsFallback = true
 	}
 	m.CacheCreate += e.CacheCreationInputTokens
@@ -472,7 +566,7 @@ func (a *accumulator) add(e types.UsageEntry) {
 	m.APICost += e.APICost
 	m.CacheCreateCost += e.CacheCreateCost
 	m.CacheReadCost += e.CacheReadCost
-	if missing, _ := e.Raw["missing_pricing"].(bool); missing {
+	if it.missing {
 		m.MissingPricing = true
 	}
 	if e.UsesStoredCost {
