@@ -283,6 +283,9 @@ func advisorRecords(raw map[string]interface{}) []map[string]interface{} {
 		child["message"] = msg
 		delete(child, "cost")
 		delete(child, "costUSD")
+		// Upstream prices a Fast advisor call as Fast but names it by the
+		// advisor's model as written, with no -fast suffix.
+		child["advisor"] = true
 		msg["model"] = model
 		msg["usage"] = iteration
 		if id, ok := message["id"].(string); ok {

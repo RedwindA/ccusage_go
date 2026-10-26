@@ -361,6 +361,40 @@ func TestClaudeAdvisorCostIgnoresTheParentsCacheWrites(t *testing.T) {
 	}
 }
 
+// Like upstream, an advisor call is listed under the advisor's model as
+// written: a Fast one is priced as Fast but is no <model>-fast model.
+func TestClaudeFastAdvisorCallsListTheAdvisorModel(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), `{"timestamp":"2026-09-10T14:00:00.000Z","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-opus-4-6","usage":{"input_tokens":500,"output_tokens":100,"iterations":[{"type":"advisor_message","model":"claude-opus-4-6","input_tokens":100,"output_tokens":50,"speed":"fast"}]}}}`)
+	// $5 and $25 per million input and output tokens, six times that for
+	// the advisor's Fast call.
+	want := 500*5e-6 + 100*25e-6 + 6*(100*5e-6+50*25e-6)
+	for _, report := range [][]string{{"claude", "daily"}, {"claude", "session"}, {"daily"}, {"blocks"}} {
+		payload := sourceCLIJSON(t, append(report, "--data-path", root, "--timezone", "UTC", "--offline", "--json", "--breakdown")...)
+		var row map[string]any
+		var models any
+		switch report[len(report)-1] {
+		case "blocks":
+			row = payload["blocks"].([]any)[0].(map[string]any)
+			models = row["models"]
+		case "session":
+			row = payload["sessions"].([]any)[0].(map[string]any)
+			models = row["modelsUsed"]
+		default:
+			row = payload["daily"].([]any)[0].(map[string]any)
+			models = row["modelsUsed"]
+		}
+		cost, _ := row["costUSD"].(float64)
+		if c, ok := row["totalCost"].(float64); ok {
+			cost = c
+		}
+		if !reflect.DeepEqual(models, []any{"claude-opus-4-6"}) || math.Abs(cost-want) > 1e-9 {
+			t.Errorf("%v: models %v, cost %v, want [claude-opus-4-6] and %v", report, models, cost, want)
+		}
+	}
+}
+
 // Like upstream, a Claude <synthetic> entry, such as an older API error line,
 // is usage without a model: it counts toward totals, blocks and a session's
 // last activity but lists no model. Current API error lines hold a null speed,

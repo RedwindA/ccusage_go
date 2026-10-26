@@ -144,9 +144,10 @@ func (c *Calculator) createBlock(startTime time.Time, entries []types.UsageEntry
 		cacheCreateCostUSD += entry.CacheCreateCost
 		cacheReadCostUSD += entry.CacheReadCost
 		if model := entry.Model; model != "" && model != "<synthetic>" {
-			// As in the other reports, Claude's Fast usage is its own model,
-			// and models are listed under their aliases.
-			if entry.Agent == "claude" && entry.Speed == "fast" {
+			// As in the other reports, Claude's Fast usage other than an
+			// advisor call is its own model, and models are listed under
+			// their aliases.
+			if entry.Agent == "claude" && entry.Speed == "fast" && entry.Raw["advisor"] == nil {
 				model += "-fast"
 			}
 			modelMap[pricing.ResolveModelName(model)] = true

@@ -31,8 +31,9 @@ const maxLineBytes = 64 * 1024 * 1024
 
 // rawRetainKeys lists raw JSONL fields that must survive Raw cleanup.
 // cache_* token fields are now first-class on UsageEntry, so they no longer
-// need preserving in Raw. usage_limit_reset_time is still consumed by blocks.
-var rawRetainKeys = []string{"usage_limit_reset_time", "cache_creation", "service_tier", "message_id", "request_id"}
+// need preserving in Raw. usage_limit_reset_time is still consumed by blocks,
+// and advisor by the reports and blocks that name a model.
+var rawRetainKeys = []string{"usage_limit_reset_time", "cache_creation", "service_tier", "message_id", "request_id", "advisor"}
 
 // clearRawExceptKeys drops every Raw entry except the named keys, keeping
 // memory bounded after first-class fields are populated.
