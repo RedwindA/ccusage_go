@@ -238,6 +238,27 @@ func TestSymlinkedClaudeTranscriptsAreSkipped(t *testing.T) {
 	}
 }
 
+// With --project, upstream walks that project's directory as the root, so a
+// project directory that is a symlink is read; without, it is a symlink below
+// projects/ and is not.
+func TestClaudeProjectFilterReadsASymlinkedProjectDirectory(t *testing.T) {
+	root := pruneFixture(t)
+	store := filepath.Join(t.TempDir(), "app")
+	pruneWrite(t, store, "session-a.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-a", "msg-1", "req-1", 1))
+	pruneWrite(t, root, "projects/other/session-b.jsonl", pruneUsageLine("2026-09-11T12:00:00.000Z", "session-b", "msg-2", "req-2", 2))
+	if err := os.Symlink(store, filepath.Join(root, "projects/-home-u-app")); err != nil {
+		t.Skip(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		cost float64
+	}{{[]string{"claude", "daily", "--project=-home-u-app"}, 1}, {[]string{"claude", "daily"}, 2}} {
+		if totals := sourceCLIJSON(t, append(tc.args, "--json", "--offline", "--timezone", "UTC")...)["totals"].(map[string]any); totals["totalCost"] != tc.cost {
+			t.Errorf("%v: totals %v, want cost %v", tc.args, totals, tc.cost)
+		}
+	}
+}
+
 // Upstream names a Claude project by its directory under projects/, so a
 // project or a session found under two Claude roots, such as one config
 // directory per account, is one row.

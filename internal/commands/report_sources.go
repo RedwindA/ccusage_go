@@ -378,7 +378,7 @@ func pathsOverlap(a, b string) bool {
 // detected reports whether any file, read or skipped, holds usage, as an
 // unbounded load would see it.
 func loadClaude(ctx context.Context, paths []string, loc *time.Location, since time.Time, project string, dailyCost func(*types.UsageEntry) float64, debug, singleThread bool, parsed *loader.ParsedFiles) (entries []types.UsageEntry, detected bool, err error) {
-	files, err := claudeFiles(ctx, paths)
+	files, err := claudeFiles(ctx, paths, project)
 	if err != nil {
 		return nil, false, err
 	}
@@ -422,14 +422,19 @@ func loadClaude(ctx context.Context, paths []string, loc *time.Location, since t
 }
 
 // claudeFiles lists the JSONL transcripts under paths, sorted, reading each
-// root's projects directory when it has one.
-func claudeFiles(ctx context.Context, paths []string) ([]string, error) {
+// root's projects directory when it has one. A project that is a directory
+// name reads only that directory, as upstream walks it as the root: a
+// project directory that is a symlink is then followed.
+func claudeFiles(ctx context.Context, paths []string, project string) ([]string, error) {
 	files := []string{}
 	seen := map[string]bool{}
 	for _, root := range paths {
 		root = filepath.Clean(root)
 		if info, err := os.Stat(filepath.Join(root, "projects")); err == nil && info.IsDir() {
 			root = filepath.Join(root, "projects")
+		}
+		if project != "" && project != "." && project != ".." && !strings.ContainsAny(project, `/\`) {
+			root = filepath.Join(root, project)
 		}
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			continue
