@@ -1174,7 +1174,8 @@ func typed[T any](v interface{}) bool {
 
 // parseTimestamp parses a transcript timestamp as upstream's
 // parse_ts_timestamp does: RFC 3339 with no fraction of a second or exactly
-// three digits of one, and a Z or ±hh:mm offset. It returns the zero time
+// three digits of one, and a Z or ±hh:mm offset of at most 23:59, where
+// time.Parse also takes 24 hours or 60 minutes. It returns the zero time
 // for any other form.
 func parseTimestamp(ts string) time.Time {
 	var layout string
@@ -1184,6 +1185,9 @@ func parseTimestamp(ts string) time.Time {
 	case (len(ts) == 24 || len(ts) == 29) && ts[19] == '.':
 		layout = "2006-01-02T15:04:05.000Z07:00"
 	default:
+		return time.Time{}
+	}
+	if n := len(ts); ts[n-1] != 'Z' && (ts[n-5:n-3] > "23" || ts[n-2:] > "59") {
 		return time.Time{}
 	}
 	t, _ := time.Parse(layout, ts)
