@@ -5,6 +5,7 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -444,5 +445,41 @@ func TestClaudeProjectFilterDedupesWithinTheProject(t *testing.T) {
 		if totals := p["totals"].(map[string]any); totals["inputTokens"] != 1050.0 || totals["outputTokens"] != 105.0 {
 			t.Errorf("%v: totals %v, want 1050 input and 105 output tokens", args, totals)
 		}
+	}
+}
+
+// As in ccusage, a timezone of "local", on the command line or in a config,
+// is the system timezone, and an IANA name matches the zone database's in
+// any case (Go's Windows build has no database to list the names of).
+func TestTimezoneLocalAndNamesInAnyCase(t *testing.T) {
+	isolateSourceHomes(t)
+	local := time.Local
+	time.Local = time.FixedZone("system", 9*3600)
+	t.Cleanup(func() { time.Local = local })
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), `{"timestamp":"2026-09-15T20:00:00.000Z","sessionId":"s","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}`+"\n")
+	cfg := filepath.Join(t.TempDir(), "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"timezone":"local"}}`)
+	date := func(args ...string) any {
+		p := sourceCLIJSON(t, append([]string{"claude", "daily", "--data-path", root, "--offline", "--json"}, args...)...)
+		return p["daily"].([]any)[0].(map[string]any)["date"]
+	}
+	zones := map[string]string{"local": "2026-09-16", "UTC": "2026-09-15", "utc": "2026-09-15"}
+	if runtime.GOOS != "windows" {
+		zones["america/new_york"] = "2026-09-15"
+	}
+	for zone, want := range zones {
+		if got := date("--timezone", zone); got != want {
+			t.Errorf("--timezone %s: %v, want %s", zone, got, want)
+		}
+	}
+	if got := date("--config", cfg); got != "2026-09-16" {
+		t.Errorf("configured local timezone: %v", got)
+	}
+	if _, _, err := sourceCLIRun("blocks", "--data-path", root, "--offline", "--json", "--config", cfg); err != nil {
+		t.Errorf("blocks: %v", err)
+	}
+	if _, err := runStatuslineTest(t, `{"session_id":"s","model":{"display_name":"Model"}}`, "--no-cache", "--offline", "--timezone", "local"); err != nil {
+		t.Errorf("statusline: %v", err)
 	}
 }

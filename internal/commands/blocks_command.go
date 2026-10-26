@@ -65,7 +65,7 @@ func NewBlocksCommand() *cobra.Command {
 		}
 		loc := time.Local
 		if f.timezone != "" {
-			loc, err = time.LoadLocation(f.timezone)
+			loc, err = loadTimezone(f.timezone)
 			if err != nil {
 				return err
 			}

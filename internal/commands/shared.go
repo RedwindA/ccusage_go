@@ -3,9 +3,55 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
+
+// zoneDirs are where ccusage's jiff finds the zone database on Unix.
+var zoneDirs = []string{"/usr/share/zoneinfo", "/usr/share/lib/zoneinfo", "/etc/zoneinfo"}
+
+// loadTimezone resolves a --timezone or configured timezone as ccusage
+// does: "local" is the system timezone, and an IANA name matches the zone
+// database's in any case.
+func loadTimezone(name string) (*time.Location, error) {
+	if name == "local" {
+		return time.Local, nil
+	}
+	loc, err := time.LoadLocation(name)
+	for _, dir := range zoneDirs {
+		if err == nil {
+			break
+		}
+		if zone, ok := zoneName(dir, name); ok {
+			if zoneLoc, zoneErr := time.LoadLocation(zone); zoneErr == nil {
+				loc, err = zoneLoc, nil
+			}
+		}
+	}
+	return loc, err
+}
+
+// zoneName returns the path of the file under dir that name, a
+// slash-separated path, names in any case.
+func zoneName(dir, name string) (string, bool) {
+	var parts []string
+	for _, part := range strings.Split(name, "/") {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", false
+		}
+		i := slices.IndexFunc(entries, func(e os.DirEntry) bool { return strings.EqualFold(e.Name(), part) })
+		if i < 0 {
+			return "", false
+		}
+		parts = append(parts, entries[i].Name())
+		dir = filepath.Join(dir, entries[i].Name())
+	}
+	return strings.Join(parts, "/"), true
+}
 
 func getDefaultDataPath() string {
 	// Check environment variable first
