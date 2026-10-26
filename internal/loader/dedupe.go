@@ -89,12 +89,19 @@ func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEnt
 				if session == "" {
 					session = dedupeSession(old)
 				}
-				oldRequest, _ := old.Raw["request_id"].(string)
+				if session != eSession || !e.IsSidechain && !old.IsSidechain {
+					continue
+				}
 				// Requestless replays match across timestamps; replays with
 				// a new request ID need the parent's timestamp, except in
-				// the daily loader.
-				requestless := request == "" && oldRequest == ""
-				if session == eSession && (dailyCost != nil || requestless || e.Timestamp.Equal(old.Timestamp)) && (e.IsSidechain || old.IsSidechain) {
+				// the daily loader. A gateway that reuses one message ID
+				// makes this scan long, so the old request ID is read last.
+				match := dailyCost != nil || e.Timestamp.Equal(old.Timestamp)
+				if !match && request == "" {
+					oldRequest, _ := old.Raw["request_id"].(string)
+					match = oldRequest == ""
+				}
+				if match {
 					i, found = r.index, true
 					break
 				}
