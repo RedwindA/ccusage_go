@@ -19,7 +19,7 @@ import (
 var lineTopKeys = map[string]bool{
 	"agentName": true, "aiTitle": true, "block_type": true, "cache_creation_input_tokens": true,
 	"cache_read_input_tokens": true, "cost": true, "costUSD": true, "customTitle": true, "cwd": true,
-	"data": true, "id": true, "isMeta": true, "isSidechain": true, "message": true, "model": true,
+	"data": true, "id": true, "isApiErrorMessage": true, "isMeta": true, "isSidechain": true, "message": true, "model": true,
 	"project_path": true, "requestId": true, "sessionId": true, "timestamp": true, "type": true, "version": true,
 	// rawRetainKeys
 	"usage_limit_reset_time": true, "cache_creation": true, "service_tier": true, "message_id": true, "request_id": true,

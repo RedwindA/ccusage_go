@@ -235,6 +235,9 @@ func blocksJSON(blocks []types.SessionBlock, limit int) map[string]any {
 		if limit > 0 {
 			r["tokenLimit"] = limit
 		}
+		if b.UsageLimitResetTime != nil {
+			r["usageLimitResetTime"] = b.UsageLimitResetTime
+		}
 		rows = append(rows, r)
 		totalTokens += b.TokenCounts.GetTotal()
 		totalCost += b.CostUSD

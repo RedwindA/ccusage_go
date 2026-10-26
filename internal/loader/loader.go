@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -438,6 +439,11 @@ func (l *Loader) parseFile(path string) parsedFile {
 			continue
 		}
 		entry.SourceFile = path
+		if apiError, _ := raw["isApiErrorMessage"].(bool); apiError && !fromProgress {
+			if reset, ok := usageLimitReset(line); ok {
+				entry.Raw["usage_limit_reset_time"] = reset.UTC().Format(time.RFC3339)
+			}
+		}
 
 		// Skip entries with zero timestamp (invalid date)
 		if entry.Timestamp.IsZero() || entry.Timestamp.Year() < 2020 {
@@ -1126,6 +1132,27 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	}
 
 	return nil
+}
+
+// usageLimitReset returns the time an API error line says the usage limit
+// resets at, as upstream reads it: the Unix seconds after the first "|"
+// that follows "Claude AI usage limit reached".
+func usageLimitReset(line []byte) (time.Time, bool) {
+	_, after, ok := bytes.Cut(line, []byte("Claude AI usage limit reached"))
+	i := bytes.IndexByte(after, '|')
+	if !ok || i < 0 {
+		return time.Time{}, false
+	}
+	digits := after[i+1:]
+	n := 0
+	for n < len(digits) && digits[n] >= '0' && digits[n] <= '9' {
+		n++
+	}
+	seconds, err := strconv.ParseInt(string(digits[:n]), 10, 64)
+	if err != nil || seconds <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(seconds, 0), true
 }
 
 // tokenCount reports whether v is a token count upstream reads: a

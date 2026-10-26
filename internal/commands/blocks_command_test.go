@@ -142,3 +142,26 @@ func TestActiveBlockTitleBoxIsAligned(t *testing.T) {
 		}
 	}
 }
+
+// Like upstream, a block reports when the usage limit resets from the first
+// API error line in it that names the time, such as Claude Code's synthetic
+// "Claude AI usage limit reached|<epoch>" message.
+func TestBlocksReportTheUsageLimitResetTime(t *testing.T) {
+	root := t.TempDir()
+	limit := func(at, id string, epoch int, apiError bool) string {
+		return fmt.Sprintf(`{"timestamp":%q,"sessionId":"s","isApiErrorMessage":%t,"message":{"id":%q,"model":"<synthetic>","content":[{"type":"text","text":"Claude AI usage limit reached|%d"}],"usage":{"input_tokens":0,"output_tokens":0}}}`, at, apiError, id, epoch)
+	}
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), strings.Join([]string{
+		`{"timestamp":"2026-09-01T10:00:00.000Z","sessionId":"s","requestId":"r1","message":{"id":"m1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":5}}}`,
+		limit("2026-09-01T10:30:00.000Z", "m2", 1788256800, false),
+		limit("2026-09-01T11:00:00.000Z", "m3", 1788260400, true),
+		limit("2026-09-01T11:30:00.000Z", "m4", 1788264000, true),
+	}, "\n"))
+	blocks := sourceCLIJSON(t, "blocks", "--data-path", root, "--offline", "--json", "--timezone", "UTC")["blocks"].([]any)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks %v", blocks)
+	}
+	if block := blocks[0].(map[string]any); block["entries"] != 4.0 || block["usageLimitResetTime"] != "2026-09-01T11:00:00Z" {
+		t.Errorf("block %v, want 4 entries resetting at 2026-09-01T11:00:00Z", block)
+	}
+}

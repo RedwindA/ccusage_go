@@ -128,8 +128,9 @@ func (c *Calculator) createBlock(startTime time.Time, entries []types.UsageEntry
 		tokenCounts.CacheCreationInputTokens += entry.CacheCreationInputTokens
 		tokenCounts.CacheReadInputTokens += entry.CacheReadInputTokens
 
-		// usage_limit_reset_time still lives in Raw (preserved by clearRawExceptCache)
-		if entry.Raw != nil {
+		// usage_limit_reset_time still lives in Raw (preserved by
+		// clearRawExceptCache); as upstream, the block's first one is kept.
+		if entry.Raw != nil && usageLimitResetTime == nil {
 			if resetTime, ok := entry.Raw["usage_limit_reset_time"].(string); ok {
 				if t, err := time.Parse(time.RFC3339, resetTime); err == nil {
 					usageLimitResetTime = &t
