@@ -279,6 +279,14 @@ func Aggregate(entries []types.UsageEntry, o Options) []*Row {
 			period = e.SessionID
 		case "model":
 			period = e.Model
+			// A Claude <synthetic> entry, such as an API error, has no
+			// model: its usage, if any, is unknown.
+			if period == "<synthetic>" {
+				if entryTokens(e) == 0 && e.Cost == 0 {
+					continue
+				}
+				period = "unknown"
+			}
 		case "workspace":
 			period = e.Workspace
 			if strings.TrimSpace(period) == "" {

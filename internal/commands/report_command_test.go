@@ -397,6 +397,37 @@ func TestClaudeSyntheticEntriesCountWithoutAModel(t *testing.T) {
 	}
 }
 
+// The model report lists no <synthetic> model: usage of a <synthetic> entry
+// counts as unknown, and an API error line without usage lists nothing.
+func TestClaudeModelReportListsNoSyntheticModel(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), strings.Join([]string{
+		`{"timestamp":"2025-01-10T10:00:00.000Z","sessionId":"s","requestId":"r1","costUSD":0.001,"message":{"id":"m1","model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":40}}}`,
+		`{"timestamp":"2025-01-11T11:00:00.000Z","sessionId":"s","requestId":"r2","costUSD":0.02,"message":{"id":"m2","model":"<synthetic>","usage":{"input_tokens":7,"output_tokens":3}}}`,
+		`{"timestamp":"2025-01-12T11:00:00.000Z","sessionId":"s","isApiErrorMessage":true,"message":{"id":"m3","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}`,
+	}, "\n"))
+	models := func(args ...string) []any {
+		report := sourceCLIJSON(t, append([]string{"claude", "model", "--data-path", root, "--timezone", "UTC", "--offline", "--json"}, args...)...)
+		models := []any{}
+		for _, row := range report["models"].([]any) {
+			row := row.(map[string]any)
+			models = append(models, row["model"], row["totalTokens"])
+		}
+		return models
+	}
+	if got, want := models(), []any{"unknown", 10.0, "claude-opus-4-6", 140.0}; !reflect.DeepEqual(got, want) {
+		t.Errorf("models = %v, want %v", got, want)
+	}
+	if got := models("--since", "20250112"); len(got) != 0 {
+		t.Errorf("API error models = %v, want none", got)
+	}
+	out, _, err := sourceCLIRun("claude", "model", "--data-path", root, "--timezone", "UTC", "--offline")
+	if err != nil || strings.Contains(out, "synthetic") {
+		t.Errorf("table: %v\n%s", err, out)
+	}
+}
+
 // Without --order, each section of a unified report lists its rows as the
 // standalone report does, as upstream's finish_rows: sessions by cost,
 // highest first, and periods oldest first.
