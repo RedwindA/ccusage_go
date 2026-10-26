@@ -211,6 +211,32 @@ func TestDroidIsPricedInDisplayMode(t *testing.T) {
 	}
 }
 
+// Like upstream, Codex's totalTokens is the total it records, or the advance
+// of its cumulative total, even where that is below the input and output it
+// counts: a delta whose total did not advance still counts its output.
+func TestCodexTotalTokensAreTheRecordedTotal(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	cumulative := func(ts string, output, total int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5","total_token_usage":{"input_tokens":1000,"output_tokens":%d,"total_tokens":%d}}}}`, ts, output, total)
+	}
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/09/10/rollout-a.jsonl"), `{"timestamp":"2026-09-10T10:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5","last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":500,"total_tokens":1200}}}}`)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/09/11/rollout-b.jsonl"), cumulative("2026-09-11T10:00:00.000Z", 500, 1500)+"\n"+cumulative("2026-09-11T10:01:00.000Z", 800, 1600))
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/09/12/rollout-c.jsonl"), cumulative("2026-09-12T10:00:00.000Z", 500, 1500)+"\n"+cumulative("2026-09-12T10:01:00.000Z", 800, 1500))
+	for _, report := range [][]string{{"codex", "daily"}, {"daily"}} {
+		payload := sourceCLIJSON(t, append(report, "--json", "--offline", "--timezone", "UTC")...)
+		var got [][2]any
+		for _, row := range payload["daily"].([]any) {
+			r := row.(map[string]any)
+			got = append(got, [2]any{r["totalTokens"], r["outputTokens"]})
+		}
+		if want := [][2]any{{1200.0, 500.0}, {1600.0, 800.0}, {1500.0, 800.0}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: total and output tokens %v, want %v", report, got, want)
+		}
+	}
+}
+
 // A branch rollout that copied its parent's history without naming the
 // parent repeats the parent's usage. Upstream counts it once in daily,
 // weekly and monthly reports, unified ones included, and in a unified

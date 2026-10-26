@@ -403,8 +403,11 @@ func dropEmptyAgentDays(entries []types.UsageEntry, o Options) []types.UsageEntr
 	return out
 }
 
+// entryTokens is an entry's total, the sum of its tokens when it records
+// none. Codex's is the total it records even when that is zero, as upstream
+// counts it.
 func entryTokens(e types.UsageEntry) int {
-	if e.TotalTokens != 0 {
+	if e.TotalTokens != 0 || e.Agent == "codex" {
 		return e.TotalTokens
 	}
 	return e.InputTokens + e.OutputTokens + e.CacheCreationInputTokens + e.CacheReadInputTokens

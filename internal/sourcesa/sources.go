@@ -365,7 +365,8 @@ func finalize(entries []types.UsageEntry, loc *time.Location, dedupe bool) []typ
 	out := make([]types.UsageEntry, 0, len(entries))
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if e.TotalTokens == 0 && e.ReasoningTokens == 0 {
+		// A Codex delta whose total did not advance still counts its tokens.
+		if e.TotalTokens == 0 && e.ReasoningTokens == 0 && e.InputTokens+e.OutputTokens+e.CacheReadInputTokens+e.CacheCreationInputTokens == 0 {
 			continue
 		}
 		key := signature(e, true)

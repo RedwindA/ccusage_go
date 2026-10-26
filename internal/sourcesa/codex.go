@@ -295,7 +295,9 @@ func parseCodex(p, dir string) (codexSession, error) {
 		e.CacheCreationInputTokens = usage[2]
 		e.OutputTokens = usage[3]
 		e.ReasoningTokens = usage[4]
-		e.TotalTokens = max(usage[5], usage[0]+usage[3])
+		// Like upstream, the total is the one recorded, or the advance of
+		// the cumulative one, even where it is below input plus output.
+		e.TotalTokens = usage[5]
 		e.Speed = speed
 		e.Raw["is_fallback"] = fallback
 		e.Raw["session_uuid"] = s.id
