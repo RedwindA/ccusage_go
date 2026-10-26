@@ -43,6 +43,10 @@ func (s *Service) GetSourcePricing(ctx context.Context, model, agent string, pro
 	return p, err
 }
 
+// googlePrefixes are the providers upstream's Gemini and Antigravity
+// adapters qualify a Google model with to price it.
+var googlePrefixes = []string{"google", "gemini", "vertex_ai", "openrouter/google"}
+
 func (s *Service) sourcePricing(ctx context.Context, model, agent string, provider any, at time.Time) (ModelPricing, error) {
 	qualified := "[" + agent + "] " + model
 	if s.HasOverride(qualified) || s.HasOverride(ResolveModelName(qualified)) {
@@ -73,6 +77,12 @@ func (s *Service) sourcePricing(ctx context.Context, model, agent string, provid
 		if id := providerName + "/" + model; providerName != "" && providerName != "unknown" && providerName != "kilo" && s.hasPrimaryPricing(ctx, id) {
 			candidates = []string{id, model}
 		}
+	case "gemini":
+		candidates = nil
+		for _, prefix := range googlePrefixes {
+			candidates = append(candidates, prefix+"/"+model)
+		}
+		candidates = append(candidates, model)
 	case "kimi":
 		candidates = []string{"moonshot/" + model, "kimi/" + model, model}
 		if model == "kimi-for-coding" {
@@ -155,7 +165,7 @@ func (s *Service) sourcePricing(ctx context.Context, model, agent string, provid
 		for _, base := range bases {
 			candidates = append(candidates, base)
 			if google {
-				for _, prefix := range []string{"google", "gemini", "vertex_ai", "openrouter/google"} {
+				for _, prefix := range googlePrefixes {
 					candidates = append(candidates, prefix+"/"+base)
 				}
 			}

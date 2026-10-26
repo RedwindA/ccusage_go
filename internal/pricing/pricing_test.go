@@ -435,3 +435,23 @@ func TestContextLimitFollowsAliasesAndOverrides(t *testing.T) {
 		}
 	}
 }
+
+// Like upstream's Gemini model_candidates, Gemini CLI usage is priced under
+// the first of its google/, gemini/, vertex_ai/ and openrouter/google/ ids
+// that has a rate, and only then under the bare id.
+func TestGeminiPricesProviderQualifiedIDsFirst(t *testing.T) {
+	ctx := context.Background()
+	s := tableService(map[string]ModelPricing{"gemini/gemini-x": {InputCostPerToken: 1}, "vertex_ai/gemini-x": {InputCostPerToken: 2}, "gemini-y": {InputCostPerToken: 3}, "gemini/gemini-y": {InputCostPerToken: 4}, "google/gemini-y": {InputCostPerToken: 5}, "gemini-z": {InputCostPerToken: 6}})
+	for model, want := range map[string]float64{"gemini-x": 1, "gemini-y": 5, "gemini-z": 6} {
+		if p, err := s.GetSourcePricing(ctx, model, "gemini", nil, time.Time{}); err != nil || p.InputCostPerToken != want {
+			t.Errorf("%s: %+v %v, want %v", model, p, err, want)
+		}
+	}
+	embedded := NewService()
+	embedded.SetOffline(true)
+	google, _ := embedded.GetPricing(ctx, "google/gemini-2.5-flash", time.Time{})
+	bare, _ := embedded.GetPricing(ctx, "gemini-2.5-flash", time.Time{})
+	if p, err := embedded.GetSourcePricing(ctx, "gemini-2.5-flash", "gemini", nil, time.Time{}); err != nil || p.InputCostPerToken != google.InputCostPerToken || p.InputCostPerToken == bare.InputCostPerToken {
+		t.Errorf("gemini-2.5-flash: %+v %v, want google/'s %+v", p, err, google)
+	}
+}
