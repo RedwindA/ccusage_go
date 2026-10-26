@@ -233,6 +233,8 @@ In `--mode auto`, a JSON `modelBreakdowns` entry carries an optional `storedCost
 
 Unlike ccusage, a Claude cost calculated from tokens (every line in `--mode calculate`, and lines without a recorded `costUSD` in `--mode auto`) also charges Anthropic's $0.01 for each web search the line records in `usage.server_tool_use.web_search_requests`; ccusage prices tokens only.
 
+Unlike ccusage, the statusline's context segment counts the input, cache-creation and cache-read tokens of the hook's `context_window.current_usage`, the context of Claude Code's latest request, when the hook sends it. ccusage always shows `context_window.total_input_tokens`, which Go uses only when `current_usage` is missing or null.
+
 Configuration is discovered in `.ccusage/ccusage.json`, then the Claude config
 locations, or selected with `--config`. Explicit CLI arguments take precedence.
 For example:

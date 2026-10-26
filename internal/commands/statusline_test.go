@@ -38,6 +38,27 @@ func TestStatuslineHookCostContextAndEffort(t *testing.T) {
 		}
 	}
 }
+
+// Unlike upstream, which always shows total_input_tokens, the context
+// segment counts the input of current_usage, Claude Code's latest request,
+// when the hook sends it.
+func TestStatuslineContextCountsTheLatestRequest(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("NO_COLOR", "1")
+	for current, want := range map[string]string{
+		`{"input_tokens":5000,"output_tokens":300,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}`: "6,000 (3%)",
+		`null`: "7,000 (4%)",
+	} {
+		hook := `{"session_id":"status-test","transcript_path":"/missing","model":{"display_name":"Model"},"context_window":{"total_input_tokens":7000,"context_window_size":200000,"current_usage":` + current + `}}`
+		out, err := runStatuslineTest(t, hook, "--no-cache", "--offline")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "🧠 "+want) {
+			t.Errorf("current_usage %s: %s, want 🧠 %s", current, out, want)
+		}
+	}
+}
 func TestStatuslineRecalculatesSessionAndRespectsConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
