@@ -648,7 +648,7 @@ func (l *Loader) findJSONLFiles(basePath string) ([]string, error) {
 			return nil // Continue walking, ignore inaccessible files
 		}
 
-		if d.Type().IsRegular() && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
+		if dirwalk.IsFile(d.Type()) && strings.HasSuffix(strings.ToLower(path), ".jsonl") {
 			files = append(files, path)
 		}
 

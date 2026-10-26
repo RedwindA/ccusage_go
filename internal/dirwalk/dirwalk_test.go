@@ -44,3 +44,14 @@ func TestWalkFollowsOnlyASymlinkedRoot(t *testing.T) {
 		t.Fatalf("walked %q, want %q", got, want)
 	}
 }
+
+// Regular files are files, and so are the irregular entries Windows reports
+// for OneDrive Files On-Demand placeholders; symlinks and directories are
+// not.
+func TestIsFile(t *testing.T) {
+	for mode, want := range map[fs.FileMode]bool{0: true, fs.ModeIrregular: true, fs.ModeSymlink: false, fs.ModeDir: false, fs.ModeDir | fs.ModeIrregular: false} {
+		if got := IsFile(mode); got != want {
+			t.Errorf("IsFile(%v) = %v, want %v", mode, got, want)
+		}
+	}
+}

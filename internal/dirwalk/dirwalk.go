@@ -31,3 +31,12 @@ func Walk(root string, fn fs.WalkDirFunc) error {
 		return fn(path, d, err)
 	})
 }
+
+// IsFile reports whether a walked entry of type t is a file upstream lists:
+// a regular file, or an irregular one, which is how Go reports a Windows
+// reparse point other than a symlink, such as a OneDrive Files On-Demand
+// placeholder that Rust's FileType::is_file reads as a file. A symlink is
+// not a file.
+func IsFile(t fs.FileMode) bool {
+	return t.IsRegular() || t == fs.ModeIrregular
+}

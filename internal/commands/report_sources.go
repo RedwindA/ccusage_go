@@ -447,9 +447,9 @@ func claudeFiles(ctx context.Context, paths []string, project string) ([]string,
 			if err != nil {
 				return nil
 			}
-			// Like upstream, read only regular files: a symlink below root
-			// is not followed.
-			if d.Type().IsRegular() && strings.HasSuffix(path, ".jsonl") {
+			// Like upstream, read only files: a symlink below root is not
+			// followed.
+			if dirwalk.IsFile(d.Type()) && strings.HasSuffix(path, ".jsonl") {
 				abs, _ := filepath.Abs(path)
 				if !seen[abs] {
 					files = append(files, abs)
