@@ -182,8 +182,11 @@ func primaryPricing(fallback map[string]ModelPricing) map[string]ModelPricing {
 		p, exists := primary[name]
 		force := name == "gpt-5.1-codex" || name == "gpt-5.2-codex" || name == "gpt-5.2"
 		if !exists || force {
-			// Rates only: the snapshot's context limit still stands.
-			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), FlexMultiplier: flexMultiplier(name), cacheReadExplicit: true, cacheCreateExplicit: true, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest, MaxInputTokens: p.MaxInputTokens}
+			// Rates only: the snapshot's context limit still stands. Like
+			// upstream's, the grok-4.3 entry names no cache rates of its own,
+			// so Codex bills its cached input at the input rate.
+			explicit := name != "grok-4.3"
+			p = ModelPricing{InputCostPerToken: rates[0] / 1e6, OutputCostPerToken: rates[1] / 1e6, CacheCreationInputTokenCost: rates[2] / 1e6, CacheReadInputTokenCost: rates[3] / 1e6, FastMultiplier: fastMultiplier(name), FlexMultiplier: flexMultiplier(name), cacheReadExplicit: explicit, cacheCreateExplicit: explicit, WebSearchCostPerRequest: AnthropicWebSearchCostPerRequest, MaxInputTokens: p.MaxInputTokens}
 			if name == "claude-sonnet-4" {
 				i, o, c, r := 6e-6, 22.5e-6, 7.5e-6, .6e-6
 				p.InputAbove = &i
