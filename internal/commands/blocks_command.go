@@ -21,7 +21,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewBlocksCommand() *cobra.Command {
+// NewBlocksCommand reports Claude billing windows. As in ccusage, the
+// config's Claude sections reach claude blocks, with agent "claude", but not
+// top-level blocks.
+func NewBlocksCommand(agent string) *cobra.Command {
 	f := &reportFlags{}
 	var active, recent, live, gradient bool
 	var tokenLimit string
@@ -42,10 +45,10 @@ func NewBlocksCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if err := cfg.Validate("blocks", "claude"); err != nil {
+		if err := cfg.Validate("blocks", agent); err != nil {
 			return err
 		}
-		for name, value := range cfg.Options("blocks", "claude") {
+		for name, value := range cfg.Options("blocks", agent) {
 			name = optionFlag(name)
 			flag := cmd.Flags().Lookup(name)
 			if flag != nil && !explicitReportOption(cmd, name) {
@@ -114,7 +117,7 @@ func NewBlocksCommand() *cobra.Command {
 			return err
 		}
 		service := newPricingService(offline, prefetch)
-		service.SetOverrides(cfg.PricingOverrides("blocks", "claude"))
+		service.SetOverrides(cfg.PricingOverrides("blocks", agent))
 		debugPricing(cmd, entries, f, sourceScopes{"": {f: f, service: service}})
 		calc := calculator.New(service)
 		calc.SetMode(f.mode)

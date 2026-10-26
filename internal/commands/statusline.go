@@ -62,7 +62,10 @@ type statuslineCache struct {
 	Size     int64     `json:"size"`
 }
 
-func NewStatuslineCommand() *cobra.Command {
+// NewStatuslineCommand renders the Claude Code status line. As in ccusage,
+// the config's Claude sections reach claude statusline, with agent
+// "claude", but not top-level statusline.
+func NewStatuslineCommand(agent string) *cobra.Command {
 	f := &statuslineFlags{}
 	cmd := &cobra.Command{Use: "statusline", Short: "Display compact status for Claude Code hooks", Args: cobra.NoArgs}
 	p := cmd.Flags()
@@ -82,18 +85,18 @@ func NewStatuslineCommand() *cobra.Command {
 	completeValues(cmd, "visual-burn-rate", "off", "emoji", "text", "emoji-text")
 	completeValues(cmd, "cost-source", "auto", "ccusage", "cc", "both")
 	completeJSONFile(cmd, "config")
-	cmd.RunE = func(cmd *cobra.Command, _ []string) error { return runStatusline(cmd, f) }
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error { return runStatusline(cmd, f, agent) }
 	return cmd
 }
-func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
+func runStatusline(cmd *cobra.Command, f *statuslineFlags, agent string) error {
 	cfg, err := config.Load(f.configPath)
 	if err != nil {
 		return err
 	}
-	if err := cfg.Validate("statusline", "claude"); err != nil {
+	if err := cfg.Validate("statusline", agent); err != nil {
 		return err
 	}
-	options := cfg.Options("statusline", "claude")
+	options := cfg.Options("statusline", agent)
 	for key, value := range options {
 		name := optionFlag(key)
 		flag := cmd.Flags().Lookup(name)
@@ -171,7 +174,7 @@ func runStatusline(cmd *cobra.Command, f *statuslineFlags) error {
 	// Without Claude directories the session has no cost of ccusage's own.
 	paths, loadErr := sourcePaths("claude", home, true)
 	service := newPricingService(offline, prefetch)
-	service.SetOverrides(cfg.PricingOverrides("statusline", "claude"))
+	service.SetOverrides(cfg.PricingOverrides("statusline", agent))
 	calc := calculator.New(service)
 	// The session, today and block loads read each transcript once.
 	parsed := new(loader.ParsedFiles)

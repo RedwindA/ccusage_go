@@ -15,7 +15,7 @@ import (
 
 func runStatuslineTest(t *testing.T, input string, args ...string) (string, error) {
 	t.Helper()
-	cmd := NewStatuslineCommand()
+	cmd := NewStatuslineCommand("")
 	var out bytes.Buffer
 	cmd.SetIn(strings.NewReader(input))
 	cmd.SetOut(&out)
@@ -144,6 +144,10 @@ func TestStatuslineStaleOutputWhileLivePIDUpdates(t *testing.T) {
 		t.Fatal("dead updater kept stale output")
 	}
 }
+
+// As upstream, the Claude sections of a config reach claude statusline but
+// not top-level statusline, which reads only defaults and
+// commands.statusline.
 func TestClaudeScopedStatuslineConfigAndPricing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
@@ -160,8 +164,9 @@ func TestClaudeScopedStatuslineConfigAndPricing(t *testing.T) {
 		if err := cmd.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(out.String(), "Scoped") || !strings.Contains(out.String(), "$13.00 session") {
-			t.Fatal(out.String())
+		scoped := args[0] == "claude"
+		if strings.Contains(out.String(), "Scoped") != scoped || strings.Contains(out.String(), "$13.00 session") != scoped {
+			t.Errorf("%v: %s", args, out.String())
 		}
 	}
 }

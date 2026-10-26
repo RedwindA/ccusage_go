@@ -165,3 +165,25 @@ func TestBlocksReportTheUsageLimitResetTime(t *testing.T) {
 		t.Errorf("block %v, want 4 entries resetting at 2026-09-01T11:00:00Z", block)
 	}
 }
+
+// Like upstream, top-level blocks reads only the config's defaults and
+// commands.blocks; the Claude sections reach claude blocks.
+func TestBlocksReadClaudeConfigSectionsOnlyUnderClaude(t *testing.T) {
+	isolateSourceHomes(t)
+	root := blocksFixture(t, map[time.Time]int{time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC): 1000, time.Date(2026, 9, 15, 13, 30, 0, 0, time.UTC): 1000})
+	cfg := filepath.Join(t.TempDir(), "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"claude":{"defaults":{"pricingOverrides":{"claude-sonnet-4-20250514":{"inputCostPerToken":1}}}},"commands":{"claude blocks":{"sessionLength":1}}}`)
+	for command, want := range map[string]string{"blocks": "1 blocks $0.006", "claude blocks": "2 blocks $2000"} {
+		p := sourceCLIJSON(t, append(strings.Fields(command), "--data-path", root, "--config", cfg, "--offline", "--json", "--timezone", "UTC")...)
+		blocks, cost := 0, 0.0
+		for _, block := range p["blocks"].([]any) {
+			if block := block.(map[string]any); block["isGap"] != true {
+				blocks++
+				cost += block["costUSD"].(float64)
+			}
+		}
+		if got := fmt.Sprintf("%d blocks $%.4g", blocks, cost); got != want {
+			t.Errorf("%s: %s, want %s", command, got, want)
+		}
+	}
+}
