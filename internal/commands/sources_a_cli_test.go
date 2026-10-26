@@ -75,7 +75,7 @@ func TestNativeSourcesACLI(t *testing.T) {
 				}
 			}
 			if tc.name == "openclaw" || tc.name == "grok" {
-				want := 48.0
+				want := 38.0
 				if tc.name == "grok" {
 					want = 310
 				}
@@ -98,6 +98,21 @@ func TestNativeSourcesACLI(t *testing.T) {
 				t.Fatalf("session: %#v", sessions)
 			}
 		})
+	}
+}
+
+// Upstream's OpenClaw counts the part of totalTokens above the counted
+// tokens but prices only those, unless output is 0 and the part becomes it.
+func TestOpenClawLeavesTheTotalTokenSurplusUnpriced(t *testing.T) {
+	isolateSourceHomes(t)
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"pricingOverrides":{"test-model-1":{"inputCostPerToken":1,"outputCostPerToken":2}}}}`)
+	sourceCLIWrite(t, filepath.Join(dir, "agents/main/sessions/s.jsonl"), `{"id":"a","type":"message","message":{"role":"assistant","model":"test-model-1","usage":{"input":10,"output":5,"totalTokens":100},"timestamp":1785542401000}}
+{"id":"b","type":"message","message":{"role":"assistant","model":"test-model-1","usage":{"input":10,"output":0,"totalTokens":100},"timestamp":1785542402000}}`)
+	totals := sourceCLIJSON(t, "openclaw", "daily", "--json", "--offline", "--data-path", dir, "--config", cfg, "--timezone", "UTC")["totals"].(map[string]any)
+	if totals["totalTokens"] != 200.0 || totals["outputTokens"] != 95.0 || totals["totalCost"] != 210.0 {
+		t.Fatalf("totals %v, want 200 tokens, 95 output and a cost of 10+5*2 + 10+90*2", totals)
 	}
 }
 

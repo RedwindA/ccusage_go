@@ -51,6 +51,9 @@ func (state *clawState) parse(p, session string, r object, fallback time.Time) *
 	e.CacheReadInputTokens = count(u, "cacheRead")
 	e.CacheCreationInputTokens = count(u, "cacheWrite")
 	total(&e, count(u, "totalTokens"), 0)
+	// Upstream's openclaw_entry_to_loaded_inner counts the part of
+	// totalTokens above the counted tokens but prices only those.
+	delete(e.Raw, "extra_output_tokens")
 	cost(&e, obj(u["cost"])["total"])
 	return &e
 }
