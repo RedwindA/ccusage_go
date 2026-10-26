@@ -6,7 +6,7 @@
 >    - 預設 `LoadFromPath`：`filepath.Walk` 已遞迴掃入。
 >    - filter 模式（`live monitor` / `--modified-within` / `--only-active`）：`collectProjectFiles` 對名為 `subagents` 的子目錄遞迴一層（`collectSubagentFiles`），`shouldSkipProject` 也會檢查 subagents 內 mtime；live `IncrementalCache` 以 `subagents/<file>` key 追蹤狀態。
 >    - sub-agent entry 之 `isSidechain=true` 但**獨立計費**，loader 永不過濾、僅保留為 `entry.IsSidechain` 供 breakdown 使用。
-> 2. **`usage.cache_creation` nested fallback**：當 flat `cache_creation_input_tokens` 缺值時，讀取 nested `ephemeral_1h_input_tokens + ephemeral_5m_input_tokens` 加總；目前兩者同值，flat 優先。
+> 2. **`usage.cache_creation` nested 優先**：行內有 `usage.cache_creation` 物件時，cache creation token 數取 nested `ephemeral_1h_input_tokens + ephemeral_5m_input_tokens` 加總（與 upstream `cache_creation_token_count` 及費用計算一致），沒有時才讀 flat `cache_creation_input_tokens`。
 > 3. **`server_tool_use` 萃取**：assistant entry 的 `usage.server_tool_use.{web_search_requests, web_fetch_requests}` 寫入 `entry.WebSearchRequests` / `entry.WebFetchRequests`（計費見 `04-cost-calculation.md`）。
 > 4. **`message.diagnostics.cache_miss_reason`**：寫入 `entry.CacheMissReason`（`*types.CacheMissReason`），含 `Type` 與 `CacheMissedInputTokens`。
 > 5. **SessionName 第三順位**：原 custom-title > agent-name 之外，新增 `ai-title`（`raw["aiTitle"]`）作第三來源。

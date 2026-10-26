@@ -1071,12 +1071,11 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.Model = model
 	}
 
-	// cache_creation_input_tokens — flat takes precedence; fall back to
-	// nested usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens
-	// (Anthropic 2026 schema).
-	if cacheCreate, ok := usage["cache_creation_input_tokens"].(float64); ok {
-		entry.CacheCreationInputTokens = int(cacheCreate)
-	} else if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
+	// Cache creation tokens: like upstream's cache_creation_token_count, the
+	// usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens
+	// breakdown, which costs are priced from, wins over the flat
+	// cache_creation_input_tokens whenever the line has one.
+	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
 		var sum int
 		if v, ok := nested["ephemeral_1h_input_tokens"].(float64); ok {
 			sum += int(v)
@@ -1085,6 +1084,8 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 			sum += int(v)
 		}
 		entry.CacheCreationInputTokens = sum
+	} else if cacheCreate, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		entry.CacheCreationInputTokens = int(cacheCreate)
 	}
 
 	// cache_read_input_tokens is optional

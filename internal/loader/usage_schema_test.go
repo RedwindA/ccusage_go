@@ -102,42 +102,51 @@ func TestFlatCacheStillWorks(t *testing.T) {
 	assert.Equal(t, 1000, entries[0].CacheReadInputTokens)
 }
 
-// TestFlatPrecedenceOverNested ensures flat takes precedence when both exist.
-// Real Anthropic data currently emits both with identical values; flat should win.
-func TestFlatPrecedenceOverNested(t *testing.T) {
-	basePath, cleanup := setupTestProject(t)
-	defer cleanup()
+// TestNestedPrecedenceOverFlat ensures that, as upstream's
+// cache_creation_token_count reads it, the cache_creation breakdown costs are
+// priced from gives the cache creation count whenever a line has one, even
+// when the flat field disagrees with it.
+func TestNestedPrecedenceOverFlat(t *testing.T) {
+	for _, tc := range []struct {
+		breakdown map[string]any
+		want      int
+	}{
+		{map[string]any{"ephemeral_1h_input_tokens": 1, "ephemeral_5m_input_tokens": 2}, 3},
+		{map[string]any{"ephemeral_5m_input_tokens": 0}, 0},
+		{map[string]any{}, 0},
+	} {
+		basePath, cleanup := setupTestProject(t)
+		defer cleanup()
 
-	now := time.Now()
-	usage := map[string]any{
-		"input_tokens":                4,
-		"output_tokens":               10,
-		"cache_creation_input_tokens": 7777,
-		"cache_creation": map[string]any{
-			"ephemeral_1h_input_tokens": 1,
-			"ephemeral_5m_input_tokens": 2,
-		},
+		now := time.Now()
+		usage := map[string]any{
+			"input_tokens":                4,
+			"output_tokens":               10,
+			"cache_creation_input_tokens": 7777,
+			"cache_creation":              tc.breakdown,
+		}
+		entry := map[string]any{
+			"type":      "assistant",
+			"timestamp": now.Format(time.RFC3339),
+			"requestId": "req-both",
+			"sessionId": "sess-both",
+			"message": map[string]any{
+				"id":    "msg-both",
+				"model": "claude-sonnet-4-20250514",
+				"usage": usage,
+			},
+		}
+		data, _ := json.Marshal(entry)
+
+		addProjectFile(t, basePath, "proj-both", "session.jsonl", []string{string(data)})
+
+		ldr := New()
+		entries, err := ldr.LoadFromPath(context.Background(), basePath)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, tc.want, entries[0].CacheCreationInputTokens, "breakdown %v must take precedence", tc.breakdown)
+		assert.Equal(t, 4+10+tc.want, entries[0].TotalTokens)
 	}
-	entry := map[string]any{
-		"type":      "assistant",
-		"timestamp": now.Format(time.RFC3339),
-		"requestId": "req-both",
-		"sessionId": "sess-both",
-		"message": map[string]any{
-			"id":    "msg-both",
-			"model": "claude-sonnet-4-20250514",
-			"usage": usage,
-		},
-	}
-	data, _ := json.Marshal(entry)
-
-	addProjectFile(t, basePath, "proj-both", "session.jsonl", []string{string(data)})
-
-	ldr := New()
-	entries, err := ldr.LoadFromPath(context.Background(), basePath)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, 7777, entries[0].CacheCreationInputTokens, "flat must take precedence")
 }
 
 // silence unused import warning helper if any future test needs strings
