@@ -257,6 +257,10 @@ func displayModel(e types.UsageEntry) string {
 	if (e.Agent == "pi" || format == "pi" || e.Agent == "openclaw") && !strings.HasPrefix(model, "[") {
 		model = "[" + e.Agent + "] " + model
 	}
+	// The Codex loader already names a model by its alias.
+	if e.Agent == "codex" {
+		return model
+	}
 	return pricing.ResolveModelName(model)
 }
 

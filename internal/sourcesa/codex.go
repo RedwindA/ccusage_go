@@ -12,6 +12,7 @@ import (
 
 	"github.com/RedwindA/ccusage_go/internal/fileread"
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
+	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/types"
 	"github.com/klauspost/compress/zstd"
 )
@@ -235,6 +236,9 @@ func parseCodex(p, dir string) (codexSession, error) {
 		if model == "codex-auto-review" {
 			e.Model, fallback = codexAutoReview(t), true
 		}
+		// Like upstream, Codex usage is deduplicated, grouped and priced
+		// under the model's CCUSAGE_MODEL_ALIASES name.
+		e.Model = pricing.ResolveModelName(e.Model)
 		e.InputTokens = usage[0] - usage[1] - usage[2]
 		e.CacheReadInputTokens = usage[1]
 		e.CacheCreationInputTokens = usage[2]

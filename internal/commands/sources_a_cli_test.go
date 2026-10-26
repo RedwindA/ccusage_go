@@ -240,3 +240,40 @@ func TestCodexCountsUsageCopiedAcrossSessionsOnce(t *testing.T) {
 		}
 	}
 }
+
+// Like upstream, Codex usage is grouped and priced under its
+// CCUSAGE_MODEL_ALIASES name: an alias of another model bills that model's
+// rates, and an alias that only labels the model bills nothing. The name is
+// resolved once, so an alias of the alias only prices it.
+func TestCodexPricesTheAliasedModel(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/2026/10/18/rollout-a.jsonl"), `{"timestamp":"2026-10-18T12:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5","last_token_usage":{"input_tokens":1000000,"output_tokens":100000,"total_tokens":1100000}}}}`)
+	for aliases, want := range map[string]string{
+		"":                                 "[gpt-5] $2.25 []",
+		"gpt-5=gpt-5-mini":                 "[gpt-5-mini] $0.45 []",
+		"gpt-5=GPT5":                       "[GPT5] $0 [GPT5]",
+		"gpt-5=gpt-5-mini,gpt-5-mini=GPT5": "[gpt-5-mini] $0.45 []",
+	} {
+		t.Setenv("CCUSAGE_MODEL_ALIASES", aliases)
+		for _, report := range [][]string{{"codex", "daily"}, {"daily"}} {
+			payload := sourceCLIJSON(t, append(report, "--json", "--offline", "--timezone", "UTC")...)
+			row := payload["daily"].([]any)[0].(map[string]any)
+			models, _ := row["modelsUsed"].([]any)
+			codexModels, _ := row["models"].(map[string]any)
+			for model := range codexModels {
+				models = append(models, model)
+			}
+			totals := payload["totals"].(map[string]any)
+			cost, ok := totals["costUSD"].(float64)
+			if !ok {
+				cost, _ = totals["totalCost"].(float64)
+			}
+			unpriced, _ := totals["unpricedModels"].([]any)
+			if got := fmt.Sprintf("%v $%.4g %v", models, cost, unpriced); got != want {
+				t.Errorf("%v with aliases %q: %s, want %s", report, aliases, got, want)
+			}
+		}
+	}
+}
