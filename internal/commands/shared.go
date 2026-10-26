@@ -13,9 +13,12 @@ import (
 // zoneDirs are where ccusage's jiff finds the zone database on Unix.
 var zoneDirs = []string{"/usr/share/zoneinfo", "/usr/share/lib/zoneinfo", "/etc/zoneinfo"}
 
+//go:generate go run gen_zone_names.go $GOROOT/lib/time/zoneinfo.zip
+
 // loadTimezone resolves a --timezone or configured timezone as ccusage
 // does: "local" is the system timezone, and an IANA name matches the zone
-// database's in any case.
+// database's in any case. Windows has no zone directory, and jiff bundles
+// its database there, so a name also matches one of zoneNames.
 func loadTimezone(name string) (*time.Location, error) {
 	if name == "local" {
 		return time.Local, nil
@@ -27,6 +30,13 @@ func loadTimezone(name string) (*time.Location, error) {
 		}
 		if zone, ok := zoneName(dir, name); ok {
 			if zoneLoc, zoneErr := time.LoadLocation(zone); zoneErr == nil {
+				loc, err = zoneLoc, nil
+			}
+		}
+	}
+	if err != nil {
+		if i := slices.IndexFunc(zoneNames, func(zone string) bool { return strings.EqualFold(zone, name) }); i >= 0 {
+			if zoneLoc, zoneErr := time.LoadLocation(zoneNames[i]); zoneErr == nil {
 				loc, err = zoneLoc, nil
 			}
 		}

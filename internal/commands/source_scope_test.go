@@ -5,7 +5,6 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -450,7 +449,7 @@ func TestClaudeProjectFilterDedupesWithinTheProject(t *testing.T) {
 
 // As in ccusage, a timezone of "local", on the command line or in a config,
 // is the system timezone, and an IANA name matches the zone database's in
-// any case (Go's Windows build has no database to list the names of).
+// any case.
 func TestTimezoneLocalAndNamesInAnyCase(t *testing.T) {
 	isolateSourceHomes(t)
 	local := time.Local
@@ -464,10 +463,7 @@ func TestTimezoneLocalAndNamesInAnyCase(t *testing.T) {
 		p := sourceCLIJSON(t, append([]string{"claude", "daily", "--data-path", root, "--offline", "--json"}, args...)...)
 		return p["daily"].([]any)[0].(map[string]any)["date"]
 	}
-	zones := map[string]string{"local": "2026-09-16", "UTC": "2026-09-15", "utc": "2026-09-15"}
-	if runtime.GOOS != "windows" {
-		zones["america/new_york"] = "2026-09-15"
-	}
+	zones := map[string]string{"local": "2026-09-16", "UTC": "2026-09-15", "utc": "2026-09-15", "america/new_york": "2026-09-15"}
 	for zone, want := range zones {
 		if got := date("--timezone", zone); got != want {
 			t.Errorf("--timezone %s: %v, want %s", zone, got, want)
@@ -481,5 +477,22 @@ func TestTimezoneLocalAndNamesInAnyCase(t *testing.T) {
 	}
 	if _, err := runStatuslineTest(t, `{"session_id":"s","model":{"display_name":"Model"}}`, "--no-cache", "--offline", "--timezone", "local"); err != nil {
 		t.Errorf("statusline: %v", err)
+	}
+}
+
+// Windows has no zone directory to list, as ccusage's jiff bundles its zone
+// database there, so a name also matches a zone of Go's own database in any
+// case.
+func TestTimezoneNamesInAnyCaseWithoutZoneDirectories(t *testing.T) {
+	dirs := zoneDirs
+	zoneDirs = nil
+	t.Cleanup(func() { zoneDirs = dirs })
+	for name, want := range map[string]string{"utc": "UTC", "asia/tokyo": "Asia/Tokyo", "ETC/gmt+5": "Etc/GMT+5", "America/New_York": "America/New_York"} {
+		if loc, err := loadTimezone(name); err != nil || loc.String() != want {
+			t.Errorf("%s: %v, %v, want %s", name, loc, err, want)
+		}
+	}
+	if _, err := loadTimezone("mars/olympus_mons"); err == nil {
+		t.Error("an unknown zone resolved")
 	}
 }
