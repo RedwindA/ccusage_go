@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.20.0] - 2026-10-25
+
+This release ports every upstream ccusage change from v20.0.24 through v20.0.44. On real Claude Code and Codex history, its daily, weekly, monthly and session totals now match ccusage v20.0.44 exactly.
+
+### Added
+
+- Codex Flex pricing: rollouts that record `service_tier = "flex"` bill at the model's Flex rate (half price for the GPT-5 and GPT-6 families, o3 and o4-mini), `--speed flex` forces it, and `pricingOverrides` accepts `flexMultiplier`.
+- `codex session --id` accepts the full session ID, the rollout file name (with or without `.jsonl` or `.jsonl.zst`), the bare thread UUID or a `codex://threads/<uuid>` link; `--json` prints that one session with its `totalCost`, and an unknown, empty or ambiguous ID exits with an error.
+- In the default `auto` cost mode, JSON `modelBreakdowns` entries include `storedCost`, the part of `cost` taken from costs recorded in agent logs (such as Claude's `costUSD`). It is omitted when no recorded cost was used, in `--mode calculate` and `--mode display`, and with `--no-cost`.
+- Antigravity conversations under `~/.gemini/antigravity-acp/conversations/` (ACP mode) are discovered by default.
+
+### Changed
+
+- Embedded pricing is refreshed to the LiteLLM and models.dev snapshots of ccusage v20.0.44, so Claude Opus, Sonnet and Haiku 5.5, GPT-6 Sol, GPT-6.1 Sol, GPT-6 Luna, Gemini 4 Argon, o3 and o4-mini are priced offline. Previously Opus 5.5 was billed at Opus 5 rates and the others cost $0.
+- Model IDs are matched to prices the way ccusage does: LiteLLM and built-in rates come before models.dev, and fuzzy matching never crosses version numbers, so an unknown version such as `claude-opus-4-9` is reported as missing pricing instead of being billed as `claude-opus-4`. Online runs price models that LiteLLM lacks from the live models.dev catalog before the embedded snapshot.
+- Unified reports apply each source's own config (`<source>.defaults`, `<source>.commands.<report>` and `commands."<source>:<report>"`) to that source: date window, timezone, cost mode, offline setting, pricing overrides, Codex speed, pi and OpenClaw paths and Claude `dataPath`. Explicit command-line flags still take precedence.
+- Config follows ccusage's rules: `project`, `instances` and `projectAliases` apply only to `claude daily`, and unified `daily` passes `project` on to Claude rows only. `last`, `date`, `month`, `week`, `id` and `sessionId` are ignored in config files. Top-level `blocks` and `statusline` no longer read Claude config sections.
+- A set `CLAUDE_CONFIG_DIR` names only directories that hold `projects/` (or `projects/` directories themselves). When no entry qualifies, reports that read Claude fail with "no valid Claude data directories found in CLAUDE_CONFIG_DIR" instead of quietly leaving Claude out.
+- A unified report fails with a source's error when that source cannot be loaded at all, instead of warning and totaling the rest. Individual files that cannot be read or parsed are skipped, as ccusage skips them.
+- `daily`, `monthly` and `session` no longer accept `-w`/`--start-of-week` or read `startOfWeek`; `weekly` and the source reports keep it. `--last` can no longer be combined with `--sections`.
+- With `--sections`, tables print in a fixed order: the command's own table, then daily, weekly, monthly and session. Each section sorts like its standalone report. Empty reports still print their title, and no-data messages go to stderr.
+- The statusline shows the block's remaining time as `(2h 13m left)`. It reads only recent files to find today's cost and the active block, and it sizes the context window as ccusage does (for example 272K for `gpt-5.2`).
+- Codex tables show a Reasoning column and keep every column on narrow terminals and with `--compact`.
+- Date-bounded Claude reports (`--since`, `--last` and similar) skip sessions last written more than a day before the window. Output is unchanged.
+- Release binaries require macOS 12 or later, and building from source requires Go 1.25 or later.
+
+### Fixed
+
+- Codex reports read the `.jsonl.zst` rollouts that Codex has compressed older sessions into since 2026-10-14; before, those sessions were silently left out. A plain copy wins over a compressed copy of the same rollout, and `sessions/` still wins over `archived_sessions/`.
+- Codex reports count automatic compaction usage recorded only in `token_usage_record` lines. They also count once the usage that a branch rollout copies from its parent.
+- Codex: an unselected `config.toml` profile no longer triggers Fast pricing. Dated and provider-qualified ids (`gpt-5.4-2026-03-05`, `global.openai.gpt-5.5`) get their base model's Fast multiplier, and GPT-6 Sol, GPT-6.1 Sol and GPT-6 Luna Fast usage bills at 2×.
+- Codex bills cached input at the input rate for models without a cache-read price, such as gpt-5-pro, o3-pro, gpt-4 and grok-4.3. Codex usage is priced in `--mode display`, is priced under its `CCUSAGE_MODEL_ALIASES` name, counts recorded `totalTokens`, and reads token counts written as strings.
+- Claude: gateways that reuse one message ID without a request ID have each response counted. Anthropic `msg_` and OpenAI `resp_` content blocks, same-instant duplicates and `/btw` sidechain replays still count once, and daily, weekly, monthly and session totals agree.
+- Claude usage is attributed to the line's `sessionId` rather than `session_id`. Workflow agents under `subagents/workflows/` are listed as their own sessions, and a project or session found under two Claude roots is shown as one row.
+- `claude daily` and unified daily, weekly and monthly reports count subagent calls recorded only as AgentProgress lines, once each.
+- Claude advisor calls are no longer billed a second time for their parent's cache writes, and a fast advisor call is listed under the advisor's model. Cache-write tokens come from the `cache_creation` 5m/1h breakdown when present, and `<synthetic>` entries count toward totals without a model.
+- Claude lines that ccusage rejects are skipped: a null required field, a field of the wrong type, a fractional token count, an unknown speed, or a malformed timestamp (including offsets past ±23:59).
+- Claude model IDs ending in `-fast` (such as Copilot's `claude-opus-4.6-fast`) are no longer charged the Fast multiplier unless the usage records fast speed. Priority Tier requests bill at the standard rate.
+- Filtering Claude by project counts requests whose deduplicated copy was recorded in another project. `--project` reads a symlinked project directory, and symlinked transcripts inside `projects/` are skipped, as ccusage does.
+- Source directories that are symlinks or Windows junctions (`~/.claude/projects`, `$CODEX_HOME/sessions`, `PI_AGENT_DIR`, and the Copilot, OpenCode, Codebuff, Kimi and Antigravity roots) are read again instead of reporting no usage.
+- Claude Sonnet 4 requests above 200K tokens bill only the tokens past 200K at the long-context rate. A pricing override for an id with no price of its own (such as `claude-sonnet-4-5-corp`) starts from no rates. Overrides also apply to provider-prefixed, dated or differently separated variants of the overridden name. DeepSeek V4 time-of-day rates apply only to the lowercase ids, as in ccusage.
+- Copilot: reports count OpenTelemetry calls missing from shutdown summaries, count re-exported spans once and exclude cache writes from input tokens. Session credits missing from the per-model breakdown are reported as cost-only `unknown` rows at $0.01 per AI credit.
+- OpenCode forks no longer count history copied from the parent session, and `--mode display` shows only recorded OpenCode costs.
+- Antigravity: empty conversation databases are skipped, and default roots read only their `conversations/` folder, so a fresh install with only `conversation_summaries.db` no longer fails. Model IDs 1417–1419, 1050 and 1402 are reported as `gemini-4-argon`, `gemini-3.1-flash-lite` and `claude-opus-5-5`.
+- pi: `pricingOverrides` entries (keyed `[pi] model`, `[omp] model`, by the bare model name or through an alias) apply in `auto` mode even when pi recorded a cost, and a negative recorded cost is priced from tokens.
+- Hermes normalizes billing provider names as ccusage does and falls back to the model's own rate when the provider rate is free.
+- ZCode prices current Z.ai plan provider IDs (`account:zai-*`, `builtin:zai-*`) and skips databases without the session schema.
+- Gemini CLI usage is priced under `google/`, `gemini/`, `vertex_ai/` and `openrouter/google/` ids first. A message re-recorded with zero tokens keeps its usage, and thoughts that the recorded total already covers are not added again.
+- Droid, Codebuff and Goose are priced in `--mode display` and fall back to provider-qualified model ids. Hyphenated Droid `providerLock` values are recognized, and Codebuff and Copilot read the real count when one token alias is zero.
+- Kimi and OpenClaw no longer bill the surplus of a recorded total as output. OpenClaw messages with a null timestamp are dated by their record, and Kilo uses provider-qualified rates only when they are listed exactly.
+- `blocks` starts blocks on the UTC hour and lists them in start-time order. It takes the default token limit from the blocks shown and rounds the active block's projection as ccusage does. It also honors `NO_COLOR` and redirected output, lists `-fast` and aliased model names, reports `usageLimitResetTime`, and aligns its title boxes.
+- Unified reports keep rows that have a cost but no tokens, drop agents without usage on a day, and bound unified `session` reports by the UTC date of each session's last activity.
+- `--timezone local`, timezone names in any case, POSIX `TZ` rules such as `TZ=CST-8`, and `TZ` on Windows all work. Windows binaries embed time zone data, so named zones no longer fail there.
+- `monitor` lists the five newest calls under Recent Activity, in local time.
+
 ## [v0.19.0] - 2026-10-25
 
 ### Added
