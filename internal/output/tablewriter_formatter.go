@@ -619,6 +619,11 @@ func ShortenModelName(model string) string {
 	// claude-sonnet-4-20250514 -> Sonnet-4
 	// claude-haiku-3-20240307 -> Haiku-3
 
+	// Claude's Fast usage keeps its suffix: claude-opus-4-6-fast -> Opus-4.6-fast
+	if base, ok := strings.CutSuffix(model, "-fast"); ok && strings.HasPrefix(base, "claude-") {
+		return ShortenModelName(base) + "-fast"
+	}
+
 	// 首先嘗試匹配帶小版本號的格式: claude-{type}-{major}-{minor}-{date}
 	re := regexp.MustCompile(`^claude-(\w+)-(\d+)-(\d+)-\d{8}`)
 	if matches := re.FindStringSubmatch(model); matches != nil {

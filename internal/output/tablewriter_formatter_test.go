@@ -25,6 +25,7 @@ func TestShortenModelName(t *testing.T) {
 		{"claude-sonnet-4-6", "Sonnet-4.6", "Sonnet 4.6 無日期格式"},
 		{"claude-haiku-4-5", "Haiku-4.5", "Haiku 4.5 無日期格式"},
 		{"claude-opus-4", "Opus-4", "Opus 4 無日期無小版本"},
+		{"claude-opus-4-6-fast", "Opus-4.6-fast", "Opus 4.6 Fast 模式"},
 
 		// 非 Claude 模型
 		{"gpt-4o", "gpt-4o", "GPT-4o 模型"},

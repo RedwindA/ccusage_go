@@ -83,3 +83,16 @@ func TestProjectBlockUsageRoundsLikeUpstream(t *testing.T) {
 	assert.Equal(t, 1806357, projection.TotalTokens) // 233332 + 233332/35.6*240
 	assert.Equal(t, 17.2, projection.TotalCost)
 }
+
+// As in the other reports and upstream, Claude's Fast usage is listed as its
+// own -fast model.
+func TestBlocksListFastClaudeUsageAsItsOwnModel(t *testing.T) {
+	ts := time.Now().Add(-time.Hour)
+	entries := []types.UsageEntry{
+		{Agent: "claude", Timestamp: ts, Model: "claude-opus-4-6", Speed: "fast", InputTokens: 10},
+		{Agent: "claude", Timestamp: ts.Add(5 * time.Minute), Model: "claude-opus-4-6", InputTokens: 10},
+	}
+	blocks := New(nil).IdentifySessionBlocks(entries, 5)
+	require.Len(t, blocks, 1)
+	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6"}, blocks[0].Models)
+}

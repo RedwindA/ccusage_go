@@ -3,6 +3,7 @@ package calculator
 import (
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/RedwindA/ccusage_go/internal/types"
@@ -140,8 +141,12 @@ func (c *Calculator) createBlock(startTime time.Time, entries []types.UsageEntry
 		apiCostUSD += entry.APICost
 		cacheCreateCostUSD += entry.CacheCreateCost
 		cacheReadCostUSD += entry.CacheReadCost
-		if entry.Model != "" {
-			modelMap[entry.Model] = true
+		if model := entry.Model; model != "" {
+			// As in the other reports, Claude's Fast usage is its own model.
+			if entry.Agent == "claude" && entry.Speed == "fast" && !strings.HasSuffix(model, "-fast") {
+				model += "-fast"
+			}
+			modelMap[model] = true
 		}
 	}
 
