@@ -443,9 +443,13 @@ func (l *Loader) parseFile(path string) parsedFile {
 		if !bytes.Contains(line, []byte(`"usage":{`)) || hasNullField(line) {
 			continue
 		}
+		repeatedDaily, repeatedEntry := repeatedMember(line, fromProgress)
+		if repeatedDaily {
+			continue
+		}
 		// Upstream's entry loader decodes isApiErrorMessage as a bool, where
 		// its daily loader does not read it.
-		entrySkips := fromProgress || !typed[bool](raw["isApiErrorMessage"])
+		entrySkips := fromProgress || !typed[bool](raw["isApiErrorMessage"]) || repeatedEntry
 		entry.SourceFile = path
 		if apiError, _ := raw["isApiErrorMessage"].(bool); apiError && !fromProgress {
 			if reset, ok := usageLimitReset(line); ok {

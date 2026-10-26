@@ -204,3 +204,62 @@ func nullField(v interface{}, path []string, nullModel bool) bool {
 	}
 	return false
 }
+
+// memberFields are the members of an object that upstream decodes into a
+// typed struct, which rejects a member given twice; a member with fields of
+// its own is an object whose members are checked too.
+type memberFields map[string]memberFields
+
+var (
+	messageFields = memberFields{"id": nil, "model": nil, "usage": {
+		"input_tokens": nil, "output_tokens": nil, "cache_creation_input_tokens": nil, "cache_read_input_tokens": nil, "speed": nil,
+		"cache_creation": {"ephemeral_5m_input_tokens": nil, "ephemeral_1h_input_tokens": nil},
+	}}
+	// lineFields are those of a usage line; upstream's entry loader also
+	// decodes its isApiErrorMessage, which its daily loader does not read.
+	lineFields = memberFields{"timestamp": nil, "sessionId": nil, "requestId": nil, "version": nil, "costUSD": nil, "isSidechain": nil, "message": messageFields}
+	// progressFields are those of an AgentProgress line its daily loader
+	// reads.
+	progressFields = memberFields{"sessionId": nil, "data": {"message": {"timestamp": nil, "requestId": nil, "costUSD": nil, "isSidechain": nil, "message": messageFields}}}
+)
+
+// repeatedMember reports whether upstream's daily and entry loaders reject
+// line, a valid usage line or with progress an AgentProgress line, for
+// repeating a member. Upstream first parses a line holding "null" into a
+// value that rejects any repeated member, at any depth; another line its
+// typed decode only rejects for a repeated field.
+func repeatedMember(line []byte, progress bool) (daily, entry bool) {
+	if bytes.Contains(line, []byte("null")) {
+		repeated := !jsonscan.Unique(line)
+		return repeated, repeated
+	}
+	if progress {
+		return repeatsField(line, progressFields), true
+	}
+	daily = repeatsField(line, lineFields)
+	return daily, daily || repeatsField(line, memberFields{"isApiErrorMessage": nil})
+}
+
+// repeatsField reports whether the JSON object line repeats one of fields.
+func repeatsField(line []byte, fields memberFields) bool {
+	repeated := false
+	var walk func(fields memberFields) func([]byte, jsonscan.Value) error
+	walk = func(fields memberFields) func([]byte, jsonscan.Value) error {
+		seen := map[string]bool{}
+		return func(key []byte, value jsonscan.Value) error {
+			nested, ok := fields[string(key)]
+			if !ok {
+				return nil
+			}
+			repeated = repeated || seen[string(key)]
+			seen[string(key)] = true
+			if nested != nil && value.Kind() == '{' {
+				_, err := value.Fields(walk(nested))
+				return err
+			}
+			return nil
+		}
+	}
+	_, _ = jsonscan.Fields(line, walk(fields))
+	return repeated
+}

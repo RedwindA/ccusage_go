@@ -648,6 +648,44 @@ func TestClaudeLinesUpstreamRejectsAreSkipped(t *testing.T) {
 	}
 }
 
+// Upstream parses a usage line holding "null" into a value that rejects any
+// repeated member, at any depth; on another line its typed decode rejects
+// only a repeated field, which for its entry loader includes
+// isApiErrorMessage and for an AgentProgress line the line's own session and
+// its record's fields.
+func TestClaudeLinesRepeatingAMemberUpstreamRejectsAreSkipped(t *testing.T) {
+	base := `{"type":"assistant","timestamp":"2026-09-12T04:38:42.296Z","version":"2.0.0","sessionId":"s","requestId":"r","cwd":"/w","isApiErrorMessage":false,"costUSD":0.5,"message":{"id":"m","model":"claude-sonnet-4-5","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"speed":"standard","cache_creation":{"ephemeral_5m_input_tokens":10}}}}`
+	plain := strings.Replace(base, `"stop_reason":null,`, "", 1)
+	progress := `{"type":"progress","timestamp":"2026-09-12T04:38:42.296Z","sessionId":"s","data":{"type":"agent_progress","message":{"timestamp":"2026-09-12T04:38:41.000Z","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}}}`
+	for _, tc := range []struct {
+		line, old, new string
+		daily, entry   int
+	}{
+		{base, `"requestId":"r"`, `"requestId":"r","requestId":"r2"`, 0, 0},
+		{base, `"cwd":"/w"`, `"cwd":"/w","cwd":"/x"`, 0, 0},
+		{base, `"stop_reason":null`, `"stop_reason":null,"content":[{"type":"text","text":"a","text":"b"}]`, 0, 0},
+		{plain, "", "", 1, 1},
+		{plain, `"cwd":"/w"`, `"cwd":"/w","cwd":"null"`, 0, 0},
+		{plain, `"cwd":"/w"`, `"cwd":"/w","cwd":"/x"`, 1, 1},
+		{plain, `"id":"m"`, `"id":"m","content":[{"type":"text","text":"a","text":"b"}]`, 1, 1},
+		{plain, `"speed":"standard"`, `"speed":"standard","server_tool_use":{"web_search_requests":1,"web_search_requests":2}`, 1, 1},
+		{plain, `"requestId":"r"`, `"requestId":"r","requestId":"r2"`, 0, 0},
+		{plain, `"id":"m"`, `"id":"m","id":"m"`, 0, 0},
+		{plain, `"input_tokens":10`, `"input_tokens":5,"input_tokens":10`, 0, 0},
+		{plain, `"ephemeral_5m_input_tokens":10`, `"ephemeral_5m_input_tokens":10,"ephemeral_5m_input_tokens":10`, 0, 0},
+		{plain, `"isApiErrorMessage":false`, `"isApiErrorMessage":false,"isApiErrorMessage":false`, 1, 0},
+		{progress, `"type":"agent_progress"`, `"type":"agent_progress","type":"agent_progress"`, 1, 0},
+		{progress, `"sessionId":"s"`, `"sessionId":"s","sessionId":"s"`, 0, 0},
+		{progress, `"requestId":"r"`, `"requestId":"r","requestId":"r"`, 0, 0},
+		{progress, `"input_tokens":10`, `"input_tokens":10,"input_tokens":10`, 0, 0},
+	} {
+		line := strings.Replace(tc.line, tc.old, tc.new, 1)
+		if daily, entry := loadClaudeLine(t, line); daily != tc.daily || entry != tc.entry {
+			t.Errorf("%s: daily loader read %d entries, entry loader %d; want %d and %d", line, daily, entry, tc.daily, tc.entry)
+		}
+	}
+}
+
 // Upstream's entry loader, which serves sessions and blocks, decodes
 // isApiErrorMessage as a bool; its daily loader does not read it.
 func TestClaudeEntryLoadsSkipANonBoolAPIErrorFlag(t *testing.T) {
