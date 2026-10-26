@@ -254,11 +254,12 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 		n += len(res.entries)
 	}
 	allEntries := make([]types.UsageEntry, 0, n)
+	allIDs := make([]dedupeIDs, 0, n)
 	var errors []error
 	globalSessionNames := make(map[string]string)
 
 	for i, res := range results {
-		entries, debugMsg := res.usage(l.dailyCost != nil)
+		entries, ids, debugMsg := res.usage(l.dailyCost != nil)
 		if debugMsg != "" && !reused[i] {
 			fmt.Fprint(os.Stderr, debugMsg)
 		}
@@ -266,6 +267,7 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 			errors = append(errors, res.err)
 		} else {
 			allEntries = append(allEntries, entries...)
+			allIDs = append(allIDs, ids...)
 			// Merge per-file session name maps (custom-title takes priority)
 			for sid, name := range res.sessionNames {
 				if _, exists := globalSessionNames[sid]; !exists {
@@ -282,7 +284,7 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	allEntries = deduplicateUsage(allEntries, l.dailyCost)
+	allEntries = deduplicateUsage(allEntries, allIDs, l.dailyCost)
 
 	// Global backfill: apply session names across all entries
 	for i := range allEntries {
@@ -307,7 +309,7 @@ func clearRawData(entries []types.UsageEntry) {
 
 func (l *Loader) loadFileWithDedupe(path string, dedupeMap map[string]bool, dedupeMutex ...*sync.Mutex) ([]types.UsageEntry, map[string]string, error) {
 	parsed := l.parseFile(path)
-	entries, debugMsg := parsed.usage(l.dailyCost != nil)
+	entries, _, debugMsg := parsed.usage(l.dailyCost != nil)
 	if debugMsg != "" {
 		fmt.Fprint(os.Stderr, debugMsg)
 	}
@@ -331,6 +333,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 
 	var entries []types.UsageEntry
 	var dailyOnly []bool
+	var ids []dedupeIDs
 	lineNum := 0
 	// Entry loads count an AgentProgress line as a parse error where daily
 	// loads read the record it wraps.
@@ -486,6 +489,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 			clearRawExceptKeys(&candidate, rawRetainKeys)
 			entries = append(entries, candidate)
 			dailyOnly = append(dailyOnly, entrySkips)
+			ids = append(ids, newDedupeIDs(&candidate))
 		}
 	}
 
@@ -497,7 +501,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 		parsed.err = types.LoaderError{Path: path, Err: readErr}
 		return parsed
 	}
-	parsed.entries, parsed.dailyOnly, parsed.sessionNames = entries, dailyOnly, sessionNameMap
+	parsed.entries, parsed.dailyOnly, parsed.ids, parsed.sessionNames = entries, dailyOnly, ids, sessionNameMap
 	return parsed
 }
 

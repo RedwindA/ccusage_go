@@ -49,8 +49,11 @@ type parsedFile struct {
 	// only daily loads count: those read from the record an AgentProgress
 	// line wraps, and those whose line holds isApiErrorMessage as another
 	// type than a bool.
-	entries      []types.UsageEntry
-	dailyOnly    []bool
+	entries   []types.UsageEntry
+	dailyOnly []bool
+	// ids holds each entry's dedupe keys, built while its Raw is fresh in
+	// the cache.
+	ids          []dedupeIDs
 	sessionNames map[string]string
 	// entryDebugMsg and dailyDebugMsg summarize the parse errors entry and
 	// daily loads see, when debugging.
@@ -58,22 +61,24 @@ type parsedFile struct {
 	err                          error
 }
 
-// usage returns the entries a load sees and the summary of its parse errors;
-// daily selects a load that reads as upstream's daily loader.
-func (p parsedFile) usage(daily bool) ([]types.UsageEntry, string) {
+// usage returns the entries a load sees, their dedupe keys and the summary
+// of its parse errors; daily selects a load that reads as upstream's daily
+// loader.
+func (p parsedFile) usage(daily bool) ([]types.UsageEntry, []dedupeIDs, string) {
 	if daily {
-		return p.entries, p.dailyDebugMsg
+		return p.entries, p.ids, p.dailyDebugMsg
 	}
 	if !slices.Contains(p.dailyOnly, true) {
-		return p.entries, p.entryDebugMsg
+		return p.entries, p.ids, p.entryDebugMsg
 	}
 	var entries []types.UsageEntry
+	var ids []dedupeIDs
 	for i, e := range p.entries {
 		if !p.dailyOnly[i] {
-			entries = append(entries, e)
+			entries, ids = append(entries, e), append(ids, p.ids[i])
 		}
 	}
-	return entries, p.entryDebugMsg
+	return entries, ids, p.entryDebugMsg
 }
 
 // parseErrors tallies the lines of a file that fail to parse.

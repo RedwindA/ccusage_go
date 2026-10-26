@@ -20,20 +20,29 @@ import (
 // replay's match depends on earlier entries, so deduping each file first or
 // going by timestamp picks other survivors. The survivors are returned in
 // time order, which callers such as the monitor's recent activity rely on.
-// A non-nil dailyCost selects the rules of upstream's daily loader, which
-// prices copies with equal usage with it to keep the costlier one.
-func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEntry) float64) []types.UsageEntry {
-	// Sort indexes rather than the (large) entries themselves.
+// ids, when not nil, holds each entry's newDedupeIDs. A non-nil dailyCost
+// selects the rules of upstream's daily loader, which prices copies with
+// equal usage with it to keep the costlier one.
+func deduplicateUsage(entries []types.UsageEntry, ids []dedupeIDs, dailyCost func(*types.UsageEntry) float64) []types.UsageEntry {
+	// Sort indexes rather than the (large) entries themselves. Loads merge
+	// their files in path order, so the sort is usually done already.
 	order := make([]int, len(entries))
 	for i := range order {
 		order[i] = i
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		return entries[order[i]].SourceFile < entries[order[j]].SourceFile
-	})
+	byFile := func(i, j int) bool { return entries[order[i]].SourceFile < entries[order[j]].SourceFile }
+	if !sort.SliceIsSorted(order, byFile) {
+		sort.SliceStable(order, byFile)
+	}
+	if ids == nil {
+		ids = make([]dedupeIDs, len(entries))
+		for k := range entries {
+			ids[k] = newDedupeIDs(&entries[k])
+		}
+	}
 	// survivors[i] is the index of the entry now in slot i.
 	survivors := make([]int, 0, len(entries))
-	exact := map[string]int{}
+	exact := make(map[string]int, len(entries))
 	// Sidechain replays are routed by message and session. A replay needs a
 	// sidechain on at least one side, so parent candidates only look through
 	// sidechain entries; gateways that reuse one message ID for every
@@ -44,38 +53,38 @@ func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEnt
 		// session of the entry now in the slot.
 		session string
 	}
-	replays := map[string][]routeEntry{}
+	replays := make(map[string][]routeEntry, len(entries))
 	sidechains := map[string][]routeEntry{}
 	push := func(route map[string][]routeEntry, k string, r routeEntry) {
 		if !slices.Contains(route[k], r) {
 			route[k] = append(route[k], r)
 		}
 	}
-	costs := map[int]float64{}
+	// costs[k] is dailyCost of entry k once priced[k].
+	var costs []float64
+	var priced []bool
+	if dailyCost != nil {
+		costs, priced = make([]float64, len(entries)), make([]bool, len(entries))
+	}
 	cost := func(k int) float64 {
-		c, ok := costs[k]
-		if !ok {
-			c = dailyCost(&entries[k])
-			costs[k] = c
+		if !priced[k] {
+			costs[k], priced[k] = dailyCost(&entries[k]), true
 		}
-		return c
+		return costs[k]
 	}
 	key := dedupeKey
 	for _, k := range order {
-		e := entries[k]
-		message, _ := e.Raw["message_id"].(string)
-		request, _ := e.Raw["request_id"].(string)
+		e := &entries[k]
+		message, request := ids[k].message, ids[k].request
 		if message == "" {
 			survivors = append(survivors, k)
 			continue
 		}
-		exactKey := exactDedupeKey(&e)
-		eSession := dedupeSession(&e)
-		sideKey := key(message, eSession)
+		exactKey, eSession, sideKey := ids[k].exact, ids[k].session, ids[k].side
 		i, found := exact[exactKey]
 		// A replaced survivor stays indexed under its old keys, so only
 		// match the entry now in that slot.
-		if found && exactDedupeKey(&entries[survivors[i]]) != exactKey {
+		if found && ids[survivors[i]].exact != exactKey {
 			found = false
 		}
 		if !found {
@@ -87,19 +96,17 @@ func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEnt
 				old := &entries[survivors[r.index]]
 				session := r.session
 				if session == "" {
-					session = dedupeSession(old)
+					session = ids[survivors[r.index]].session
 				}
 				if session != eSession || !e.IsSidechain && !old.IsSidechain {
 					continue
 				}
 				// Requestless replays match across timestamps; replays with
 				// a new request ID need the parent's timestamp, except in
-				// the daily loader. A gateway that reuses one message ID
-				// makes this scan long, so the old request ID is read last.
+				// the daily loader.
 				match := dailyCost != nil || e.Timestamp.Equal(old.Timestamp)
 				if !match && request == "" {
-					oldRequest, _ := old.Raw["request_id"].(string)
-					match = oldRequest == ""
+					match = ids[survivors[r.index]].request == ""
 				}
 				if match {
 					i, found = r.index, true
@@ -117,7 +124,7 @@ func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEnt
 			}
 		} else {
 			old := &entries[survivors[i]]
-			oldSession := dedupeSession(old)
+			oldSession := ids[survivors[i]].session
 			if eSession != oldSession {
 				// Cross-session copies can become the survivor, so keep
 				// both sessions' routes for later sidechain replays.
@@ -154,14 +161,39 @@ func deduplicateUsage(entries []types.UsageEntry, dailyCost func(*types.UsageEnt
 			}
 		}
 	}
-	sort.SliceStable(survivors, func(i, j int) bool {
-		return entries[survivors[i]].Timestamp.Before(entries[survivors[j]].Timestamp)
-	})
-	out := make([]types.UsageEntry, len(survivors))
+	// Sort copies of the timestamps, not the scattered entries they are in.
+	type stamped struct {
+		at time.Time
+		k  int
+	}
+	byTime := make([]stamped, len(survivors))
 	for i, k := range survivors {
-		out[i] = entries[k]
+		byTime[i] = stamped{entries[k].Timestamp, k}
+	}
+	slices.SortStableFunc(byTime, func(a, b stamped) int { return a.at.Compare(b.at) })
+	out := make([]types.UsageEntry, len(byTime))
+	for i, s := range byTime {
+		out[i] = entries[s.k]
 	}
 	return out
+}
+
+// dedupeIDs are the IDs and keys deduplicateUsage matches an entry by.
+type dedupeIDs struct {
+	message, request, session string
+	// exact is exactDedupeKey and side the key of message and session; both
+	// are empty without a message ID.
+	exact, side string
+}
+
+func newDedupeIDs(e *types.UsageEntry) dedupeIDs {
+	ids := dedupeIDs{session: dedupeSession(e)}
+	ids.message, _ = e.Raw["message_id"].(string)
+	ids.request, _ = e.Raw["request_id"].(string)
+	if ids.message != "" {
+		ids.exact, ids.side = exactDedupeKey(e), dedupeKey(ids.message, ids.session)
+	}
+	return ids
 }
 
 // exactDedupeKey identifies one response by its message and request IDs,
