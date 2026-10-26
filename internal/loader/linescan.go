@@ -2,7 +2,9 @@ package loader
 
 import (
 	"bytes"
+	"encoding/json"
 	"slices"
+	"strconv"
 
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 )
@@ -37,10 +39,20 @@ var (
 	lineProgressKeys = map[string]bool{"costUSD": true, "isSidechain": true, "message": true, "requestId": true, "timestamp": true}
 )
 
+// tokenKeys are the token counts upstream reads as u64s, in a usage object
+// and in its cache_creation breakdown.
+var tokenKeys = map[string]bool{
+	"input_tokens": true, "output_tokens": true, "cache_creation_input_tokens": true, "cache_read_input_tokens": true,
+	"ephemeral_5m_input_tokens": true, "ephemeral_1h_input_tokens": true,
+}
+
 // scanLine returns the loader-relevant subset of the JSON object in line,
 // with the values json.Unmarshal into map[string]interface{} would produce
-// for those keys. A top-level null yields a nil map; any syntax error rejects
-// the whole line, as json.Unmarshal would.
+// for those keys, except that a message's usage keeps a token count written
+// as a number other than an unsigned integer, such as 10.0, 1e1 or -0, as
+// its json.Number: upstream's u64 rejects it, so tokenCount does too. A
+// top-level null yields a nil map; any syntax error rejects the whole line,
+// as json.Unmarshal would.
 func scanLine(line []byte) (map[string]interface{}, error) {
 	raw := map[string]interface{}{}
 	null, err := jsonscan.FieldsStrict(line, func(key []byte, value jsonscan.Value) error {
@@ -53,7 +65,7 @@ func scanLine(line []byte) (map[string]interface{}, error) {
 		case string(key) == "message" && value.Kind() == '{':
 			v, err = scanMessage(value)
 		case string(key) == "data" && value.Kind() == '{':
-			v, err = scanObject(value, lineDataKeys, scanProgressRecord)
+			v, err = scanObject(value, lineDataKeys, "message", scanProgressRecord)
 		default:
 			v, err = value.Decode()
 		}
@@ -67,16 +79,16 @@ func scanLine(line []byte) (map[string]interface{}, error) {
 }
 
 func scanMessage(value jsonscan.Value) (map[string]interface{}, error) {
-	return scanObject(value, lineMessageKeys, nil)
+	return scanObject(value, lineMessageKeys, "usage", scanUsage)
 }
 
 func scanProgressRecord(value jsonscan.Value) (map[string]interface{}, error) {
-	return scanObject(value, lineProgressKeys, scanMessage)
+	return scanObject(value, lineProgressKeys, "message", scanMessage)
 }
 
 // scanObject decodes the members of the object value that keys names,
-// scanning an object-valued "message" member with message when it is set.
-func scanObject(value jsonscan.Value, keys map[string]bool, message func(jsonscan.Value) (map[string]interface{}, error)) (map[string]interface{}, error) {
+// scanning an object-valued member named nested with scan.
+func scanObject(value jsonscan.Value, keys map[string]bool, nested string, scan func(jsonscan.Value) (map[string]interface{}, error)) (map[string]interface{}, error) {
 	object := map[string]interface{}{}
 	_, err := value.Fields(func(key []byte, value jsonscan.Value) error {
 		if !keys[string(key)] {
@@ -84,8 +96,8 @@ func scanObject(value jsonscan.Value, keys map[string]bool, message func(jsonsca
 		}
 		var v interface{}
 		var err error
-		if message != nil && string(key) == "message" && value.Kind() == '{' {
-			v, err = message(value)
+		if string(key) == nested && value.Kind() == '{' {
+			v, err = scan(value)
 		} else {
 			v, err = value.Decode()
 		}
@@ -93,6 +105,44 @@ func scanObject(value jsonscan.Value, keys map[string]bool, message func(jsonsca
 		return err
 	})
 	return object, err
+}
+
+// scanUsage decodes a usage object, or the cache_creation object in one,
+// whole, keeping a token count that is not an unsigned integer as its
+// json.Number.
+func scanUsage(value jsonscan.Value) (map[string]interface{}, error) {
+	usage := map[string]interface{}{}
+	_, err := value.Fields(func(key []byte, value jsonscan.Value) error {
+		var v interface{}
+		var err error
+		switch {
+		case tokenKeys[string(key)]:
+			v, err = tokenValue(value)
+		case string(key) == "cache_creation" && value.Kind() == '{':
+			v, err = scanUsage(value)
+		default:
+			v, err = value.Decode()
+		}
+		usage[string(key)] = v
+		return err
+	})
+	return usage, err
+}
+
+// tokenValue decodes a token count, keeping a number that is not an
+// unsigned integer as its json.Number.
+func tokenValue(value jsonscan.Value) (interface{}, error) {
+	literal, err := value.Raw()
+	if err != nil {
+		return nil, err
+	}
+	v, err := jsonscan.Decode(literal)
+	if _, number := v.(float64); number && err == nil {
+		if _, err := strconv.ParseUint(string(literal), 10, 64); err != nil {
+			return json.Number(literal), nil
+		}
+	}
+	return v, err
 }
 
 // nonNullableKeys are the fields upstream skips a usage line for holding as

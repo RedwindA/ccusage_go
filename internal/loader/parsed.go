@@ -45,11 +45,12 @@ func (p *ParsedFiles) keep(path string, parsed parsedFile) {
 // parsedFile is one transcript as parseFile reads it, for loads of either
 // kind.
 type parsedFile struct {
-	// entries holds the file's usage in line order. progress marks the ones
-	// read from the record an AgentProgress line wraps, which only daily
-	// loads count.
+	// entries holds the file's usage in line order. dailyOnly marks the ones
+	// only daily loads count: those read from the record an AgentProgress
+	// line wraps, and those whose line holds isApiErrorMessage as another
+	// type than a bool.
 	entries      []types.UsageEntry
-	progress     []bool
+	dailyOnly    []bool
 	sessionNames map[string]string
 	// entryDebugMsg and dailyDebugMsg summarize the parse errors entry and
 	// daily loads see, when debugging.
@@ -63,12 +64,12 @@ func (p parsedFile) usage(daily bool) ([]types.UsageEntry, string) {
 	if daily {
 		return p.entries, p.dailyDebugMsg
 	}
-	if !slices.Contains(p.progress, true) {
+	if !slices.Contains(p.dailyOnly, true) {
 		return p.entries, p.entryDebugMsg
 	}
 	var entries []types.UsageEntry
 	for i, e := range p.entries {
-		if !p.progress[i] {
+		if !p.dailyOnly[i] {
 			entries = append(entries, e)
 		}
 	}

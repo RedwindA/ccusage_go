@@ -185,7 +185,7 @@ func TestDateBoundedReportsSkipFilesLastWrittenBeforeTheWindow(t *testing.T) {
 	now := time.Now()
 	zone := pruneNoonZone(t, now)
 	at := func(hoursAgo int) string {
-		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format(time.RFC3339Nano)
+		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	status := pruneFixture(t)
 	transcript := pruneWrite(t, status, "projects/project-a/session-now.jsonl",
@@ -237,7 +237,7 @@ func TestStatuslineTodaySkipsFilesLastWrittenADayBeforeToday(t *testing.T) {
 	zone := pruneNoonZone(t, now)
 	loc, _ := time.LoadLocation(zone)
 	at := func(hoursAgo int) string {
-		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format(time.RFC3339Nano)
+		return now.Add(-time.Duration(hoursAgo) * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	transcript := pruneWrite(t, root, "projects/project-a/session-now.jsonl",
 		pruneUsageLine(at(20), "session-now", "msg-earlier", "req-earlier", 4),
@@ -399,7 +399,7 @@ func TestStatuslineAnchorsBlocksOnlyOnEntriesInsideItsWindow(t *testing.T) {
 	root := pruneFixture(t)
 	now := time.Now()
 	since, _ := time.Parse("2006-01-02", statuslineBlockSince(now, time.UTC, 1))
-	stamp := func(at time.Time) string { return at.UTC().Format(time.RFC3339Nano) }
+	stamp := func(at time.Time) string { return at.UTC().Format("2006-01-02T15:04:05.000Z") }
 	// A chain 4 hours apart from an hour ago back to before the window.
 	var chainTimes []time.Time
 	for at := now.Add(-time.Hour); ; at = at.Add(-4 * time.Hour) {
@@ -476,7 +476,7 @@ func TestStatuslineKeepsTheCurrentBlockBeforeFutureDatedEntries(t *testing.T) {
 	root := pruneFixture(t)
 	now := time.Now()
 	at := func(hours int) string {
-		return now.Add(time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339Nano)
+		return now.Add(time.Duration(hours) * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	// A skewed clock wrote an entry eight hours ahead, after a long pause.
 	transcript := pruneWrite(t, root, "projects/project-a/session-now.jsonl",

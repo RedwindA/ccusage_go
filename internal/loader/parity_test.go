@@ -541,8 +541,12 @@ func TestLoadReturnsEntriesInTimeOrderAcrossFiles(t *testing.T) {
 // Upstream skips a usage line that holds one of its non-nullable fields as
 // null anywhere in the line (only a usage.iterations element's model may be
 // null), a non-semver version, an empty session, request, message or model
-// ID, or a token count that is not an unsigned integer; for an
-// AgentProgress line, its own session and its record's IDs.
+// ID, or a token count that is not an unsigned integer; a line its typed
+// decode rejects, for a field of another JSON type, a token count not
+// written as an integer, a speed other than standard or fast, or a missing
+// timestamp; a line whose timestamp it cannot parse; and a line without the
+// bytes "usage":{. For an AgentProgress line, it checks the line's own
+// session and its record's fields.
 func TestClaudeLinesUpstreamRejectsAreSkipped(t *testing.T) {
 	base := `{"type":"assistant","timestamp":"2026-09-12T04:38:42.296Z","version":"2.0.0","sessionId":"s","requestId":"r","cwd":"/w","isApiErrorMessage":false,"costUSD":0.5,"message":{"id":"m","model":"claude-sonnet-4-5","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"speed":"standard","cache_creation":{"ephemeral_5m_input_tokens":10}}}}`
 	progress := `{"type":"progress","timestamp":"2026-09-12T04:38:42.296Z","sessionId":"s","data":{"type":"agent_progress","message":{"timestamp":"2026-09-12T04:38:41.000Z","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}}}`
@@ -578,33 +582,95 @@ func TestClaudeLinesUpstreamRejectsAreSkipped(t *testing.T) {
 		{base, `"output_tokens":20`, `"output_tokens":2.5`, false},
 		{base, `"cache_read_input_tokens":20`, `"cache_read_input_tokens":-1`, false},
 		{base, `"ephemeral_5m_input_tokens":10`, `"ephemeral_5m_input_tokens":-10`, false},
+		{base, `"speed":"standard"`, `"speed":"fast"`, true},
+		{base, `"speed":"standard"`, `"speed":"priority"`, false},
+		{base, `"speed":"standard"`, `"speed":"Fast"`, false},
+		{base, `"speed":"standard"`, `"speed":1`, false},
+		{base, `"input_tokens":10`, `"input_tokens":10.0`, false},
+		{base, `"input_tokens":10`, `"input_tokens":1e1`, false},
+		{base, `"input_tokens":10`, `"input_tokens":-0`, false},
+		{base, `"input_tokens":10`, `"input_tokens":18446744073709551616`, false},
+		{base, `"output_tokens":20`, `"output_tokens":"20"`, false},
+		{base, `"cache_read_input_tokens":20`, `"cache_read_input_tokens":20.0`, false},
+		{base, `"ephemeral_5m_input_tokens":10`, `"ephemeral_5m_input_tokens":1E1`, false},
+		{base, `"cache_creation":{"ephemeral_5m_input_tokens":10}`, `"cache_creation":null`, true},
+		{base, `"cache_creation":{"ephemeral_5m_input_tokens":10}`, `"cache_creation":5`, false},
+		{base, `"version":"2.0.0"`, `"version":2`, false},
+		{base, `"sessionId":"s"`, `"sessionId":5`, false},
+		{base, `"requestId":"r"`, `"requestId":5`, false},
+		{base, `"id":"m"`, `"id":5`, false},
+		{base, `"model":"claude-sonnet-4-5"`, `"model":5`, false},
+		{base, `"costUSD":0.5`, `"costUSD":1`, true},
+		{base, `"costUSD":0.5`, `"costUSD":"0.5"`, false},
+		{base, `"cwd":"/w"`, `"cwd":5,"isSidechain":true`, true},
+		{base, `"cwd":"/w"`, `"cwd":"/w","isSidechain":"true"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42Z"`, true},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42+00:00"`, true},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42.296-07:00"`, true},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42.12Z"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42.123456Z"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42.123456+00:00"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12T04:38:42.1234Z"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":"2026-09-12 04:38:42.296Z"`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":1789000000`, false},
+		{base, `"timestamp":"2026-09-12T04:38:42.296Z",`, ``, false},
+		{base, `"usage":{`, `"usage": {`, false},
+		{base, `"usage":{`, `"usage" :{`, false},
 		{progress, "", "", true},
 		{progress, `"usage":{`, iterations, true},
 		{progress, `"sessionId":"s"`, `"sessionId":""`, false},
 		{progress, `"requestId":"r"`, `"requestId":""`, false},
 		{progress, `"model":"claude-sonnet-4-5"`, `"model":""`, false},
 		{progress, `"input_tokens":10`, `"input_tokens":-5`, false},
+		{progress, `"timestamp":"2026-09-12T04:38:42.296Z"`, `"timestamp":5,"version":5,"isSidechain":5`, true},
+		{progress, `"timestamp":"2026-09-12T04:38:41.000Z"`, `"timestamp":5`, false},
+		{progress, `"timestamp":"2026-09-12T04:38:41.000Z"`, `"timestamp":"2026-09-12T04:38:41.000000Z"`, false},
+		{progress, `"sessionId":"s"`, `"sessionId":5`, false},
+		{progress, `"requestId":"r"`, `"requestId":"r","costUSD":"0.5"`, false},
+		{progress, `"requestId":"r"`, `"requestId":"r","isSidechain":"true"`, false},
+		{progress, `"input_tokens":10`, `"input_tokens":10.0`, false},
+		{progress, `"input_tokens":10`, `"speed":"priority","input_tokens":10`, false},
+		{progress, `"usage":{`, `"usage": {`, false},
 	} {
 		line := strings.Replace(tc.line, tc.old, tc.new, 1)
-		p := filepath.Join(t.TempDir(), "projects/p/s.jsonl")
-		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(line+"\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
 		want := 0
 		if tc.kept {
 			want = 1
 		}
-		daily := New()
-		daily.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
-		if got, _ := daily.LoadParallel(context.Background(), []string{p}); len(got) != want {
-			t.Errorf("%s: daily loader read %d entries, want %d", line, len(got), want)
+		daily, entry := loadClaudeLine(t, line)
+		if daily != want {
+			t.Errorf("%s: daily loader read %d entries, want %d", line, daily, want)
 		}
 		// Only the daily loader reads AgentProgress lines.
-		if got, _ := New().LoadParallel(context.Background(), []string{p}); tc.line == base && len(got) != want {
-			t.Errorf("%s: entry loader read %d entries, want %d", line, len(got), want)
+		if tc.line == base && entry != want {
+			t.Errorf("%s: entry loader read %d entries, want %d", line, entry, want)
 		}
 	}
+}
+
+// Upstream's entry loader, which serves sessions and blocks, decodes
+// isApiErrorMessage as a bool; its daily loader does not read it.
+func TestClaudeEntryLoadsSkipANonBoolAPIErrorFlag(t *testing.T) {
+	line := `{"type":"assistant","timestamp":"2026-09-12T04:38:42.296Z","sessionId":"s","requestId":"r","isApiErrorMessage":"yes","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}`
+	if daily, entry := loadClaudeLine(t, line); daily != 1 || entry != 0 {
+		t.Errorf("daily loader read %d entries, entry loader %d; want 1 and 0", daily, entry)
+	}
+}
+
+// loadClaudeLine reads a transcript holding line with a daily and an entry
+// loader and returns how many entries each read.
+func loadClaudeLine(t *testing.T, line string) (daily, entry int) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "projects/p/s.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(line+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	l := New()
+	l.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
+	dailyEntries, _ := l.LoadParallel(context.Background(), []string{p})
+	entryEntries, _ := New().LoadParallel(context.Background(), []string{p})
+	return len(dailyEntries), len(entryEntries)
 }

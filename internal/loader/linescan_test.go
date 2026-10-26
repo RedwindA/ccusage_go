@@ -1,15 +1,18 @@
 package loader
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
 // projectLine is the reference behavior scanLine must match: a full
-// json.Unmarshal restricted to the keys the loader reads.
+// json.Unmarshal restricted to the keys the loader reads, with a message's
+// usage token counts that are not unsigned integers kept as json.Numbers.
 func projectLine(line []byte) (map[string]interface{}, error) {
 	var full map[string]interface{}
 	if err := json.Unmarshal(line, &full); err != nil {
@@ -17,6 +20,15 @@ func projectLine(line []byte) (map[string]interface{}, error) {
 	}
 	if full == nil {
 		return nil, nil
+	}
+	var numbers map[string]interface{}
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if err := decoder.Decode(&numbers); err != nil {
+		return nil, err
+	}
+	for _, path := range [][]string{{"message", "usage"}, {"data", "message", "message", "usage"}} {
+		numberTokens(member(full, path), member(numbers, path))
 	}
 	out := filterKeys(full, lineTopKeys)
 	if message, ok := out["message"].(map[string]interface{}); ok {
@@ -36,6 +48,32 @@ func projectLine(line []byte) (map[string]interface{}, error) {
 	return out, nil
 }
 
+// member returns the object at path in object, or nil.
+func member(object map[string]interface{}, path []string) map[string]interface{} {
+	for _, key := range path {
+		object, _ = object[key].(map[string]interface{})
+	}
+	return object
+}
+
+// numberTokens replaces the token counts in usage, and in its cache_creation
+// objects, that numbers, the same object decoded with json.Numbers, holds as
+// other than unsigned integers with those json.Numbers.
+func numberTokens(usage, numbers map[string]interface{}) {
+	for key, n := range numbers {
+		if literal, ok := n.(json.Number); ok && tokenKeys[key] {
+			if _, err := strconv.ParseUint(string(literal), 10, 64); err != nil {
+				usage[key] = literal
+			}
+		}
+		if nested, ok := n.(map[string]interface{}); ok && key == "cache_creation" {
+			if object, ok := usage[key].(map[string]interface{}); ok {
+				numberTokens(object, nested)
+			}
+		}
+	}
+}
+
 // filterKeys returns the members of object that keys names.
 func filterKeys(object map[string]interface{}, keys map[string]bool) map[string]interface{} {
 	out := map[string]interface{}{}
@@ -52,6 +90,9 @@ var scanLineSeeds = []string{
 	`{"type":"custom-title","sessionId":"s","customTitle":"kept","CustomTitle":false}`,
 	`{"cwd":"/a","cwd":"/b","type":"user"}`,
 	`{"cwd":"/escaped-key","message":{"usage":{"input_tokens":1,"output_tokens":1}}}`,
+	`{"message":{"usage":{"input_tokens":10.0,"output_tokens":-0,"cache_read_input_tokens":1e1,"cache_creation_input_tokens":18446744073709551616,"server_tool_use":{"web_search_requests":1.0},"iterations":[{"input_tokens":2.0}],"cache_creation":{"ephemeral_5m_input_tokens":1E1,"ephemeral_1h_input_tokens":3,"cache_creation":{"input_tokens":0.5}}}}}`,
+	`{"message":{"usage":{"input_tokens":"10","output_tokens":[1.0],"cache_creation":5}},"message":{"usage":{"input_tokens":1.5}}}`,
+	`{"type":"progress","data":{"message":{"message":{"usage":{"input_tokens":10.0,"cache_creation":{"ephemeral_1h_input_tokens":-1}}}}}}`,
 	`{"cwd":"café 😀","type":"user"}`,
 	"{\"cwd\":\"bad utf8 \xff\xfe\",\"type\":\"user\"}",
 	`{"message":"not an object","type":"assistant"}`,

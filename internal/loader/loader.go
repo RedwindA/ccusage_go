@@ -329,7 +329,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 	session := fileSessionID(path)
 
 	var entries []types.UsageEntry
-	var progress []bool
+	var dailyOnly []bool
 	lineNum := 0
 	// Entry loads count an AgentProgress line as a parse error where daily
 	// loads read the record it wraps.
@@ -437,9 +437,15 @@ func (l *Loader) parseFile(path string) parsedFile {
 				continue // Skip entries that fail to parse
 			}
 		}
-		if hasNullField(line) {
+		// Upstream reads only the lines holding the bytes "usage":{, which a
+		// line written with a space after each colon, as Python's json.dumps
+		// writes it, does not hold.
+		if !bytes.Contains(line, []byte(`"usage":{`)) || hasNullField(line) {
 			continue
 		}
+		// Upstream's entry loader decodes isApiErrorMessage as a bool, where
+		// its daily loader does not read it.
+		entrySkips := fromProgress || !typed[bool](raw["isApiErrorMessage"])
 		entry.SourceFile = path
 		if apiError, _ := raw["isApiErrorMessage"].(bool); apiError && !fromProgress {
 			if reset, ok := usageLimitReset(line); ok {
@@ -469,7 +475,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 			}
 			clearRawExceptKeys(&candidate, rawRetainKeys)
 			entries = append(entries, candidate)
-			progress = append(progress, fromProgress)
+			dailyOnly = append(dailyOnly, entrySkips)
 		}
 	}
 
@@ -481,7 +487,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 		parsed.err = types.LoaderError{Path: path, Err: readErr}
 		return parsed
 	}
-	parsed.entries, parsed.progress, parsed.sessionNames = entries, progress, sessionNameMap
+	parsed.entries, parsed.dailyOnly, parsed.sessionNames = entries, dailyOnly, sessionNameMap
 	return parsed
 }
 
@@ -522,36 +528,8 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 		entry.ID = id
 	}
 
-	// Parse timestamp - try multiple formats
 	if ts, ok := raw["timestamp"].(string); ok {
-		// Try multiple time formats
-		formats := []string{
-			time.RFC3339,
-			time.RFC3339Nano,
-			"2006-01-02T15:04:05.999999999Z07:00",
-			"2006-01-02T15:04:05Z",
-			"2006-01-02T15:04:05.999Z",
-		}
-
-		var parsedTime time.Time
-		var parseErr error
-		for _, format := range formats {
-			parsedTime, parseErr = time.Parse(format, ts)
-			if parseErr == nil {
-				entry.Timestamp = parsedTime
-				break
-			}
-		}
-
-		// If all formats fail, try parsing as Unix timestamp
-		if parseErr != nil {
-			if tsFloat, ok := raw["timestamp"].(float64); ok {
-				entry.Timestamp = time.Unix(int64(tsFloat), 0)
-			}
-		}
-	} else if tsFloat, ok := raw["timestamp"].(float64); ok {
-		// Handle numeric timestamp
-		entry.Timestamp = time.Unix(int64(tsFloat), 0)
+		entry.Timestamp = parseTimestamp(ts)
 	}
 
 	// Apply timezone conversion and set DateKey (matching TypeScript's formatDate)
@@ -1013,12 +991,29 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	if !ok {
 		return fmt.Errorf("missing required message.usage object")
 	}
+	// Upstream decodes a usage line into typed fields: one holding another
+	// JSON type, a speed other than standard or fast, or no timestamp is not
+	// usage. A null passes here; hasNullField drops the line.
+	if _, ok := raw["timestamp"].(string); !ok {
+		return fmt.Errorf("timestamp must be a string")
+	}
+	for _, v := range []interface{}{raw["sessionId"], raw["requestId"], raw["version"], message["id"], message["model"]} {
+		if !typed[string](v) {
+			return fmt.Errorf("session, request, message or model ID or version must be a string")
+		}
+	}
+	if !typed[float64](raw["costUSD"]) || !typed[bool](raw["isSidechain"]) || !typed[map[string]interface{}](usage["cache_creation"]) {
+		return fmt.Errorf("costUSD, isSidechain or usage.cache_creation has the wrong type")
+	}
+	switch usage["speed"] {
+	case nil, "standard", "fast":
+	default:
+		return fmt.Errorf("speed %v is neither standard nor fast", usage["speed"])
+	}
 	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
 		entry.Raw["cache_creation"] = nested
 	}
-	if speed, ok := usage["speed"].(string); ok && (speed == "fast" || speed == "standard") {
-		entry.Speed = speed
-	}
+	entry.Speed, _ = usage["speed"].(string)
 	if tier, ok := usage["service_tier"].(string); ok {
 		entry.Raw["service_tier"] = tier
 	}
@@ -1159,10 +1154,36 @@ func usageLimitReset(line []byte) (time.Time, bool) {
 }
 
 // tokenCount reports whether v is a token count upstream reads: a
-// nonnegative integer.
+// nonnegative integer. scanLine keeps one not written as an unsigned
+// integer as a json.Number, which is not one.
 func tokenCount(v interface{}) bool {
 	n, ok := v.(float64)
 	return ok && n >= 0 && n == math.Trunc(n)
+}
+
+// typed reports whether v, a field upstream decodes as an optional T, is
+// missing, null or a T.
+func typed[T any](v interface{}) bool {
+	_, ok := v.(T)
+	return ok || v == nil
+}
+
+// parseTimestamp parses a transcript timestamp as upstream's
+// parse_ts_timestamp does: RFC 3339 with no fraction of a second or exactly
+// three digits of one, and a Z or ±hh:mm offset. It returns the zero time
+// for any other form.
+func parseTimestamp(ts string) time.Time {
+	var layout string
+	switch {
+	case (len(ts) == 20 || len(ts) == 25) && strings.IndexByte("Z+-", ts[19]) >= 0:
+		layout = "2006-01-02T15:04:05Z07:00"
+	case (len(ts) == 24 || len(ts) == 29) && ts[19] == '.':
+		layout = "2006-01-02T15:04:05.000Z07:00"
+	default:
+		return time.Time{}
+	}
+	t, _ := time.Parse(layout, ts)
+	return t
 }
 
 // semverPrefix reports whether version starts with major.minor.patch
