@@ -93,6 +93,26 @@ func TestGeminiDistinguishesDirectAndStatsCacheSemantics(t *testing.T) {
 	requireTokens(t, entries[1], 100, 20, 40, 0, 170)
 	requireTokens(t, entries[2], 60, 20, 40, 0, 130)
 }
+
+// Like upstream, totalTokens is a recorded total, or the tokens shown when
+// they exceed it, so thoughts the total covers are priced as output but not
+// counted again; without a recorded total they count.
+func TestGeminiTotalTokensKeepTheRecordedTotal(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "chat.json", `{"sessionId":"a","messages":[{"type":"gemini","id":"m1","model":"gemini-2.5-pro","timestamp":"2026-01-02T00:00:00Z","tokens":{"input":1000,"output":100,"thoughts":50,"total":1100}},{"type":"gemini","id":"m2","model":"gemini-2.5-pro","timestamp":"2026-01-02T00:01:00Z","tokens":{"input":1000,"output":100,"thoughts":50,"total":900}},{"type":"gemini","id":"m3","model":"gemini-2.5-pro","timestamp":"2026-01-02T00:02:00Z","tokens":{"input":1000,"output":100,"thoughts":50}}]}`)
+	entries := loadTest(t, "gemini", root)
+	if len(entries) != 3 {
+		t.Fatal(entries)
+	}
+	requireTokens(t, entries[0], 1000, 100, 0, 0, 1100)
+	requireTokens(t, entries[1], 1000, 100, 0, 0, 1100)
+	requireTokens(t, entries[2], 1000, 100, 0, 0, 1150)
+	for _, e := range entries {
+		if e.Raw["extra_output_tokens"] != 50 {
+			t.Fatalf("thoughts priced: %v", e.Raw["extra_output_tokens"])
+		}
+	}
+}
 func TestGeminiJSONLReplacesPartialMessage(t *testing.T) {
 	root := t.TempDir()
 	fixture(t, root, "chat.jsonl", `{"sessionId":"a","model":"gemini-2.5-pro"}

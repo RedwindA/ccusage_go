@@ -58,6 +58,16 @@ func geminiEvent(p, session, model string, t time.Time, tokens object, direct bo
 	}
 	e.InputTokens = input + tool
 	total(&e, declared, e.ReasoningTokens)
+	// Like upstream, a recorded total is shown as is unless the input,
+	// output and cache exceed it: thoughts it covers are priced but not
+	// counted again.
+	_, recorded := tokens["total"].(float64)
+	if _, ok := tokens["total_tokens"].(float64); ok {
+		recorded = true
+	}
+	if recorded {
+		e.TotalTokens = max(declared, e.InputTokens+e.OutputTokens+e.CacheReadInputTokens)
+	}
 	return e
 }
 func loadGemini(p string) ([]types.UsageEntry, error) {
