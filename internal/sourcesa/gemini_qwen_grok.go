@@ -91,6 +91,11 @@ func loadGemini(p string) ([]types.UsageEntry, error) {
 			t = parsed
 		}
 		e := geminiEvent(p, session, model, t, u, true)
+		// Like upstream's build_event, a record without tokens is no event,
+		// so it does not replace the one recorded earlier under its id.
+		if e.TotalTokens == 0 && e.ReasoningTokens == 0 {
+			return
+		}
 		e.ID = str(r["id"])
 		if jsonl && e.ID != "" {
 			if i, ok := ids[e.ID]; ok {

@@ -105,6 +105,23 @@ malformed
 	}
 	requireTokens(t, entries[0], 10, 7, 0, 0, 17)
 }
+
+// As upstream, a record without tokens is no event, so a later zero-token
+// record of a message keeps the usage recorded for it earlier.
+func TestGeminiJSONLZeroRecordKeepsEarlierUsage(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "chat.jsonl", `{"sessionId":"a","model":"gemini-2.5-pro"}
+{"type":"gemini","id":"same","timestamp":"2026-01-02T00:00:00Z","tokens":{"input":10,"output":2}}
+{"type":"gemini","id":"same","timestamp":"2026-01-02T00:00:01Z","tokens":{"input":0,"output":0}}
+{"type":"gemini","id":"later","timestamp":"2026-01-02T00:00:02Z","tokens":{"input":0,"output":0}}
+{"type":"gemini","id":"later","timestamp":"2026-01-02T00:00:03Z","tokens":{"input":5,"output":1}}`)
+	entries := loadTest(t, "gemini", root)
+	if len(entries) != 2 {
+		t.Fatal(entries)
+	}
+	requireTokens(t, entries[0], 10, 2, 0, 0, 12)
+	requireTokens(t, entries[1], 5, 1, 0, 0, 6)
+}
 func TestQwenNativeChatLayoutAndIndependentCache(t *testing.T) {
 	root := t.TempDir()
 	record := `{"type":"assistant","sessionId":"s","model":"qwen3-coder","timestamp":"2026-01-02T00:00:00Z","usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"cachedContentTokenCount":40,"thoughtsTokenCount":10}}`
