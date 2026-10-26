@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/RedwindA/ccusage_go/internal/pricing"
 	"github.com/RedwindA/ccusage_go/internal/types"
 )
 
@@ -142,11 +143,12 @@ func (c *Calculator) createBlock(startTime time.Time, entries []types.UsageEntry
 		cacheCreateCostUSD += entry.CacheCreateCost
 		cacheReadCostUSD += entry.CacheReadCost
 		if model := entry.Model; model != "" && model != "<synthetic>" {
-			// As in the other reports, Claude's Fast usage is its own model.
+			// As in the other reports, Claude's Fast usage is its own model,
+			// and models are listed under their aliases.
 			if entry.Agent == "claude" && entry.Speed == "fast" {
 				model += "-fast"
 			}
-			modelMap[model] = true
+			modelMap[pricing.ResolveModelName(model)] = true
 		}
 	}
 

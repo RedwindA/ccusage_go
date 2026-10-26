@@ -98,3 +98,17 @@ func TestBlocksListFastClaudeUsageAsItsOwnModel(t *testing.T) {
 	require.Len(t, blocks, 1)
 	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6", "x-ai/grok-4.1-fast-fast", "x-ai/grok-4.1-fast"}, blocks[0].Models)
 }
+
+// As in the other reports and upstream, blocks list a model under its
+// CCUSAGE_MODEL_ALIASES name.
+func TestBlocksListModelsUnderTheirAliases(t *testing.T) {
+	t.Setenv("CCUSAGE_MODEL_ALIASES", "private-alpha=claude-opus-4-6")
+	ts := time.Now().Add(-time.Hour)
+	entries := []types.UsageEntry{
+		{Agent: "claude", Timestamp: ts, Model: "private-alpha", Speed: "fast", InputTokens: 10},
+		{Agent: "claude", Timestamp: ts.Add(5 * time.Minute), Model: "private-alpha", InputTokens: 10},
+	}
+	blocks := New(nil).IdentifySessionBlocks(entries, 5)
+	require.Len(t, blocks, 1)
+	assert.ElementsMatch(t, []string{"claude-opus-4-6-fast", "claude-opus-4-6"}, blocks[0].Models)
+}
