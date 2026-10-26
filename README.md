@@ -231,6 +231,8 @@ JSON through an installed `jq` executable.
 
 In `--mode auto`, a JSON `modelBreakdowns` entry carries an optional `storedCost`: the part of its `cost` taken from costs the agent recorded (such as Claude's `costUSD`) rather than calculated from pricing. It is omitted when no recorded cost was used, never appears in calculate or display mode, and is removed by `--no-cost`.
 
+Unlike ccusage, a Claude cost calculated from tokens (every line in `--mode calculate`, and lines without a recorded `costUSD` in `--mode auto`) also charges Anthropic's $0.01 for each web search the line records in `usage.server_tool_use.web_search_requests`; ccusage prices tokens only.
+
 Configuration is discovered in `.ccusage/ccusage.json`, then the Claude config
 locations, or selected with `--config`. Explicit CLI arguments take precedence.
 For example:

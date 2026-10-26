@@ -311,3 +311,5 @@ Codex 報表同時讀取 `sessions/` 與 `archived_sessions/` 下的一般 `.jso
 Antigravity 從 `~/.gemini/antigravity`、`~/.gemini/antigravity-cli`、`~/.gemini/antigravity-ide`、`~/.gemini/antigravity-backup`、`~/.gemini/antigravity-acp`（ACP 模式）與 `~/.config/antigravity` 的 `conversations/` 目錄讀取；沒有 `conversations/` 的預設根目錄會略過。可用 `ANTIGRAVITY_DATA_DIR` 或 `--data-path` 指定其他根目錄。
 
 `--mode auto` 時，JSON `modelBreakdowns` 項目會多一個選用的 `storedCost` 欄位，表示 `cost` 中取自代理程式記錄成本（例如 Claude 的 `costUSD`）而非依定價計算的部分；未使用記錄成本時省略，calculate 與 display 模式不會輸出，`--no-cost` 也會移除。
+
+與 ccusage 不同，依 token 計算的 Claude 成本（`--mode calculate` 的每一行，以及 `--mode auto` 中沒有記錄 `costUSD` 的行）還會依 Anthropic 的價格，為該行 `usage.server_tool_use.web_search_requests` 記錄的每次網頁搜尋計 $0.01；ccusage 只計算 token。
