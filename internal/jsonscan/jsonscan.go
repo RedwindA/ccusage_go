@@ -131,15 +131,6 @@ func Decode(data []byte) (interface{}, error) {
 	return v, s.end()
 }
 
-// Unique reports whether no object in data, one valid JSON value, repeats an
-// (unescaped) key, as decoders that reject a duplicate member, such as
-// Serde's, require.
-func Unique(data []byte) bool {
-	s := scanner{b: data, unique: true, keys: make([][]byte, 0, 32)}
-	s.ws()
-	return s.skip() == nil
-}
-
 // DecodeObject decodes data as json.Unmarshal into map[string]interface{}
 // would: a top-level null yields a nil map, other non-objects are errors.
 func DecodeObject(data []byte) (map[string]interface{}, error) {
@@ -168,10 +159,6 @@ type scanner struct {
 	// strict makes skip reject numbers outside float64 range, as decoding
 	// into interface{} does; decode always parses, so it always checks.
 	strict bool
-	// unique makes object reject a repeated key; keys holds those of the
-	// objects being scanned, innermost last.
-	unique bool
-	keys   [][]byte
 }
 
 func (s *scanner) fail(msg string) error { return &SyntaxError{Offset: s.i, msg: msg} }
@@ -217,19 +204,10 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 		s.depth--
 		return nil
 	}
-	outer := len(s.keys)
 	for {
 		key, err := s.key()
 		if err != nil {
 			return err
-		}
-		if s.unique {
-			for _, k := range s.keys[outer:] {
-				if string(k) == string(key) {
-					return s.fail("repeated object key")
-				}
-			}
-			s.keys = append(s.keys, key)
 		}
 		start := s.i
 		if visit != nil {
@@ -243,7 +221,6 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 			}
 		}
 		if done, err := s.next('}'); done || err != nil {
-			s.keys = s.keys[:outer]
 			return err
 		}
 	}

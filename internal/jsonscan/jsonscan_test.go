@@ -1,7 +1,6 @@
 package jsonscan
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -15,8 +14,6 @@ import (
 var seeds = []string{
 	`{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"hi \"there\" \\ é \n"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
 	`{"a":1,"a":2,"A":3}`,
-	`{"a":{"b":1,"c":[{"d":1},{"d":2}]},"b":{"\u0062":1,"b":2}}`,
-	`{"a":[{"x":1,"y":{"x":2}}],"b":{"x":1},"x":3}`,
 	`{"cwd":"/x","k\"q":1,"":0}`,
 	`"café 😀 \ud83d x \ude00 \ud83dA \/ \b\f\n\r\t"`,
 	"\"bad utf8 \xff\xfe \xe2\x82\"",
@@ -134,50 +131,6 @@ func check(t *testing.T, data []byte) {
 	_, skipErr := Fields(data, func([]byte, Value) error { return nil })
 	if (skipErr != nil) != (wantRawErr != nil) {
 		t.Fatalf("Fields(%q) skipping: error mismatch: got %v, encoding/json %v", data, skipErr, wantRawErr)
-	}
-
-	if wantErr == nil && Unique(data) == repeats(data) {
-		t.Fatalf("Unique(%q) = %v", data, Unique(data))
-	}
-}
-
-// repeats reports whether an object in data, valid JSON, repeats a key as
-// encoding/json unquotes it.
-func repeats(data []byte) bool {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	// keys holds each open container's keys, nil for an array; key is
-	// whether an open object's next token is a key.
-	var keys []map[string]bool
-	var key []bool
-	for {
-		token, err := decoder.Token()
-		if err != nil {
-			return false
-		}
-		n := len(keys)
-		if name, ok := token.(string); ok && n > 0 && key[n-1] {
-			if keys[n-1][name] {
-				return true
-			}
-			keys[n-1][name], key[n-1] = true, false
-			continue
-		}
-		switch token {
-		case json.Delim('{'):
-			keys, key = append(keys, map[string]bool{}), append(key, true)
-		case json.Delim('['):
-			keys, key = append(keys, nil), append(key, false)
-		case json.Delim('}'), json.Delim(']'):
-			keys, key = keys[:n-1], key[:n-1]
-			if n > 1 {
-				key[n-2] = keys[n-2] != nil
-			}
-		default:
-			if n > 0 {
-				key[n-1] = keys[n-1] != nil
-			}
-		}
 	}
 }
 
