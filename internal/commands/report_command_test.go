@@ -397,6 +397,43 @@ func TestClaudeSyntheticEntriesCountWithoutAModel(t *testing.T) {
 	}
 }
 
+// Like upstream, a <synthetic> entry has no model whatever its speed, so a
+// Fast one is no <synthetic>-fast model.
+func TestClaudeFastSyntheticEntriesListNoModel(t *testing.T) {
+	isolateSourceHomes(t)
+	root := t.TempDir()
+	sourceCLIWrite(t, filepath.Join(root, "projects/p/s.jsonl"), strings.Join([]string{
+		`{"timestamp":"2026-10-20T10:00:00.000Z","sessionId":"s","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-6","usage":{"input_tokens":1000,"output_tokens":100,"speed":"fast"}}}`,
+		`{"timestamp":"2026-10-20T10:01:00.000Z","sessionId":"s","isApiErrorMessage":true,"message":{"id":"m2","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"speed":"fast"}}}`,
+	}, "\n"))
+	want := []any{"claude-opus-4-6-fast"}
+	for _, report := range [][]string{{"claude", "daily"}, {"claude", "session"}, {"daily"}} {
+		payload := sourceCLIJSON(t, append(report, "--data-path", root, "--timezone", "UTC", "--offline", "--json", "--breakdown")...)
+		rows, _ := payload["daily"].([]any)
+		if report[len(report)-1] == "session" {
+			rows = payload["sessions"].([]any)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("%v: %v", report, payload)
+		}
+		row := rows[0].(map[string]any)
+		var breakdowns []any
+		for _, model := range row["modelBreakdowns"].([]any) {
+			breakdowns = append(breakdowns, model.(map[string]any)["modelName"])
+		}
+		if !reflect.DeepEqual(row["modelsUsed"], want) || !reflect.DeepEqual(breakdowns, want) {
+			t.Errorf("%v: models %v, breakdowns %v, want %v", report, row["modelsUsed"], breakdowns, want)
+		}
+	}
+	var models []any
+	for _, row := range sourceCLIJSON(t, "claude", "model", "--data-path", root, "--timezone", "UTC", "--offline", "--json")["models"].([]any) {
+		models = append(models, row.(map[string]any)["model"])
+	}
+	if !reflect.DeepEqual(models, want) {
+		t.Errorf("claude model: %v, want %v", models, want)
+	}
+}
+
 // The model report lists no <synthetic> model: usage of a <synthetic> entry
 // counts as unknown, and an API error line without usage lists nothing.
 func TestClaudeModelReportListsNoSyntheticModel(t *testing.T) {

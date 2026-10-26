@@ -249,8 +249,9 @@ func displayModel(e types.UsageEntry) string {
 		model = "unknown"
 	}
 	// Claude's Fast usage is its own <model>-fast model, as upstream's loader
-	// names it, even when model already ends in -fast.
-	if e.Agent == "claude" && e.Speed == "fast" {
+	// names it, even when model already ends in -fast. A <synthetic> entry
+	// has no model to name.
+	if e.Agent == "claude" && e.Speed == "fast" && model != "<synthetic>" {
 		model += "-fast"
 	}
 	format, _ := e.Raw["source_format"].(string)
