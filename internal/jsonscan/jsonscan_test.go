@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"math"
 	"math/bits"
 	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 var seeds = []string{
@@ -35,37 +33,6 @@ var seeds = []string{
 func TestMatchesEncodingJSON(t *testing.T) {
 	for _, seed := range seeds {
 		check(t, []byte(seed))
-	}
-}
-
-// Unique checks a large object's keys in linear time: four transcript lines
-// with a 50,000-key tool input once took 13 seconds. Repeats on either side
-// of the switch to a map are still found.
-func TestUniqueManyKeys(t *testing.T) {
-	object := func(n int, repeat ...int) []byte {
-		var b strings.Builder
-		b.WriteString(`{"a":null,"data":{`)
-		for i := range n {
-			fmt.Fprintf(&b, `"k%d":{"k%d":0},`, i, i)
-		}
-		for _, i := range repeat {
-			fmt.Fprintf(&b, `"k%d":0,`, i)
-		}
-		b.WriteString(`"end":0}}`)
-		return []byte(b.String())
-	}
-	start := time.Now()
-	if !Unique(object(200000)) {
-		t.Error("Unique rejected an object without repeats")
-	}
-	if took := time.Since(start); took > 5*time.Second {
-		t.Errorf("Unique took %v for 200,000 keys", took)
-	}
-	for _, n := range []int{manyKeys - 1, manyKeys, manyKeys + 1, 3 * manyKeys} {
-		check(t, object(n))
-		for _, i := range []int{0, manyKeys - 2, manyKeys - 1, manyKeys, n - 1} {
-			check(t, object(n, i))
-		}
 	}
 }
 

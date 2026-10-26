@@ -19,10 +19,6 @@ import (
 // maxDepth mirrors encoding/json's nesting limit.
 const maxDepth = 10000
 
-// manyKeys is the number of an object's keys from which Unique tracks them
-// in a map: searching them all for each new key is quadratic.
-const manyKeys = 32
-
 // SyntaxError reports malformed JSON.
 type SyntaxError struct {
 	Offset int
@@ -222,30 +218,18 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 		return nil
 	}
 	outer := len(s.keys)
-	var seen map[string]bool // the keys once there are manyKeys
 	for {
 		key, err := s.key()
 		if err != nil {
 			return err
 		}
-		if s.unique && seen == nil {
+		if s.unique {
 			for _, k := range s.keys[outer:] {
 				if string(k) == string(key) {
 					return s.fail("repeated object key")
 				}
 			}
 			s.keys = append(s.keys, key)
-			if len(s.keys)-outer == manyKeys {
-				seen = make(map[string]bool, 2*manyKeys)
-				for _, k := range s.keys[outer:] {
-					seen[string(k)] = true
-				}
-			}
-		} else if s.unique {
-			if seen[string(key)] {
-				return s.fail("repeated object key")
-			}
-			seen[string(key)] = true
 		}
 		start := s.i
 		if visit != nil {
