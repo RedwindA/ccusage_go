@@ -122,6 +122,27 @@ func TestGeminiJSONLZeroRecordKeepsEarlierUsage(t *testing.T) {
 	requireTokens(t, entries[0], 10, 2, 0, 0, 12)
 	requireTokens(t, entries[1], 5, 1, 0, 0, 6)
 }
+
+// Like upstream's deserialize_optional_u64_lossy, a Codex token count is an
+// unsigned integer or a string holding one; any other value, such as
+// 1000.0, 1e1 or -1, falls through to the next alias.
+func TestCodexTokenCountsReadLikeUpstream(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "sessions/s.jsonl", `{"type":"turn_context","payload":{"model":"gpt-5"}}
+{"timestamp":"2026-09-20T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":" 1000 ","cached_input_tokens":"+100","output_tokens":"50"}}}}
+{"timestamp":"2026-09-20T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000.0,"prompt_tokens":7,"output_tokens":1e1,"completion_tokens":"3","reasoning_output_tokens":-1,"reasoning_tokens":"1.5"}}}}
+{"timestamp":"2026-09-20T00:00:03Z","type":"response_item","data":{"usage":{"input_tokens":"20","output_tokens":2}}}`)
+	entries := loadTest(t, "codex", root)
+	if len(entries) != 3 {
+		t.Fatal(entries)
+	}
+	requireTokens(t, entries[0], 900, 50, 100, 0, 1050)
+	requireTokens(t, entries[1], 7, 3, 0, 0, 10)
+	requireTokens(t, entries[2], 20, 2, 0, 0, 22)
+	if entries[1].ReasoningTokens != 0 {
+		t.Fatal(entries[1])
+	}
+}
 func TestQwenNativeChatLayoutAndIndependentCache(t *testing.T) {
 	root := t.TempDir()
 	record := `{"type":"assistant","sessionId":"s","model":"qwen3-coder","timestamp":"2026-01-02T00:00:00Z","usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"cachedContentTokenCount":40,"thoughtsTokenCount":10}}`

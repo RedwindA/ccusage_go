@@ -7,6 +7,7 @@ package jsonscan
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"unicode"
@@ -78,6 +79,24 @@ func (v Value) Raw() ([]byte, error) {
 
 // Decode consumes the value, decoding it as json.Unmarshal into interface{}.
 func (v Value) Decode() (interface{}, error) { return v.s.decode() }
+
+// DecodeUnsigned is Decode, except that a number not written as an unsigned
+// integer, such as 10.0, 1e1, -0 or one past 2^64-1, stays its json.Number,
+// for callers standing in for a decoder that reads integers only from those,
+// such as Serde's u64.
+func (v Value) DecodeUnsigned() (interface{}, error) {
+	literal, err := v.Raw()
+	if err != nil {
+		return nil, err
+	}
+	d, err := Decode(literal)
+	if _, number := d.(float64); number && err == nil {
+		if _, err := strconv.ParseUint(string(literal), 10, 64); err != nil {
+			return json.Number(literal), nil
+		}
+	}
+	return d, err
+}
 
 // Fields consumes an object (or null) value, walking its members like the
 // package-level Fields.

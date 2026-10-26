@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // projectCodexRows is the reference for readCodexRows: every row
-// encoding/json decodes, restricted to the fields parseCodex reads.
+// encoding/json decodes, restricted to the fields parseCodex reads, with
+// the numbers codexNumbers keeps.
 func projectCodexRows(t *testing.T, path string) []object {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -20,9 +22,16 @@ func projectCodexRows(t *testing.T, path string) []object {
 	var rows []object
 	for _, line := range strings.Split(string(data), "\n") {
 		var m object
-		if json.Unmarshal([]byte(line), &m) == nil && m != nil {
-			rows = append(rows, m)
+		if json.Unmarshal([]byte(line), &m) != nil || m == nil {
+			continue
 		}
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.UseNumber()
+		m = nil
+		if err := decoder.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, m)
 	}
 	for i, row := range rows {
 		out := object{}
@@ -31,9 +40,11 @@ func projectCodexRows(t *testing.T, path string) []object {
 				out[k] = v
 			}
 		}
+		codexNumbers(out, "parent")
 		if payload, ok := row["payload"]; ok {
 			switch str(row["type"]) {
 			case "session_meta", "turn_context", "event_msg", "token_usage_record", "compacted":
+				kind := ""
 				if fields, ok := payload.(object); ok {
 					projected := object{}
 					for k, v := range fields {
@@ -41,14 +52,46 @@ func projectCodexRows(t *testing.T, path string) []object {
 							projected[k] = v
 						}
 					}
-					payload = projected
+					payload, kind = projected, "parent"
 				}
-				out["payload"] = payload
+				out["payload"] = codexNumbers(payload, kind)
 			}
 		}
 		rows[i] = out
 	}
 	return rows
+}
+
+// codexNumbers turns the json.Numbers in v back into float64s, as
+// encoding/json decodes them, except a member of a usage object (kind
+// "usage") not written as an unsigned integer. A parent object's members
+// that codexUsageKeys or codexUsageParents name are usage or parent objects.
+func codexNumbers(v interface{}, kind string) interface{} {
+	switch v := v.(type) {
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case object:
+		for k, e := range v {
+			if n, ok := e.(json.Number); ok && kind == "usage" {
+				if _, err := strconv.ParseUint(string(n), 10, 64); err != nil {
+					continue
+				}
+			}
+			member := ""
+			if _, ok := e.(object); ok && kind == "parent" && codexUsageKeys[k] {
+				member = "usage"
+			} else if ok && kind == "parent" && codexUsageParents[k] {
+				member = "parent"
+			}
+			v[k] = codexNumbers(e, member)
+		}
+	case []interface{}:
+		for i, e := range v {
+			v[i] = codexNumbers(e, "")
+		}
+	}
+	return v
 }
 
 func checkCodexRows(t *testing.T, path string) {
@@ -71,6 +114,8 @@ func TestReadCodexRowsMatchesReadLines(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"message","content":[{"text":"\"usage\" is not a key here"}]}}`,
 		`{"type":"turn_context","payload":{"model":"escaped-key"}}`,
 		`{"type":"response_item","usage":{"input_tokens":1},"model":"m","data":{"usage":{"output_tokens":2}},"createdAt":1700000000}`,
+		`{"type":"response_item","usage":{"input_tokens":1.0,"output_tokens":"2","details":{"n":1.5}},"data":{"usage":{"output_tokens":-0},"x":2.5,"result":{"usage":{"input_tokens":1e1}}},"response":[{"usage":{"input_tokens":1.5}}],"createdAt":1.7e9}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3.5},"last_token_usage":{"input_tokens":18446744073709551616},"rate":0.5},"thread_settings":{"usage":{"input_tokens":2.5}}}}`,
 		`{"type":"event_msg","payload":{"type":"token_count"},"payload":{"type":"thread_settings_applied"}}`,
 		`{"type":"event_msg","payload":[1e999]}`,
 		`{"type":"event_msg","payload":{"type":"agent_message","message":"long text [1e999 is fine in a string]","info":null}}`,

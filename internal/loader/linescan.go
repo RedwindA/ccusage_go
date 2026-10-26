@@ -2,9 +2,7 @@ package loader
 
 import (
 	"bytes"
-	"encoding/json"
 	"slices"
-	"strconv"
 
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 )
@@ -117,7 +115,7 @@ func scanUsage(value jsonscan.Value) (map[string]interface{}, error) {
 		var err error
 		switch {
 		case tokenKeys[string(key)]:
-			v, err = tokenValue(value)
+			v, err = value.DecodeUnsigned()
 		case string(key) == "cache_creation" && value.Kind() == '{':
 			v, err = scanUsage(value)
 		default:
@@ -127,22 +125,6 @@ func scanUsage(value jsonscan.Value) (map[string]interface{}, error) {
 		return err
 	})
 	return usage, err
-}
-
-// tokenValue decodes a token count, keeping a number that is not an
-// unsigned integer as its json.Number.
-func tokenValue(value jsonscan.Value) (interface{}, error) {
-	literal, err := value.Raw()
-	if err != nil {
-		return nil, err
-	}
-	v, err := jsonscan.Decode(literal)
-	if _, number := v.(float64); number && err == nil {
-		if _, err := strconv.ParseUint(string(literal), 10, 64); err != nil {
-			return json.Number(literal), nil
-		}
-	}
-	return v, err
 }
 
 // nonNullableKeys are the fields upstream skips a usage line for holding as

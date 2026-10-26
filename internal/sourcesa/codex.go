@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,13 +21,33 @@ import (
 
 type codexUsage [6]int // inclusive input, cache read, cache creation, output, reasoning, total
 func parseCodexUsage(m object) codexUsage {
-	u := codexUsage{count(m, "input_tokens", "prompt_tokens", "input"), count(m, "cached_input_tokens", "cache_read_input_tokens", "cached_tokens"), count(m, "cache_write_input_tokens", "cache_creation_input_tokens"), count(m, "output_tokens", "completion_tokens", "output"), count(m, "reasoning_output_tokens", "reasoning_tokens"), count(m, "total_tokens")}
+	u := codexUsage{codexCount(m, "input_tokens", "prompt_tokens", "input"), codexCount(m, "cached_input_tokens", "cache_read_input_tokens", "cached_tokens"), codexCount(m, "cache_write_input_tokens", "cache_creation_input_tokens"), codexCount(m, "output_tokens", "completion_tokens", "output"), codexCount(m, "reasoning_output_tokens", "reasoning_tokens"), codexCount(m, "total_tokens")}
 	u[1] = min(u[1], u[0])
 	u[2] = min(u[2], u[0]-u[1])
 	if u[5] == 0 {
 		u[5] = u[0] + u[3]
 	}
 	return u
+}
+
+// codexCount reads a token count as upstream's
+// deserialize_optional_u64_lossy does each of its aliases: the first key
+// holding an unsigned integer, or a string holding one, gives the count,
+// and any other value falls through to the next key. decodeCodexValue keeps
+// a number not written as an unsigned integer as its json.Number.
+func codexCount(m object, keys ...string) int {
+	for _, k := range keys {
+		switch v := m[k].(type) {
+		case float64:
+			return num(v)
+		case string:
+			// Rust's u64 parse takes a leading +.
+			if n, err := strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(v), "+"), 10, 64); err == nil {
+				return int(min(n, math.MaxInt))
+			}
+		}
+	}
+	return 0
 }
 func codexModel(m object) string {
 	return first(str(m["model"]), str(m["model_name"]), str(obj(m["metadata"])["model"]))
@@ -100,8 +122,37 @@ func decodeCodexPayload(payload []byte) (interface{}, error) {
 		if !codexPayloadKeys[string(key)] {
 			return nil
 		}
-		v, err := value.Decode()
+		v, err := decodeCodexValue(key, value)
 		fields[string(key)] = v
+		return err
+	})
+	return fields, err
+}
+
+// codexUsageKeys name the usage objects parseCodexUsage reads, and
+// codexUsageParents the objects that hold them.
+var (
+	codexUsageKeys    = map[string]bool{"usage": true, "thread_token_usage": true, "total_token_usage": true, "last_token_usage": true}
+	codexUsageParents = map[string]bool{"info": true, "data": true, "result": true, "response": true}
+)
+
+// decodeCodexValue decodes the member key's value like Decode, except that
+// in a usage object a token count not written as an unsigned integer stays
+// its json.Number, which codexCount skips as upstream does.
+func decodeCodexValue(key []byte, value jsonscan.Value) (interface{}, error) {
+	if value.Kind() != '{' || !codexUsageKeys[string(key)] && !codexUsageParents[string(key)] {
+		return value.Decode()
+	}
+	fields := object{}
+	_, err := value.Fields(func(member []byte, value jsonscan.Value) error {
+		var v interface{}
+		var err error
+		if codexUsageKeys[string(key)] {
+			v, err = value.DecodeUnsigned()
+		} else {
+			v, err = decodeCodexValue(member, value)
+		}
+		fields[string(member)] = v
 		return err
 	})
 	return fields, err
@@ -190,7 +241,7 @@ func readCodexRows(path string) ([]object, string, error) {
 			if !codexRowKeys[string(key)] {
 				return nil
 			}
-			v, err := value.Decode()
+			v, err := decodeCodexValue(key, value)
 			row[string(key)] = v
 			return err
 		})
