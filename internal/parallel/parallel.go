@@ -30,6 +30,11 @@ func WithLimit(ctx context.Context, n int) context.Context {
 // process-wide slots, so fn must not itself call Run. Run stops handing out
 // indexes once ctx is done and then returns ctx.Err().
 func Run(ctx context.Context, workers int, order []int, fn func(i int)) error {
+	return run(ctx, workers, order, true, fn)
+}
+
+// run is Run, holding a process-wide slot for each call of fn when slotted.
+func run(ctx context.Context, workers int, order []int, slotted bool, fn func(i int)) error {
 	if limit, ok := ctx.Value(limitKey{}).(int); ok {
 		workers = min(workers, limit)
 	}
@@ -45,15 +50,19 @@ func Run(ctx context.Context, workers int, order []int, fn func(i int)) error {
 				if k >= len(order) {
 					return
 				}
-				select {
-				case slots <- struct{}{}:
-				case <-ctx.Done():
-					return
+				if slotted {
+					select {
+					case slots <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				if ctx.Err() == nil {
 					fn(order[k])
 				}
-				<-slots
+				if slotted {
+					<-slots
+				}
 			}
 		}()
 	}
@@ -64,13 +73,15 @@ func Run(ctx context.Context, workers int, order []int, fn func(i int)) error {
 // LargestFirst returns the indexes of paths ordered by descending file size,
 // so the longest jobs start first and do not become the tail of a parallel
 // run. Files that cannot be stat'ed keep their relative order at the end.
+// The stats hold no slots: they are quick, and waiting for other sources'
+// jobs to free one would hold up this run's start.
 func LargestFirst(ctx context.Context, workers int, paths []string) []int {
 	sizes := make([]int64, len(paths))
 	order := make([]int, len(paths))
 	for i := range order {
 		order[i] = i
 	}
-	_ = Run(ctx, workers, order, func(i int) {
+	_ = run(ctx, workers, order, false, func(i int) {
 		sizes[i] = -1
 		if info, err := os.Stat(paths[i]); err == nil {
 			sizes[i] = info.Size()

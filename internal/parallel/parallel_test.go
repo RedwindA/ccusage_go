@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRunVisitsEveryIndexOnce(t *testing.T) {
@@ -85,5 +86,28 @@ func TestRunStopsWaitingForSlotWhenCanceled(t *testing.T) {
 	cancel()
 	if err := <-done; err == nil || calls.Load() != 0 {
 		t.Fatalf("err=%v calls=%d, want context error and no calls", err, calls.Load())
+	}
+}
+
+// Other sources' jobs can hold every slot for a while; LargestFirst only
+// stats files and must not wait for them.
+func TestLargestFirstHoldsNoSlots(t *testing.T) {
+	for i := 0; i < cap(slots); i++ {
+		slots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(slots); i++ {
+			<-slots
+		}
+	}()
+	done := make(chan []int)
+	go func() { done <- LargestFirst(context.Background(), 4, []string{"a", "b"}) }()
+	select {
+	case got := <-done:
+		if want := []int{0, 1}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LargestFirst waited for a slot")
 	}
 }
