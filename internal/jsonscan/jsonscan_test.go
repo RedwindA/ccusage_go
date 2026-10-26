@@ -2,9 +2,11 @@ package jsonscan
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -279,34 +281,62 @@ func sameJSON(a, b interface{}) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func TestStopsString(t *testing.T) {
+// stopMask's lowest bit must mark a word's first stop byte exactly, even
+// where borrows from that byte mark others above it.
+func TestStopMask(t *testing.T) {
+	first := func(w uint64) int {
+		for i := 0; i < 8; i++ {
+			if c := byte(w >> (8 * i)); c == '"' || c == '\\' || c < 0x20 {
+				return i
+			}
+		}
+		return 8
+	}
+	got := func(w uint64) int { return bits.TrailingZeros64(stopMask(w)) >> 3 }
 	for c := 0; c < 256; c++ {
-		want := c == '"' || c == '\\' || c < 0x20
 		for pos := 0; pos < 8; pos++ {
 			word := []byte("abcdefgh")
 			word[pos] = byte(c)
-			var w uint64
-			for i := 7; i >= 0; i-- {
-				w = w<<8 | uint64(word[i])
-			}
-			if got := stopsString(w); got != want {
-				t.Fatalf("byte %#x at %d: got %v, want %v", c, pos, got, want)
+			w := binary.LittleEndian.Uint64(word)
+			if got(w) != first(w) {
+				t.Fatalf("byte %#x at %d: got stop %d, want %d", c, pos, got(w), first(w))
 			}
 		}
 	}
 	rng := rand.New(rand.NewSource(1))
 	for n := 0; n < 1_000_000; n++ {
 		w := rng.Uint64()
-		if n%2 == 0 { // bias toward high bytes and near-threshold values
+		switch n % 3 {
+		case 0: // bias toward high bytes and near-threshold values
 			w |= 0x8080808080808080 &^ (rng.Uint64() & rng.Uint64())
+		case 1: // runs of stops, whose borrows chain
+			w &= rng.Uint64() | 0x1f1f1f1f1f1f1f1f
 		}
-		want := false
-		for i := 0; i < 8; i++ {
-			c := byte(w >> (8 * i))
-			want = want || c == '"' || c == '\\' || c < 0x20
+		if got(w) != first(w) {
+			t.Fatalf("%#016x: got stop %d, want %d", w, got(w), first(w))
 		}
-		if got := stopsString(w); got != want {
-			t.Fatalf("%#016x: got %v, want %v", w, got, want)
+	}
+}
+
+// benchLine is a transcript line shaped like Claude Code's: short metadata
+// members, then long text with escapes in nested content.
+var benchLine = func() []byte {
+	text := strings.Repeat(`Reading the file shows \"parseFile\" calls scanLine for each line.\nIt then decodes usage.\n`, 40)
+	return []byte(`{"parentUuid":"6f1c0e1a-2b8d-4c3e-9f1a-0b2c3d4e5f60","isSidechain":false,"userType":"external",` +
+		`"cwd":"/home/user/project","sessionId":"0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9","version":"2.1.3","gitBranch":"main",` +
+		`"message":{"id":"msg_01ABCDEFGHIJKLMNOPQRSTUV","type":"message","role":"assistant","model":"claude-opus-4-5",` +
+		`"content":[{"type":"thinking","thinking":"` + text + `","signature":"EqQBCkgIBRABGAIiQ"},` +
+		`{"type":"tool_use","id":"toolu_01","name":"Edit","input":{"file_path":"/home/user/project/main.go","old_string":"` + text + `","new_string":"x"}}],` +
+		`"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":2048,"cache_read_input_tokens":40960,` +
+		`"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2048},"output_tokens":512,"service_tier":"standard"}},` +
+		`"requestId":"req_011CABCDEFGHIJKLMNOPQRST","type":"assistant","uuid":"7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d","timestamp":"2026-01-02T03:04:05.678Z"}`)
+}()
+
+func BenchmarkFieldsStrict(b *testing.B) {
+	b.SetBytes(int64(len(benchLine)))
+	for b.Loop() {
+		if _, err := FieldsStrict(benchLine, func([]byte, Value) error { return nil }); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

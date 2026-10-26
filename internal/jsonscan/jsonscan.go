@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/bits"
 	"strconv"
 	"unicode"
 	"unicode/utf16"
@@ -463,8 +464,13 @@ func (s *scanner) str() (escaped bool, err error) {
 	b := s.b
 	i := s.i + 1
 	for {
-		// Skip eight plain bytes at a time; the byte loop finds the stop.
-		for i+8 <= len(b) && !stopsString(binary.LittleEndian.Uint64(b[i:])) {
+		// Read eight bytes at a time; the lowest bit of a word's stop mask
+		// marks its first stop. The byte loop reads the last few bytes.
+		for i+8 <= len(b) {
+			if m := stopMask(binary.LittleEndian.Uint64(b[i:])); m != 0 {
+				i += bits.TrailingZeros64(m) >> 3
+				break
+			}
 			i += 8
 		}
 		for i < len(b) && stringPlain[b[i]] {
@@ -504,14 +510,14 @@ func (s *scanner) str() (escaped bool, err error) {
 	}
 }
 
-// stopsString reports whether any byte of the little-endian word w is '"',
-// '\\' or a control character. The bit tests are exact for "any byte"
-// (they may misattribute which byte), which is all the fast path needs.
-func stopsString(w uint64) bool {
+// stopMask sets the high bit of each byte of the little-endian word w that
+// is '"', '\\' or a control character, and possibly of bytes above such a
+// byte, since a borrow can carry into them; its lowest bit is exact.
+func stopMask(w uint64) uint64 {
 	const ones, highs = 0x0101010101010101, 0x8080808080808080
 	quote := w ^ (ones * '"')
 	backslash := w ^ (ones * '\\')
-	return ((quote-ones)&^quote|(backslash-ones)&^backslash|(w-ones*0x20)&^w)&highs != 0
+	return ((quote-ones)&^quote | (backslash-ones)&^backslash | (w-ones*0x20)&^w) & highs
 }
 
 func isHex(c byte) bool {
