@@ -176,6 +176,21 @@ func (c *Calculator) calculateSingleCost(ctx context.Context, entry *types.Usage
 			c.applyPricing(entry, p)
 		}
 	}
+	// Like upstream's calculate_droid_cost, calculate_codebuff_cost and
+	// calculate_goose_cost, a raw model that bills nothing gives way to its
+	// provider-qualified ids; GetSourcePricing tries them when it has no rate.
+	if detailed, ok := c.pricingService.(interface {
+		GetPricing(context.Context, string, time.Time) (pricing.ModelPricing, error)
+	}); ok && hasSource {
+		for _, model := range pricing.QualifiedModels(entry.Model, entry.Agent, entry.Raw["provider"]) {
+			if entry.Cost > 0 {
+				break
+			}
+			if p, err := detailed.GetPricing(ctx, model, at); err == nil {
+				c.applyPricing(entry, p)
+			}
+		}
+	}
 }
 
 // applyPricing sets entry's cost fields from its tokens and p.

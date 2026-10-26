@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 )
@@ -453,5 +454,49 @@ func TestGeminiPricesProviderQualifiedIDsFirst(t *testing.T) {
 	bare, _ := embedded.GetPricing(ctx, "gemini-2.5-flash", time.Time{})
 	if p, err := embedded.GetSourcePricing(ctx, "gemini-2.5-flash", "gemini", nil, time.Time{}); err != nil || p.InputCostPerToken != google.InputCostPerToken || p.InputCostPerToken == bare.InputCostPerToken {
 		t.Errorf("gemini-2.5-flash: %+v %v, want google/'s %+v", p, err, google)
+	}
+}
+
+// Like upstream's droid_model_candidates, calculate_codebuff_cost and
+// calculate_goose_cost, Droid, Codebuff and Goose qualify a model with its
+// normalized or inferred provider, and price one without a rate of its own,
+// such as grok-latest, under the first qualified id that has one.
+func TestQualifiedModelsOfDroidCodebuffAndGoose(t *testing.T) {
+	for _, tc := range []struct {
+		model, agent string
+		provider     any
+		want         []string
+	}{
+		{"grok-latest", "droid", " Grok ", []string{"xai/grok-latest", "openrouter/x-ai/grok-latest"}},
+		{"gemini-x", "droid", "vertex-ai", []string{"google/gemini-x", "vertex_ai/gemini-x", "openrouter/google/gemini-x"}},
+		{"claude-x", "droid", "", []string{"anthropic/claude-x", "openrouter/anthropic/claude-x"}},
+		{"o3", "droid", "unknown", []string{"openai/o3", "openrouter/openai/o3"}},
+		{"m", "droid", "Acme-Labs", []string{"acme_labs/m", "openrouter/acme_labs/m"}},
+		{"m", "droid", "", nil},
+		{"Grok-4", "codebuff", nil, []string{"xai/Grok-4"}},
+		{"xai/grok-4", "codebuff", nil, nil},
+		{"openrouter/acme/m", "codebuff", nil, nil},
+		{"m", "codebuff", "xai", nil},
+		{"m", "goose", " Acme-Labs ", []string{"Acme_Labs/m"}},
+		{"qwen3-coder", "goose", nil, []string{"openrouter/qwen3-coder"}},
+		{"m", "goose", "goose", nil},
+		{"m", "goose", nil, nil},
+		{"m", "claude", "xai", nil},
+	} {
+		if got := QualifiedModels(tc.model, tc.agent, tc.provider); !slices.Equal(got, tc.want) {
+			t.Errorf("%s %v/%s: %q, want %q", tc.agent, tc.provider, tc.model, got, tc.want)
+		}
+	}
+	ctx := context.Background()
+	s := NewService()
+	s.SetOffline(true)
+	want, err := s.GetPricing(ctx, "xai/grok-latest", time.Time{})
+	if _, bareErr := s.GetPricing(ctx, "grok-latest", time.Time{}); err != nil || bareErr == nil {
+		t.Fatalf("xai/grok-latest: %v; grok-latest has a rate of its own", err)
+	}
+	for agent, provider := range map[string]any{"droid": "xai", "codebuff": nil, "goose": "xai"} {
+		if p, err := s.GetSourcePricing(ctx, "grok-latest", agent, provider, time.Time{}); err != nil || p.InputCostPerToken != want.InputCostPerToken {
+			t.Errorf("%s: %+v %v, want %+v", agent, p, err, want)
+		}
 	}
 }

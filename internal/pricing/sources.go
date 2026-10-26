@@ -3,6 +3,7 @@ package pricing
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -83,6 +84,8 @@ func (s *Service) sourcePricing(ctx context.Context, model, agent string, provid
 			candidates = append(candidates, prefix+"/"+model)
 		}
 		candidates = append(candidates, model)
+	case "droid", "codebuff", "goose":
+		candidates = append(candidates, QualifiedModels(model, agent, provider)...)
 	case "kimi":
 		candidates = []string{"moonshot/" + model, "kimi/" + model, model}
 		if model == "kimi-for-coding" {
@@ -190,6 +193,103 @@ func (s *Service) sourcePricing(ctx context.Context, model, agent string, provid
 	}
 	return ModelPricing{}, last
 }
+
+// QualifiedModels are the provider-qualified ids upstream's Droid, Codebuff
+// and Goose adapters price model under, in order, when the raw model has no
+// rate or bills nothing; other agents have none.
+func QualifiedModels(model, agent string, provider any) []string {
+	name, _ := provider.(string)
+	name = strings.TrimSpace(name)
+	switch agent {
+	case "droid":
+		// droid_model_candidates, after normalize_droid_provider and
+		// infer_droid_provider_from_model.
+		name = strings.ReplaceAll(strings.ToLower(name), "-", "_")
+		switch name {
+		case "claude":
+			name = "anthropic"
+		case "google_ai", "gemini", "vertex", "vertex_ai":
+			name = "google"
+		case "x_ai", "grok":
+			name = "xai"
+		case "", "unknown":
+			name = droidModelProvider(model)
+		}
+		switch name {
+		case "google":
+			return []string{"google/" + model, "vertex_ai/" + model, "openrouter/google/" + model}
+		case "xai":
+			return []string{"xai/" + model, "openrouter/x-ai/" + model}
+		case "unknown":
+			return nil
+		}
+		return []string{name + "/" + model, "openrouter/" + name + "/" + model}
+	case "codebuff":
+		// Codebuff's infer_provider reads only the model.
+		if name = codebuffModelProvider(model); name != "unknown" && !strings.HasPrefix(model, name+"/") {
+			return []string{name + "/" + model}
+		}
+	case "goose":
+		// Goose's normalize_provider.
+		name = strings.ReplaceAll(name, "-", "_")
+		if name == "" {
+			name = gooseModelProvider(model)
+		}
+		if name != "goose" {
+			return []string{name + "/" + model}
+		}
+	}
+	return nil
+}
+
+func droidModelProvider(model string) string {
+	switch {
+	case strings.Contains(model, "claude") || strings.Contains(model, "opus") || strings.Contains(model, "sonnet") || strings.Contains(model, "haiku"):
+		return "anthropic"
+	case strings.HasPrefix(model, "gpt-") || strings.Contains(model, "-gpt-") || strings.Contains(model, "chatgpt") || len(model) > 1 && model[0] == 'o' && isDigit(model[1]):
+		return "openai"
+	case strings.Contains(model, "gemini"):
+		return "google"
+	case strings.Contains(model, "grok"):
+		return "xai"
+	}
+	return "unknown"
+}
+
+func codebuffModelProvider(model string) string {
+	model = strings.ToLower(model)
+	hasPrefix := func(prefixes ...string) bool {
+		return slices.ContainsFunc(prefixes, func(prefix string) bool { return strings.HasPrefix(model, prefix) })
+	}
+	switch {
+	case hasPrefix("claude-", "anthropic/", "anthropic."):
+		return "anthropic"
+	case hasPrefix("gpt-", "o1", "o3", "o4", "openai/"):
+		return "openai"
+	case hasPrefix("gemini", "google/"):
+		return "google"
+	case hasPrefix("grok", "xai/"):
+		return "xai"
+	case hasPrefix("openrouter/"):
+		return "openrouter"
+	}
+	return "unknown"
+}
+
+func gooseModelProvider(model string) string {
+	switch {
+	case strings.HasPrefix(model, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "chatgpt-") || strings.HasPrefix(model, "o"):
+		return "openai"
+	case strings.HasPrefix(model, "gemini-"):
+		return "google"
+	case strings.HasPrefix(strings.ToLower(model), "qwen"):
+		return "openrouter"
+	}
+	return "goose"
+}
+
 func zcodePricing(p ModelPricing) ModelPricing {
 	p.CacheCreationAsInput = true
 	p.CacheCreationInputTokenCost = p.InputCostPerToken

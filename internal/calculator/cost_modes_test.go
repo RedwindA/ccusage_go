@@ -148,6 +148,34 @@ func TestHermesSkipsAProviderRateThatBillsNothing(t *testing.T) {
 	}
 }
 
+// Like upstream's calculate_droid_cost, calculate_codebuff_cost and
+// calculate_goose_cost, a raw model that bills nothing, or has no rate,
+// gives way to its provider-qualified ids, such as xai/grok-latest.
+func TestQualifiedIDsPriceWhatTheRawModelBillsNothingFor(t *testing.T) {
+	s := pricing.NewService()
+	s.SetOffline(true)
+	zero, rate := 0.0, 1e-6
+	s.SetOverrides(map[string]pricing.Override{"acme-x": {InputCostPerToken: &zero, OutputCostPerToken: &zero}, "grok-x": {InputCostPerToken: &zero}, "xai/grok-x": {InputCostPerToken: &rate}, "acme/acme-x": {InputCostPerToken: &rate}})
+	c := New(s)
+	for _, tc := range []struct {
+		agent, model string
+		provider     any
+	}{{"droid", "acme-x", "acme"}, {"codebuff", "grok-x", nil}, {"goose", "acme-x", "acme"}} {
+		e := types.UsageEntry{Agent: tc.agent, Model: tc.model, InputTokens: 1000, Raw: map[string]interface{}{"provider": tc.provider}}
+		_ = c.CalculateCost(&e)
+		if math.Abs(e.Cost-1e-3) > 1e-12 {
+			t.Errorf("%s %s: %v", tc.agent, tc.model, e.Cost)
+		}
+	}
+	for _, agent := range []string{"droid", "codebuff", "goose"} {
+		e := types.UsageEntry{Agent: agent, Model: "grok-latest", InputTokens: 1000000, OutputTokens: 100000, Raw: map[string]interface{}{"provider": "xai"}}
+		_ = c.CalculateCost(&e)
+		if e.Cost <= 0 || e.Raw["missing_pricing"] != nil {
+			t.Errorf("%s grok-latest: %v %v", agent, e.Cost, e.Raw)
+		}
+	}
+}
+
 // Only auto mode reports the recorded cost it billed as stored, following
 // each source's own rule for when a recorded cost wins.
 func TestAutoModeMarksTheRecordedCostItBills(t *testing.T) {
