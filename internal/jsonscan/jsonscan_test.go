@@ -212,8 +212,18 @@ func repeats(data []byte) bool {
 	}
 }
 
-// walk decodes a value by descending into objects with Value.Fields.
+// walk decodes a value by descending into objects with Value.Fields and
+// into arrays with Value.Elements.
 func walk(value Value) (interface{}, error) {
+	if value.Kind() == '[' {
+		a := []interface{}{}
+		err := value.Elements(func(v Value) error {
+			x, err := walk(v)
+			a = append(a, x)
+			return err
+		})
+		return a, err
+	}
 	if value.Kind() != '{' {
 		return value.Decode()
 	}

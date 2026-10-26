@@ -691,6 +691,45 @@ func TestClaudeLinesRepeatingAMemberUpstreamRejectsAreSkipped(t *testing.T) {
 	}
 }
 
+// Upstream bills a line's advisor calls only when its typed decode takes
+// every element of usage.iterations: a type string, an optional model and a
+// usage whose token counts are unsigned integers, none repeated, nor the
+// array itself. An element it rejects drops every advisor, not the line.
+func TestClaudeAdvisorsNeedEveryIterationToDecode(t *testing.T) {
+	advisor := `{"type":"advisor_message","model":"claude-opus-4-6","input_tokens":50000,"output_tokens":5000}`
+	line := func(iterations ...string) string {
+		return `{"timestamp":"2026-10-20T10:00:00.000Z","sessionId":"a1","requestId":"req_a1","version":"2.0.1","type":"assistant","message":{"id":"msg_a1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"output_tokens":10,"iterations":[` + strings.Join(iterations, ",") + `]}}}`
+	}
+	for _, tc := range []struct {
+		line    string
+		entries int
+	}{
+		{line(advisor), 2},
+		{line(`{"type":"message","input_tokens":1000,"output_tokens":10}`, advisor), 2},
+		{line(`{"type":"message","model":null,"input_tokens":1,"output_tokens":1,"cache_creation":null}`, advisor), 2},
+		{line(`{"type":"message","model":"","input_tokens":1,"output_tokens":1,"speed":"fast","foo":1,"foo":2}`, advisor), 2},
+		{line(strings.Replace(advisor, "50000", "50000.0", 1)), 1},
+		{line(`{"type":"compaction"}`, advisor), 1},
+		{line(`{"input_tokens":1000,"output_tokens":10}`, advisor), 1},
+		{line(`{"type":5,"input_tokens":1,"output_tokens":1}`, advisor), 1},
+		{line(`{"type":"message","model":5,"input_tokens":1,"output_tokens":1}`, advisor), 1},
+		{line(`"message"`, advisor), 1},
+		{line(`{"type":"message","input_tokens":"1","output_tokens":1}`, advisor), 1},
+		{line(`{"type":"message","input_tokens":null,"output_tokens":1}`, advisor), 1},
+		{line(`{"type":"message","input_tokens":1,"output_tokens":1,"cache_read_input_tokens":-1}`, advisor), 1},
+		{line(`{"type":"message","input_tokens":1,"output_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":1.5}}`, advisor), 1},
+		{line(`{"type":"message","input_tokens":1,"output_tokens":1,"speed":"turbo"}`, advisor), 1},
+		{line(`{"type":"message","type":"message","input_tokens":1,"output_tokens":1}`, advisor), 1},
+		{line(`{"type":"message","input_tokens":1,"output_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_5m_input_tokens":1}}`, advisor), 1},
+		{line(strings.Replace(advisor, `"output_tokens":5000`, `"output_tokens":5000,"output_tokens":5000`, 1)), 1},
+		{strings.Replace(line(advisor), `"iterations":[`, `"iterations":[],"iterations":[`, 1), 1},
+	} {
+		if daily, entry := loadClaudeLine(t, tc.line); daily != tc.entries || entry != tc.entries {
+			t.Errorf("%s: daily loader read %d entries, entry loader %d; want %d", tc.line, daily, entry, tc.entries)
+		}
+	}
+}
+
 // Upstream's entry loader, which serves sessions and blocks, decodes
 // isApiErrorMessage as a bool; its daily loader does not read it.
 func TestClaudeEntryLoadsSkipANonBoolAPIErrorFlag(t *testing.T) {

@@ -447,6 +447,11 @@ func (l *Loader) parseFile(path string) parsedFile {
 		if repeatedDaily {
 			continue
 		}
+		// Upstream bills no advisor call from a line whose usage repeats
+		// iterations, or one of whose iterations repeats a member it reads.
+		if len(advisors) > 0 && repeatsField(line, advisorFields) {
+			advisors = nil
+		}
 		// Upstream's entry loader decodes isApiErrorMessage as a bool, where
 		// its daily loader does not read it.
 		entrySkips := fromProgress || !typed[bool](raw["isApiErrorMessage"]) || repeatedEntry
@@ -1006,13 +1011,11 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 			return fmt.Errorf("session, request, message or model ID or version must be a string")
 		}
 	}
-	if !typed[float64](raw["costUSD"]) || !typed[bool](raw["isSidechain"]) || !typed[map[string]interface{}](usage["cache_creation"]) {
-		return fmt.Errorf("costUSD, isSidechain or usage.cache_creation has the wrong type")
+	if !typed[float64](raw["costUSD"]) || !typed[bool](raw["isSidechain"]) {
+		return fmt.Errorf("costUSD or isSidechain has the wrong type")
 	}
-	switch usage["speed"] {
-	case nil, "standard", "fast":
-	default:
-		return fmt.Errorf("speed %v is neither standard nor fast", usage["speed"])
+	if err := usageError(usage); err != nil {
+		return err
 	}
 	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
 		entry.Raw["cache_creation"] = nested
@@ -1032,40 +1035,8 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	if version, ok := raw["version"].(string); ok && !semverPrefix(version) {
 		return fmt.Errorf("version %q is not semver", version)
 	}
-	// Token counts are unsigned integers, as upstream's u64s: a line with
-	// another value in one is not usage. Cache counts may be left out.
-	for _, key := range []string{"cache_creation_input_tokens", "cache_read_input_tokens"} {
-		if v, ok := usage[key]; ok && !tokenCount(v) {
-			return fmt.Errorf("%s must be an unsigned integer", key)
-		}
-	}
-	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
-		for _, key := range []string{"ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"} {
-			if v, ok := nested[key]; ok && !tokenCount(v) {
-				return fmt.Errorf("cache_creation.%s must be an unsigned integer", key)
-			}
-		}
-	}
-
-	// input_tokens is required (can be 0)
-	inputTokens, hasInput := usage["input_tokens"]
-	if !hasInput {
-		return fmt.Errorf("missing required input_tokens")
-	}
-	if !tokenCount(inputTokens) {
-		return fmt.Errorf("input_tokens must be an unsigned integer")
-	}
-	entry.InputTokens = int(inputTokens.(float64))
-
-	// output_tokens is required (can be 0)
-	outputTokens, hasOutput := usage["output_tokens"]
-	if !hasOutput {
-		return fmt.Errorf("missing required output_tokens")
-	}
-	if !tokenCount(outputTokens) {
-		return fmt.Errorf("output_tokens must be an unsigned integer")
-	}
-	entry.OutputTokens = int(outputTokens.(float64))
+	entry.InputTokens = int(usage["input_tokens"].(float64))
+	entry.OutputTokens = int(usage["output_tokens"].(float64))
 
 	// Optional fields
 	if model, ok := message["model"].(string); ok {
@@ -1133,6 +1104,45 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.RecordedSessionID = sessionID
 	}
 
+	return nil
+}
+
+// usageError reports why upstream's typed decode of usage, a usage object
+// or an element of its iterations, into a TokenUsageRaw fails: a
+// cache_creation that is not an object, a speed other than standard or
+// fast, or a token count that is not an unsigned integer, as upstream's
+// u64s; input and output counts are required, cache counts may be left
+// out. A null passes here; hasNullField drops the line.
+func usageError(usage map[string]interface{}) error {
+	if !typed[map[string]interface{}](usage["cache_creation"]) {
+		return fmt.Errorf("usage.cache_creation is not an object")
+	}
+	switch usage["speed"] {
+	case nil, "standard", "fast":
+	default:
+		return fmt.Errorf("speed %v is neither standard nor fast", usage["speed"])
+	}
+	for _, key := range []string{"cache_creation_input_tokens", "cache_read_input_tokens"} {
+		if v, ok := usage[key]; ok && !tokenCount(v) {
+			return fmt.Errorf("%s must be an unsigned integer", key)
+		}
+	}
+	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
+		for _, key := range []string{"ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"} {
+			if v, ok := nested[key]; ok && !tokenCount(v) {
+				return fmt.Errorf("cache_creation.%s must be an unsigned integer", key)
+			}
+		}
+	}
+	for _, key := range []string{"input_tokens", "output_tokens"} {
+		v, ok := usage[key]
+		if !ok {
+			return fmt.Errorf("missing required %s", key)
+		}
+		if !tokenCount(v) {
+			return fmt.Errorf("%s must be an unsigned integer", key)
+		}
+	}
 	return nil
 }
 

@@ -258,11 +258,19 @@ func cloneObject(m map[string]interface{}) map[string]interface{} {
 }
 
 // advisorRecords extracts independently billed advisor calls without duplicating
-// the ordinary message iterations already represented by parent usage.
+// the ordinary message iterations already represented by parent usage. Like
+// upstream's advisor_usages_from_line, it bills none unless every iteration
+// decodes as a UsageIteration: a type, an optional model and a usage.
 func advisorRecords(raw map[string]interface{}) []map[string]interface{} {
 	message, _ := raw["message"].(map[string]interface{})
 	usage, _ := message["usage"].(map[string]interface{})
 	iterations, _ := usage["iterations"].([]interface{})
+	for _, v := range iterations {
+		iteration, ok := v.(map[string]interface{})
+		if _, kind := iteration["type"].(string); !ok || !kind || !typed[string](iteration["model"]) || usageError(iteration) != nil {
+			return nil
+		}
+	}
 	var out []map[string]interface{}
 	for _, v := range iterations {
 		iteration, _ := v.(map[string]interface{})

@@ -2,6 +2,7 @@ package loader
 
 import (
 	"bytes"
+	"maps"
 	"slices"
 
 	"github.com/RedwindA/ccusage_go/internal/jsonscan"
@@ -118,6 +119,8 @@ func scanUsage(value jsonscan.Value) (map[string]interface{}, error) {
 			v, err = value.DecodeUnsigned()
 		case string(key) == "cache_creation" && value.Kind() == '{':
 			v, err = scanUsage(value)
+		case string(key) == "iterations" && value.Kind() == '[':
+			v, err = scanIterations(value)
 		default:
 			v, err = value.Decode()
 		}
@@ -125,6 +128,24 @@ func scanUsage(value jsonscan.Value) (map[string]interface{}, error) {
 		return err
 	})
 	return usage, err
+}
+
+// scanIterations decodes a usage's iterations, scanning each object in it as
+// a usage of its own.
+func scanIterations(value jsonscan.Value) ([]interface{}, error) {
+	iterations := []interface{}{}
+	err := value.Elements(func(value jsonscan.Value) error {
+		var v interface{}
+		var err error
+		if value.Kind() == '{' {
+			v, err = scanUsage(value)
+		} else {
+			v, err = value.Decode()
+		}
+		iterations = append(iterations, v)
+		return err
+	})
+	return iterations, err
 }
 
 // nonNullableKeys are the fields upstream skips a usage line for holding as
@@ -189,14 +210,23 @@ func nullField(v interface{}, path []string, nullModel bool) bool {
 
 // memberFields are the members of an object that upstream decodes into a
 // typed struct, which rejects a member given twice; a member with fields of
-// its own is an object whose members are checked too.
+// its own is an object, or an array of objects, whose members are checked
+// too.
 type memberFields map[string]memberFields
 
 var (
-	messageFields = memberFields{"id": nil, "model": nil, "usage": {
+	usageFields = memberFields{
 		"input_tokens": nil, "output_tokens": nil, "cache_creation_input_tokens": nil, "cache_read_input_tokens": nil, "speed": nil,
 		"cache_creation": {"ephemeral_5m_input_tokens": nil, "ephemeral_1h_input_tokens": nil},
-	}}
+	}
+	messageFields = memberFields{"id": nil, "model": nil, "usage": usageFields}
+	// advisorFields are those advisor_usages_from_line decodes: an element of
+	// usage.iterations is a type, a model and a usage.
+	advisorFields = memberFields{"message": {"usage": {"iterations": func() memberFields {
+		fields := memberFields{"type": nil, "model": nil}
+		maps.Copy(fields, usageFields)
+		return fields
+	}()}}}
 	// lineFields are those of a usage line; upstream's entry loader also
 	// decodes its isApiErrorMessage, which its daily loader does not read.
 	lineFields = memberFields{"timestamp": nil, "sessionId": nil, "requestId": nil, "version": nil, "costUSD": nil, "isSidechain": nil, "message": messageFields}
@@ -235,9 +265,18 @@ func repeatsField(line []byte, fields memberFields) bool {
 			}
 			repeated = repeated || seen[string(key)]
 			seen[string(key)] = true
-			if nested != nil && value.Kind() == '{' {
+			switch {
+			case nested != nil && value.Kind() == '{':
 				_, err := value.Fields(walk(nested))
 				return err
+			case nested != nil && value.Kind() == '[':
+				return value.Elements(func(value jsonscan.Value) error {
+					if value.Kind() != '{' {
+						return nil
+					}
+					_, err := value.Fields(walk(nested))
+					return err
+				})
 			}
 			return nil
 		}

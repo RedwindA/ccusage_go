@@ -98,6 +98,15 @@ func (v Value) DecodeUnsigned() (interface{}, error) {
 	return d, err
 }
 
+// Elements consumes an array value, calling visit with each element's Value
+// in order; elements visit leaves alone are skipped.
+func (v Value) Elements(visit func(v Value) error) error {
+	if v.Kind() != '[' {
+		return v.s.fail("expected array")
+	}
+	return v.s.array(visit)
+}
+
 // Fields consumes an object (or null) value, walking its members like the
 // package-level Fields.
 func (v Value) Fields(visit func(key []byte, v Value) error) (null bool, err error) {
@@ -255,6 +264,37 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 	}
 }
 
+// array scans the array at s.i ('['), calling visit (when non-nil) with each
+// element, then skipping the element unless visit consumed it.
+func (s *scanner) array(visit func(v Value) error) error {
+	if err := s.push(); err != nil {
+		return err
+	}
+	s.i++
+	s.ws()
+	if s.i < len(s.b) && s.b[s.i] == ']' {
+		s.i++
+		s.depth--
+		return nil
+	}
+	for {
+		start := s.i
+		if visit != nil {
+			if err := visit(Value{s}); err != nil {
+				return err
+			}
+		}
+		if s.i == start { // not consumed
+			if err := s.skip(); err != nil {
+				return err
+			}
+		}
+		if done, err := s.next(']'); done || err != nil {
+			return err
+		}
+	}
+}
+
 // key scans `"key" :` and leaves s.i at the value.
 func (s *scanner) key() ([]byte, error) {
 	if s.i >= len(s.b) || s.b[s.i] != '"' {
@@ -307,24 +347,7 @@ func (s *scanner) skip() error {
 	case c == '{':
 		return s.object(nil)
 	case c == '[':
-		if err := s.push(); err != nil {
-			return err
-		}
-		s.i++
-		s.ws()
-		if s.i < len(s.b) && s.b[s.i] == ']' {
-			s.i++
-			s.depth--
-			return nil
-		}
-		for {
-			if err := s.skip(); err != nil {
-				return err
-			}
-			if done, err := s.next(']'); done || err != nil {
-				return err
-			}
-		}
+		return s.array(nil)
 	case c == '"':
 		_, err := s.str()
 		return err

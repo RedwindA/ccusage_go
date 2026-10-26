@@ -57,8 +57,9 @@ func member(object map[string]interface{}, path []string) map[string]interface{}
 }
 
 // numberTokens replaces the token counts in usage, and in its cache_creation
-// objects, that numbers, the same object decoded with json.Numbers, holds as
-// other than unsigned integers with those json.Numbers.
+// objects and the objects in its iterations, that numbers, the same object
+// decoded with json.Numbers, holds as other than unsigned integers with
+// those json.Numbers.
 func numberTokens(usage, numbers map[string]interface{}) {
 	for key, n := range numbers {
 		if literal, ok := n.(json.Number); ok && tokenKeys[key] {
@@ -69,6 +70,13 @@ func numberTokens(usage, numbers map[string]interface{}) {
 		if nested, ok := n.(map[string]interface{}); ok && key == "cache_creation" {
 			if object, ok := usage[key].(map[string]interface{}); ok {
 				numberTokens(object, nested)
+			}
+		}
+		if elements, ok := n.([]interface{}); ok && key == "iterations" {
+			for i, element := range usage[key].([]interface{}) {
+				if object, ok := element.(map[string]interface{}); ok {
+					numberTokens(object, elements[i].(map[string]interface{}))
+				}
 			}
 		}
 	}
@@ -90,7 +98,7 @@ var scanLineSeeds = []string{
 	`{"type":"custom-title","sessionId":"s","customTitle":"kept","CustomTitle":false}`,
 	`{"cwd":"/a","cwd":"/b","type":"user"}`,
 	`{"cwd":"/escaped-key","message":{"usage":{"input_tokens":1,"output_tokens":1}}}`,
-	`{"message":{"usage":{"input_tokens":10.0,"output_tokens":-0,"cache_read_input_tokens":1e1,"cache_creation_input_tokens":18446744073709551616,"server_tool_use":{"web_search_requests":1.0},"iterations":[{"input_tokens":2.0}],"cache_creation":{"ephemeral_5m_input_tokens":1E1,"ephemeral_1h_input_tokens":3,"cache_creation":{"input_tokens":0.5}}}}}`,
+	`{"message":{"usage":{"input_tokens":10.0,"output_tokens":-0,"cache_read_input_tokens":1e1,"cache_creation_input_tokens":18446744073709551616,"server_tool_use":{"web_search_requests":1.0},"iterations":[{"input_tokens":2.0,"cache_creation":{"ephemeral_1h_input_tokens":1.5}},3.5,[4.5],{"output_tokens":5}],"cache_creation":{"ephemeral_5m_input_tokens":1E1,"ephemeral_1h_input_tokens":3,"cache_creation":{"input_tokens":0.5}}}}}`,
 	`{"message":{"usage":{"input_tokens":"10","output_tokens":[1.0],"cache_creation":5}},"message":{"usage":{"input_tokens":1.5}}}`,
 	`{"type":"progress","data":{"message":{"message":{"usage":{"input_tokens":10.0,"cache_creation":{"ephemeral_1h_input_tokens":-1}}}}}}`,
 	`{"cwd":"café 😀","type":"user"}`,
