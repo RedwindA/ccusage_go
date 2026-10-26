@@ -361,7 +361,7 @@ func (l *Loader) parseFile(path string) parsedFile {
 			continue
 		}
 
-		raw, facts, err := scanLine(line)
+		raw, err := scanLine(line)
 		if err != nil {
 			describe := func() string {
 				// Report encoding/json's wording, as before the scanner.
@@ -444,10 +444,10 @@ func (l *Loader) parseFile(path string) parsedFile {
 		// Upstream reads only the lines holding the bytes "usage":{, which a
 		// line written with a space after each colon, as Python's json.dumps
 		// writes it, does not hold.
-		if !bytes.Contains(line, []byte(`"usage":{`)) || facts.nonNullable && hasNullField(line) {
+		if !bytes.Contains(line, []byte(`"usage":{`)) || hasNullField(line) {
 			continue
 		}
-		repeatedDaily, repeatedEntry := repeatedMember(line, facts, fromProgress)
+		repeatedDaily, repeatedEntry := repeatedMember(line, fromProgress)
 		if repeatedDaily {
 			continue
 		}

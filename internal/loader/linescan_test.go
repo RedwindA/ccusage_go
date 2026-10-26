@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/RedwindA/ccusage_go/internal/jsonscan"
 )
 
 // projectLine is the reference behavior scanLine must match: a full
@@ -113,8 +111,6 @@ var scanLineSeeds = []string{
 	`{"message":null,"costUSD":1.5e-3,"cost":-0,"isSidechain":true,"isMeta":false,"id":null}`,
 	`{"message":{"id":1,"model":["x"],"diagnostics":{"cache_miss_reason":{"type":"t"}}},"usage_limit_reset_time":"2026"}`,
 	`{"a":[1,-2.5e+10,true,false,null,{"b":[[]]},""],"type":"x"}`,
-	`{"type":"assistant","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":1,"speed":null,"iterations":[{"model":null}]},"content":[{"input":{"model":null,"k":1,"k":2}}]},"x":{"cwd":null,"cwd":"y"}}`,
-	`{"message":{"diagnostics":{"a":null,"a":1},"usage":{"input_tokens":1,"input_tokens":2}},"text":"nullable"}`,
 	`{}`,
 	`null`,
 	`  {"type":"user"}  `,
@@ -161,24 +157,12 @@ func FuzzScanLine(f *testing.F) {
 func checkScanLine(t *testing.T, line []byte) {
 	t.Helper()
 	want, wantErr := projectLine(line)
-	got, facts, gotErr := scanLine(line)
+	got, gotErr := scanLine(line)
 	if (wantErr != nil) != (gotErr != nil) {
 		t.Fatalf("%q: error mismatch: scanLine=%v json.Unmarshal=%v", line, gotErr, wantErr)
 	}
 	if wantErr == nil && !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q: value mismatch:\n scanLine=%#v\n  json.Unmarshal=%#v", line, got, want)
-	}
-	// The loader trusts these in place of scanning the line again.
-	if gotErr == nil {
-		if facts.repeated == jsonscan.Unique(line) {
-			t.Fatalf("%q: repeated=%v, but Unique=%v", line, facts.repeated, jsonscan.Unique(line))
-		}
-		if facts.null && !bytes.Contains(line, []byte("null")) {
-			t.Fatalf("%q: a null member without the bytes null", line)
-		}
-		if !facts.nonNullable && hasNullField(line) {
-			t.Fatalf("%q: hasNullField without a null nonNullableKeys member", line)
-		}
 	}
 }
 

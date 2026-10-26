@@ -51,15 +51,10 @@ var tokenKeys = map[string]bool{
 // as a number other than an unsigned integer, such as 10.0, 1e1 or -0, as
 // its json.Number: upstream's u64 rejects it, so tokenCount does too. A
 // top-level null yields a nil map; any syntax error rejects the whole line,
-// as json.Unmarshal would. The scan also collects the line's lineFacts.
-func scanLine(line []byte) (map[string]interface{}, lineFacts, error) {
+// as json.Unmarshal would.
+func scanLine(line []byte) (map[string]interface{}, error) {
 	raw := map[string]interface{}{}
-	var facts lineFacts
-	members := jsonscan.Members{Null: func(key []byte) {
-		facts.null = true
-		facts.nonNullable = facts.nonNullable || nonNullableKeys[string(key)]
-	}}
-	null, err := jsonscan.FieldsStrictMembers(line, &members, func(key []byte, value jsonscan.Value) error {
+	null, err := jsonscan.FieldsStrict(line, func(key []byte, value jsonscan.Value) error {
 		if !lineTopKeys[string(key)] {
 			return nil
 		}
@@ -77,23 +72,9 @@ func scanLine(line []byte) (map[string]interface{}, lineFacts, error) {
 		return err
 	})
 	if err != nil || null {
-		return nil, lineFacts{}, err
+		return nil, err
 	}
-	facts.repeated = members.Repeated
-	return raw, facts, nil
-}
-
-// lineFacts are what scanLine learns of a whole line, at any depth, that
-// hasNullField and repeatedMember would otherwise scan it again for.
-type lineFacts struct {
-	// repeated: an object repeats a member, so the line is not
-	// jsonscan.Unique.
-	repeated bool
-	// null: a member is null, so the line holds the bytes "null".
-	null bool
-	// nonNullable: one of nonNullableKeys is null, which hasNullField needs
-	// to find before it can report the line.
-	nonNullable bool
+	return raw, nil
 }
 
 func scanMessage(value jsonscan.Value) (map[string]interface{}, error) {
@@ -256,12 +237,13 @@ var (
 
 // repeatedMember reports whether upstream's daily and entry loaders reject
 // line, a valid usage line or with progress an AgentProgress line, for
-// repeating a member; facts are scanLine's. Upstream first parses a line
-// holding "null" into a value that rejects any repeated member, at any
-// depth; another line its typed decode only rejects for a repeated field.
-func repeatedMember(line []byte, facts lineFacts, progress bool) (daily, entry bool) {
-	if facts.null || bytes.Contains(line, []byte("null")) {
-		return facts.repeated, facts.repeated
+// repeating a member. Upstream first parses a line holding "null" into a
+// value that rejects any repeated member, at any depth; another line its
+// typed decode only rejects for a repeated field.
+func repeatedMember(line []byte, progress bool) (daily, entry bool) {
+	if bytes.Contains(line, []byte("null")) {
+		repeated := !jsonscan.Unique(line)
+		return repeated, repeated
 	}
 	if progress {
 		return repeatsField(line, progressFields), true

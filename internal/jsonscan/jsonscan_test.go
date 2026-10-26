@@ -20,7 +20,6 @@ var seeds = []string{
 	`{"a":{"b":1,"c":[{"d":1},{"d":2}]},"b":{"\u0062":1,"b":2}}`,
 	`{"a":[{"x":1,"y":{"x":2}}],"b":{"x":1},"x":3}`,
 	`{"cwd":"/x","k\"q":1,"":0}`,
-	`{"a":null,"b":{"c":null,"c":1},"d":[{"e":null},null],"f":"null","\u0067":null}`,
 	`"café 😀 \ud83d x \ude00 \ud83dA \/ \b\f\n\r\t"`,
 	"\"bad utf8 \xff\xfe \xe2\x82\"",
 	"{\"k\xff\":1}",
@@ -170,56 +169,32 @@ func check(t *testing.T, data []byte) {
 		t.Fatalf("Fields(%q) skipping: error mismatch: got %v, encoding/json %v", data, skipErr, wantRawErr)
 	}
 
-	wantRepeated, wantNulls := members(data)
-	if wantErr == nil && Unique(data) == wantRepeated {
+	if wantErr == nil && Unique(data) == repeats(data) {
 		t.Fatalf("Unique(%q) = %v", data, Unique(data))
-	}
-	// FieldsStrictMembers must find the same repeats and every null member,
-	// whether the walk decodes a member or skips it.
-	for _, every := range []int{1, 2} {
-		var nulls []string
-		m := Members{Null: func(key []byte) { nulls = append(nulls, string(key)) }}
-		n := 0
-		_, err := FieldsStrictMembers(data, &m, func(key []byte, value Value) error {
-			if n++; n%every != 0 {
-				return nil
-			}
-			_, err := value.Decode()
-			return err
-		})
-		if (err != nil) != (wantMapErr != nil) {
-			t.Fatalf("FieldsStrictMembers(%q): error mismatch: got %v, encoding/json %v", data, err, wantMapErr)
-		}
-		if err == nil && (m.Repeated != wantRepeated || !reflect.DeepEqual(nulls, wantNulls)) {
-			t.Fatalf("FieldsStrictMembers(%q): got repeated %v, nulls %q; want %v, %q", data, m.Repeated, nulls, wantRepeated, wantNulls)
-		}
 	}
 }
 
-// members reports whether an object in data, valid JSON, repeats a key as
-// encoding/json unquotes it, and the keys of its null members in order.
-func members(data []byte) (repeated bool, nulls []string) {
+// repeats reports whether an object in data, valid JSON, repeats a key as
+// encoding/json unquotes it.
+func repeats(data []byte) bool {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	// keys holds each open container's keys, nil for an array; key is
-	// whether an open object's next token is a key, and last the key of its
-	// member being read.
+	// whether an open object's next token is a key.
 	var keys []map[string]bool
 	var key []bool
-	last := ""
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			return repeated, nulls
+			return false
 		}
 		n := len(keys)
 		if name, ok := token.(string); ok && n > 0 && key[n-1] {
-			repeated = repeated || keys[n-1][name]
-			keys[n-1][name], key[n-1], last = true, false, name
+			if keys[n-1][name] {
+				return true
+			}
+			keys[n-1][name], key[n-1] = true, false
 			continue
-		}
-		if token == nil && n > 0 && keys[n-1] != nil {
-			nulls = append(nulls, last)
 		}
 		switch token {
 		case json.Delim('{'):
