@@ -1,6 +1,11 @@
 package loader
 
-import "github.com/RedwindA/ccusage_go/internal/jsonscan"
+import (
+	"bytes"
+	"slices"
+
+	"github.com/RedwindA/ccusage_go/internal/jsonscan"
+)
 
 // Transcript lines are dominated by prompt text, thinking and tool output
 // that the loader never reads. scanLine validates each line in one pass but
@@ -15,7 +20,7 @@ var lineTopKeys = map[string]bool{
 	"agentName": true, "aiTitle": true, "block_type": true, "cache_creation_input_tokens": true,
 	"cache_read_input_tokens": true, "cost": true, "costUSD": true, "customTitle": true, "cwd": true,
 	"data": true, "id": true, "isMeta": true, "isSidechain": true, "message": true, "model": true,
-	"project_path": true, "requestId": true, "sessionId": true, "timestamp": true, "type": true,
+	"project_path": true, "requestId": true, "sessionId": true, "timestamp": true, "type": true, "version": true,
 	// rawRetainKeys
 	"usage_limit_reset_time": true, "cache_creation": true, "service_tier": true, "message_id": true, "request_id": true,
 }
@@ -88,4 +93,64 @@ func scanObject(value jsonscan.Value, keys map[string]bool, message func(jsonsca
 		return err
 	})
 	return object, err
+}
+
+// nonNullableKeys are the fields upstream skips a usage line for holding as
+// null, at any depth of the line.
+var nonNullableKeys = map[string]bool{
+	"id": true, "cwd": true, "model": true, "speed": true, "costUSD": true, "version": true, "sessionId": true,
+	"requestId": true, "isApiErrorMessage": true, "cache_read_input_tokens": true, "cache_creation_input_tokens": true,
+}
+
+// iterationPaths are where upstream lets an element of usage.iterations
+// hold a null model, on an assistant line and on an AgentProgress line.
+var iterationPaths = [][]string{{"message", "usage", "iterations"}, {"data", "message", "message", "usage", "iterations"}}
+
+// hasNullField reports whether line, a JSON object, holds one of
+// nonNullableKeys as null, as upstream's has_unsupported_null_field_in_value
+// rejects it. Only lines with such a key before a null are decoded whole.
+func hasNullField(line []byte) bool {
+	for rest := line; ; {
+		i := bytes.Index(rest, []byte("null"))
+		if i < 0 {
+			return false
+		}
+		before := bytes.TrimRight(rest[:i], " \t\r\n")
+		rest = rest[i+4:]
+		if before, ok := bytes.CutSuffix(before, []byte(":")); ok {
+			before = bytes.TrimRight(before, " \t\r\n")
+			if before, ok := bytes.CutSuffix(before, []byte(`"`)); ok {
+				if key := before[bytes.LastIndexByte(before, '"')+1:]; nonNullableKeys[string(key)] {
+					break
+				}
+			}
+		}
+	}
+	root, err := jsonscan.Decode(line)
+	return err == nil && nullField(root, nil, false)
+}
+
+// nullField walks v, found at path, for hasNullField. An array element adds
+// "" to the path; the elements of the arrays at iterationPaths may hold a
+// null model.
+func nullField(v interface{}, path []string, nullModel bool) bool {
+	switch v := v.(type) {
+	case map[string]interface{}:
+		for key, value := range v {
+			if value == nil && nonNullableKeys[key] && !(nullModel && key == "model") {
+				return true
+			}
+			if nullField(value, append(path[:len(path):len(path)], key), false) {
+				return true
+			}
+		}
+	case []interface{}:
+		iterations := slices.ContainsFunc(iterationPaths, func(p []string) bool { return slices.Equal(p, path) })
+		for _, element := range v {
+			if nullField(element, append(path[:len(path):len(path)], ""), iterations) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -432,6 +433,9 @@ func (l *Loader) parseFile(path string) parsedFile {
 			if !fromProgress {
 				continue // Skip entries that fail to parse
 			}
+		}
+		if hasNullField(line) {
+			continue
 		}
 		entry.SourceFile = path
 
@@ -1016,27 +1020,50 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.Raw["service_tier"] = tier
 	}
 
-	// input_tokens is required (must be number, can be 0)
+	// Like upstream, a usage line with an empty session, request, message
+	// or model ID or a version that is not semver is not usage.
+	for _, id := range []interface{}{raw["sessionId"], raw["requestId"], message["id"], message["model"]} {
+		if id == "" {
+			return fmt.Errorf("empty session, request, message or model ID")
+		}
+	}
+	if version, ok := raw["version"].(string); ok && !semverPrefix(version) {
+		return fmt.Errorf("version %q is not semver", version)
+	}
+	// Token counts are unsigned integers, as upstream's u64s: a line with
+	// another value in one is not usage. Cache counts may be left out.
+	for _, key := range []string{"cache_creation_input_tokens", "cache_read_input_tokens"} {
+		if v, ok := usage[key]; ok && !tokenCount(v) {
+			return fmt.Errorf("%s must be an unsigned integer", key)
+		}
+	}
+	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
+		for _, key := range []string{"ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"} {
+			if v, ok := nested[key]; ok && !tokenCount(v) {
+				return fmt.Errorf("cache_creation.%s must be an unsigned integer", key)
+			}
+		}
+	}
+
+	// input_tokens is required (can be 0)
 	inputTokens, hasInput := usage["input_tokens"]
 	if !hasInput {
 		return fmt.Errorf("missing required input_tokens")
 	}
-	if inputFloat, ok := inputTokens.(float64); ok {
-		entry.InputTokens = int(inputFloat)
-	} else {
-		return fmt.Errorf("input_tokens must be a number")
+	if !tokenCount(inputTokens) {
+		return fmt.Errorf("input_tokens must be an unsigned integer")
 	}
+	entry.InputTokens = int(inputTokens.(float64))
 
-	// output_tokens is required (must be number, can be 0)
+	// output_tokens is required (can be 0)
 	outputTokens, hasOutput := usage["output_tokens"]
 	if !hasOutput {
 		return fmt.Errorf("missing required output_tokens")
 	}
-	if outputFloat, ok := outputTokens.(float64); ok {
-		entry.OutputTokens = int(outputFloat)
-	} else {
-		return fmt.Errorf("output_tokens must be a number")
+	if !tokenCount(outputTokens) {
+		return fmt.Errorf("output_tokens must be an unsigned integer")
 	}
+	entry.OutputTokens = int(outputTokens.(float64))
 
 	// Optional fields
 	if model, ok := message["model"].(string); ok {
@@ -1104,6 +1131,28 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	}
 
 	return nil
+}
+
+// tokenCount reports whether v is a token count upstream reads: a
+// nonnegative integer.
+func tokenCount(v interface{}) bool {
+	n, ok := v.(float64)
+	return ok && n >= 0 && n == math.Trunc(n)
+}
+
+// semverPrefix reports whether version starts with major.minor.patch
+// digits, as upstream's is_semver_prefix.
+func semverPrefix(version string) bool {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 3 || parts[2] == "" || parts[2][0] < '0' || parts[2][0] > '9' {
+		return false
+	}
+	for _, part := range parts[:2] {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // extractProjectPath returns the project directory portion of a JSONL file path.

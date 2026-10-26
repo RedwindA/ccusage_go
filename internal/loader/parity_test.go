@@ -537,3 +537,74 @@ func TestLoadReturnsEntriesInTimeOrderAcrossFiles(t *testing.T) {
 		}
 	}
 }
+
+// Upstream skips a usage line that holds one of its non-nullable fields as
+// null anywhere in the line (only a usage.iterations element's model may be
+// null), a non-semver version, an empty session, request, message or model
+// ID, or a token count that is not an unsigned integer; for an
+// AgentProgress line, its own session and its record's IDs.
+func TestClaudeLinesUpstreamRejectsAreSkipped(t *testing.T) {
+	base := `{"type":"assistant","timestamp":"2026-09-12T04:38:42.296Z","version":"2.0.0","sessionId":"s","requestId":"r","cwd":"/w","isApiErrorMessage":false,"costUSD":0.5,"message":{"id":"m","model":"claude-sonnet-4-5","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"speed":"standard","cache_creation":{"ephemeral_5m_input_tokens":10}}}}`
+	progress := `{"type":"progress","timestamp":"2026-09-12T04:38:42.296Z","sessionId":"s","data":{"type":"agent_progress","message":{"timestamp":"2026-09-12T04:38:41.000Z","requestId":"r","message":{"id":"m","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":20}}}}}`
+	iterations := `"usage":{"iterations":[{"type":"message","model":null,"input_tokens":1,"output_tokens":2}],`
+	for _, tc := range []struct {
+		line, old, new string
+		kept           bool
+	}{
+		{base, "", "", true},
+		{base, `"usage":{`, iterations, true},
+		{base, `"stop_reason":null`, `"stop_reason":null,"content":[{"type":"text","text":"\"model\":null"}]`, true},
+		{base, `"version":"2.0.0"`, `"version":"2.1.310-beta"`, true},
+		{base, `"speed":"standard"`, `"speed":null`, false},
+		{base, `"speed":"standard"`, `"speed" : null`, false},
+		{base, `"costUSD":0.5`, `"costUSD":null`, false},
+		{base, `"version":"2.0.0"`, `"version":null`, false},
+		{base, `"version":"2.0.0"`, `"version":"not-semver"`, false},
+		{base, `"version":"2.0.0"`, `"version":"2.0"`, false},
+		{base, `"sessionId":"s"`, `"sessionId":null`, false},
+		{base, `"sessionId":"s"`, `"sessionId":""`, false},
+		{base, `"requestId":"r"`, `"requestId":null`, false},
+		{base, `"requestId":"r"`, `"requestId":""`, false},
+		{base, `"id":"m"`, `"id":null`, false},
+		{base, `"id":"m"`, `"id":""`, false},
+		{base, `"model":"claude-sonnet-4-5"`, `"model":null`, false},
+		{base, `"model":"claude-sonnet-4-5"`, `"model":""`, false},
+		{base, `"cwd":"/w"`, `"cwd":null`, false},
+		{base, `"isApiErrorMessage":false`, `"isApiErrorMessage":null`, false},
+		{base, `"cache_creation_input_tokens":10`, `"cache_creation_input_tokens":null`, false},
+		{base, `"cache_read_input_tokens":20`, `"cache_read_input_tokens":null`, false},
+		{base, `"stop_reason":null`, `"content":[{"type":"tool_use","input":{"model":null}}]`, false},
+		{base, `"input_tokens":10`, `"input_tokens":-5`, false},
+		{base, `"output_tokens":20`, `"output_tokens":2.5`, false},
+		{base, `"cache_read_input_tokens":20`, `"cache_read_input_tokens":-1`, false},
+		{base, `"ephemeral_5m_input_tokens":10`, `"ephemeral_5m_input_tokens":-10`, false},
+		{progress, "", "", true},
+		{progress, `"usage":{`, iterations, true},
+		{progress, `"sessionId":"s"`, `"sessionId":""`, false},
+		{progress, `"requestId":"r"`, `"requestId":""`, false},
+		{progress, `"model":"claude-sonnet-4-5"`, `"model":""`, false},
+		{progress, `"input_tokens":10`, `"input_tokens":-5`, false},
+	} {
+		line := strings.Replace(tc.line, tc.old, tc.new, 1)
+		p := filepath.Join(t.TempDir(), "projects/p/s.jsonl")
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(line+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if tc.kept {
+			want = 1
+		}
+		daily := New()
+		daily.SetDailyLoader(func(e *types.UsageEntry) float64 { return e.Cost })
+		if got, _ := daily.LoadParallel(context.Background(), []string{p}); len(got) != want {
+			t.Errorf("%s: daily loader read %d entries, want %d", line, len(got), want)
+		}
+		// Only the daily loader reads AgentProgress lines.
+		if got, _ := New().LoadParallel(context.Background(), []string{p}); tc.line == base && len(got) != want {
+			t.Errorf("%s: entry loader read %d entries, want %d", line, len(got), want)
+		}
+	}
+}
