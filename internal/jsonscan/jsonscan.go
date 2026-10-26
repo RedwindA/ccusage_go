@@ -50,6 +50,27 @@ func FieldsStrict(data []byte, visit func(key []byte, v Value) error) (null bool
 	return fields(&scanner{b: data, strict: true}, visit)
 }
 
+// Members collects facts about the members of every object a scan reads, at
+// any depth, whether visited, decoded or skipped. They hold for input that
+// scans without error.
+type Members struct {
+	// Repeated is set when an object repeats an unescaped key: data is not
+	// Unique.
+	Repeated bool
+	// Null, when not nil, is called with the unescaped key of each member
+	// whose value is null.
+	Null func(key []byte)
+}
+
+// FieldsStrictMembers is FieldsStrict that also collects m, saving callers
+// that need both a second scan.
+func FieldsStrictMembers(data []byte, m *Members, visit func(key []byte, v Value) error) (null bool, err error) {
+	s := scanner{b: data, strict: true, unique: true, keys: make([][]byte, 0, 32), null: m.Null}
+	null, err = fields(&s, visit)
+	m.Repeated = s.repeated
+	return null, err
+}
+
 func fields(s *scanner, visit func(key []byte, v Value) error) (null bool, err error) {
 	s.ws()
 	if null, err = s.fields(visit); err != nil {
@@ -141,7 +162,7 @@ func Decode(data []byte) (interface{}, error) {
 func Unique(data []byte) bool {
 	s := scanner{b: data, unique: true, keys: make([][]byte, 0, 32)}
 	s.ws()
-	return s.skip() == nil
+	return s.skip() == nil && !s.repeated
 }
 
 // DecodeObject decodes data as json.Unmarshal into map[string]interface{}
@@ -172,10 +193,13 @@ type scanner struct {
 	// strict makes skip reject numbers outside float64 range, as decoding
 	// into interface{} does; decode always parses, so it always checks.
 	strict bool
-	// unique makes object reject a repeated key; keys holds those of the
-	// objects being scanned, innermost last.
-	unique bool
-	keys   [][]byte
+	// unique makes objects check for a repeated key until they find one,
+	// setting repeated; keys holds those of the objects being scanned,
+	// innermost last.
+	unique, repeated bool
+	keys             [][]byte
+	// null, when not nil, is called with the key of each null member.
+	null func(key []byte)
 }
 
 func (s *scanner) fail(msg string) error { return &SyntaxError{Offset: s.i, msg: msg} }
@@ -231,7 +255,8 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 		if s.unique && seen == nil {
 			for _, k := range s.keys[outer:] {
 				if string(k) == string(key) {
-					return s.fail("repeated object key")
+					s.unique, s.repeated = false, true
+					break
 				}
 			}
 			s.keys = append(s.keys, key)
@@ -243,10 +268,11 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 			}
 		} else if s.unique {
 			if seen[string(key)] {
-				return s.fail("repeated object key")
+				s.unique, s.repeated = false, true
 			}
 			seen[string(key)] = true
 		}
+		s.member(key)
 		start := s.i
 		if visit != nil {
 			if err := visit(key, Value{s}); err != nil {
@@ -262,6 +288,13 @@ func (s *scanner) object(visit func(key []byte, v Value) error) error {
 			s.keys = s.keys[:outer]
 			return err
 		}
+	}
+}
+
+// member reports the member whose key was just scanned to s.null.
+func (s *scanner) member(key []byte) {
+	if s.null != nil && s.i < len(s.b) && s.b[s.i] == 'n' {
+		s.null(key)
 	}
 }
 
@@ -437,6 +470,10 @@ func (s *scanner) decodeObject() (map[string]interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
+		if _, ok := m[string(key)]; ok && s.unique {
+			s.unique, s.repeated = false, true
+		}
+		s.member(key)
 		v, err := s.decode()
 		if err != nil {
 			return nil, err

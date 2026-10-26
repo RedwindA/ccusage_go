@@ -103,7 +103,7 @@ func recordedSessionID(path string) string {
 	for {
 		line, err := reader.ReadBytes('\n')
 		if bytes.Contains(line, []byte(`"sessionId"`)) {
-			if raw, scanErr := scanLine(bytes.TrimSpace(line)); scanErr == nil {
+			if raw, _, scanErr := scanLine(bytes.TrimSpace(line)); scanErr == nil {
 				if session, _ := raw["sessionId"].(string); session != "" {
 					return session
 				}
