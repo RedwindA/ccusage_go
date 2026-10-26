@@ -1,10 +1,8 @@
 package main
 
 import (
-	"os"
-	"os/exec"
+	"go/build"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -12,13 +10,13 @@ import (
 // no GOROOT to fall back to, so a Windows binary needs embedded time zone
 // data to resolve --timezone America/New_York, as upstream bundles it there.
 func TestWindowsBuildEmbedsTimeZoneData(t *testing.T) {
-	list := exec.Command("go", "list", "-deps", ".")
-	list.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
-	out, err := list.Output()
+	ctx := build.Default
+	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = "windows", "amd64", false
+	pkg, err := ctx.ImportDir(".", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(strings.Fields(string(out)), "time/tzdata") {
+	if !slices.Contains(pkg.Imports, "time/tzdata") {
 		t.Fatal("the Windows build does not embed time/tzdata")
 	}
 }
