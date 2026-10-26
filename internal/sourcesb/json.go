@@ -31,6 +31,8 @@ func loadKimi(file string) ([]types.UsageEntry, error) {
 	for _, r := range rr {
 		e := types.UsageEntry{Model: model, SourceFile: file, SessionID: session, Timestamp: mtime(file), Raw: r}
 		var u obj
+		// Upstream reads a total only from the old format's token_usage.
+		total := 0
 		if s(r["type"]) == "usage.record" {
 			if s(r["usageScope"]) != "turn" {
 				continue
@@ -56,11 +58,12 @@ func loadKimi(file string) ([]types.UsageEntry, error) {
 			e.OutputTokens = n(u["output"])
 			e.CacheCreationInputTokens = n(u["input_cache_creation"])
 			e.CacheReadInputTokens = n(u["input_cache_read"])
+			total = n(u["total"])
 			if r["timestamp"] != nil {
 				e.Timestamp = time.UnixMilli(int64(f(r["timestamp"]) * 1000))
 			}
 		}
-		finish(&e, n(u["total"]))
+		finish(&e, total)
 		if e.TotalTokens == 0 {
 			continue
 		}

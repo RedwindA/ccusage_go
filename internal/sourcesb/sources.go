@@ -245,8 +245,10 @@ func LoadUntil(ctx context.Context, name string, paths []string, loc *time.Locat
 		}
 		e.Agent = name
 		// These adapters keep reasoning/remainder tokens outside visible output.
-		// Copilot included-output reasoning is separately kept in Raw.
-		if e.ReasoningTokens > 0 {
+		// Copilot included-output reasoning is separately kept in Raw. Kimi's
+		// are the part of a total above the counted tokens, which upstream
+		// counts but does not price.
+		if e.ReasoningTokens > 0 && name != "kimi" {
 			if e.Raw == nil {
 				e.Raw = obj{}
 			}

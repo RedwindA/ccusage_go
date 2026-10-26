@@ -132,6 +132,24 @@ func TestNativeSourceCLIMatrix(t *testing.T) {
 		})
 	}
 }
+
+// Upstream's Kimi counts the part of a StatusUpdate's total above its
+// counted tokens but prices only those, unless output is 0 and the part
+// becomes it, and reads no total from a usage.record.
+func TestKimiCountsTheTotalSurplusUnpriced(t *testing.T) {
+	isolateSourceHomes(t)
+	dir := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"pricingOverrides":{"kimi-x":{"inputCostPerToken":1,"outputCostPerToken":2}}}}`)
+	sourceCLIWrite(t, filepath.Join(dir, "config.json"), `{"model":"kimi-x"}`)
+	sourceCLIWrite(t, filepath.Join(dir, "sessions/ws/old/wire.jsonl"), `{"timestamp":1778000000,"message":{"type":"StatusUpdate","payload":{"message_id":"a","token_usage":{"input_other":10,"output":5,"total":100}}}}
+{"timestamp":1778000001,"message":{"type":"StatusUpdate","payload":{"message_id":"b","token_usage":{"input_other":10,"output":0,"total":50}}}}`)
+	sourceCLIWrite(t, filepath.Join(dir, "sessions/ws/new/agents/main/wire.jsonl"), `{"type":"usage.record","usageScope":"turn","model":"kimi-x","time":1778000002000,"usage":{"inputOther":10,"output":5,"total":100}}`)
+	totals := sourceCLIJSON(t, "kimi", "daily", "--json", "--offline", "--data-path", dir, "--config", cfg, "--timezone", "UTC")["totals"].(map[string]any)
+	if totals["totalTokens"] != 165.0 || totals["totalCost"] != 130.0 {
+		t.Fatalf("totals %v, want 100+50+15 tokens and a cost of 10+5*2 + 10+40*2 + 10+5*2", totals)
+	}
+}
 func TestOpenCodeAggregateOnlySessionCLI(t *testing.T) {
 	isolateSourceHomes(t)
 	dir := t.TempDir()
