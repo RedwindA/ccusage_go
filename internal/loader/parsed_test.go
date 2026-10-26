@@ -34,9 +34,10 @@ func captureStderr(t *testing.T, fn func()) string {
 }
 
 // Loads that share ParsedFiles see what each would load on its own, whatever
-// files and load kind earlier loads read: entries, the error when no file
-// loads, and the debug messages, which differ between entry and daily loads
-// for a file with AgentProgress lines.
+// files and load kind earlier loads read: entries and the error when no file
+// loads. A file's debug messages, which differ between entry and daily loads
+// for a file with AgentProgress lines, are printed once, by the load that
+// parses it, as that load would print them on its own.
 func TestLoadsSharingParsedFilesMatchSeparateLoads(t *testing.T) {
 	root := t.TempDir()
 	write := func(name string, lines ...string) string {
@@ -81,6 +82,7 @@ func TestLoadsSharingParsedFilesMatchSeparateLoads(t *testing.T) {
 		return entries, err, stderr
 	}
 	var parsed ParsedFiles
+	printed := map[string]bool{}
 	for _, step := range []struct {
 		paths []string
 		daily bool
@@ -93,8 +95,16 @@ func TestLoadsSharingParsedFilesMatchSeparateLoads(t *testing.T) {
 		{[]string{session, subagent, gateway, missing}, true},
 		{[]string{subagent, session}, false},
 	} {
-		want, wantErr, wantStderr := load(step.paths, step.daily, nil)
+		want, wantErr, _ := load(step.paths, step.daily, nil)
 		got, gotErr, gotStderr := load(step.paths, step.daily, &parsed)
+		wantStderr := ""
+		for _, path := range step.paths {
+			if !printed[path] {
+				printed[path] = true
+				_, _, stderr := load([]string{path}, step.daily, nil)
+				wantStderr += stderr
+			}
+		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%d files, daily %v: entries\n%+v\nwant\n%+v", len(step.paths), step.daily, got, want)
 		}

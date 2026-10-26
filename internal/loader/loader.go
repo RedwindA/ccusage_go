@@ -213,12 +213,14 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	// does not depend on worker scheduling.
 	results := make([]parsedFile, len(paths))
 	// unparsed lists the paths no earlier load kept, and slots their indexes
-	// in paths.
+	// in paths. reused marks the others, whose parse errors the load that
+	// parsed them already reported.
 	var unparsed []string
 	var slots []int
+	reused := make([]bool, len(paths))
 	for i, path := range paths {
 		if parsed, ok := l.parsed.lookup(path); ok {
-			results[i] = parsed
+			results[i], reused[i] = parsed, true
 		} else {
 			unparsed = append(unparsed, path)
 			slots = append(slots, i)
@@ -254,9 +256,9 @@ func (l *Loader) LoadParallelWithOptions(ctx context.Context, paths []string, op
 	var errors []error
 	globalSessionNames := make(map[string]string)
 
-	for _, res := range results {
+	for i, res := range results {
 		entries, debugMsg := res.usage(l.dailyCost != nil)
-		if debugMsg != "" {
+		if debugMsg != "" && !reused[i] {
 			fmt.Fprint(os.Stderr, debugMsg)
 		}
 		if res.err != nil {
