@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -494,5 +497,33 @@ func TestTimezoneNamesInAnyCaseWithoutZoneDirectories(t *testing.T) {
 	}
 	if _, err := loadTimezone("mars/olympus_mons"); err == nil {
 		t.Error("an unknown zone resolved")
+	}
+}
+
+// A file system that ignores case, as macOS's does, has time.LoadLocation
+// load asia/tokyo as Asia/Tokyo but name it as written. Zone files stored
+// under such names in ZONEINFO, which Go reads once a process, do the same.
+func TestTimezoneNamesInAnyCaseOnACaseInsensitiveFileSystem(t *testing.T) {
+	zoneinfo := t.TempDir()
+	// A TZif file of one zone and no transitions.
+	tzif := append([]byte("TZif"), make([]byte, 16)...)
+	for _, count := range []uint32{0, 0, 0, 0, 1, 1} { // UT/local, standard/wall, leap seconds, transitions, zones, name bytes
+		tzif = binary.BigEndian.AppendUint32(tzif, count)
+	}
+	tzif = append(tzif, make([]byte, 7)...)
+	for _, name := range []string{"utc", "asia/tokyo", "ETC/gmt+5"} {
+		path := filepath.Join(zoneinfo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, tzif, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	test := exec.Command(os.Args[0], "-test.run=^TestTimezoneNamesInAnyCaseWithoutZoneDirectories$", "-test.v")
+	test.Env = append(os.Environ(), "ZONEINFO="+zoneinfo)
+	out, err := test.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: TestTimezoneNamesInAnyCaseWithoutZoneDirectories") {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }
