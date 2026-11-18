@@ -500,3 +500,40 @@ func TestQualifiedModelsOfDroidCodebuffAndGoose(t *testing.T) {
 		}
 	}
 }
+
+// LiteLLM listed gemini-4-carbon only under provider prefixes and as
+// vertex_ai's gemini-4-carbon-cyber-permissive, the longest fuzzy match, which
+// billed Antigravity's Gemini 4 Carbon at twice models.dev's rate for it.
+func TestFuzzyVariantYieldsToModelsDevExactID(t *testing.T) {
+	ctx := context.Background()
+	s := tableService(map[string]ModelPricing{
+		"gemini/gemini-x":                     {InputCostPerToken: 2},
+		"vertex_ai/gemini-x-cyber-permissive": {InputCostPerToken: 4},
+		"claude-y-20990101":                   {InputCostPerToken: 5},
+	})
+	s.models = map[string]ModelPricing{"gemini-x": {InputCostPerToken: 3}}
+	want := map[string]float64{
+		"gemini-x":                  3, // the variant yields to models.dev's exact id
+		"claude-y":                  5, // no exact id anywhere: the variant still prices it
+		"gemini-x-cyber-permissive": 4,
+	}
+	for model, w := range want {
+		if p, err := s.GetPricing(ctx, model, time.Time{}); err != nil || p.InputCostPerToken != w {
+			t.Errorf("%s: %+v %v, want %v", model, p, err, w)
+		}
+	}
+	// A key inside the id, like a dated request, is not a variant of it.
+	s = tableService(map[string]ModelPricing{"gemini-x": {InputCostPerToken: 2}})
+	s.models = map[string]ModelPricing{"gemini-x-20990101": {InputCostPerToken: 3}}
+	if p, err := s.GetPricing(ctx, "gemini-x-20990101", time.Time{}); err != nil || p.InputCostPerToken != 2 {
+		t.Errorf("dated id: %+v %v", p, err)
+	}
+	// Online, the live LiteLLM table had exactly this shape for Gemini 4 Carbon.
+	embedded := NewService()
+	embedded.SetOffline(true)
+	embedded.primary["vertex_ai/gemini-4-carbon-cyber-permissive"] = ModelPricing{InputCostPerToken: 4e-6, OutputCostPerToken: 2e-5}
+	delete(embedded.primary, "gemini-4-carbon")
+	if p, err := embedded.GetSourcePricing(ctx, "gemini-4-carbon", "antigravity", nil, time.Time{}); err != nil || p.InputCostPerToken != 2e-6 {
+		t.Errorf("antigravity gemini-4-carbon: %+v %v, want models.dev's 2e-6", p, err)
+	}
+}

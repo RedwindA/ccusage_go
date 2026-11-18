@@ -495,11 +495,19 @@ func (s *Service) exactEntry(model string) (ModelPricing, bool) {
 // accepts. The empty id names nothing, though every key contains it:
 // upstream's callers never price it.
 func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool, keep func(ModelPricing) bool) (ModelPricing, bool) {
+	p, ok, _ := findVariant(all, idx, model, fuzzy, keep)
+	return p, ok
+}
+
+// findVariant is find that also reports whether the entry is a fuzzy match
+// on a key that only extends the id it was asked for, the way
+// vertex_ai/gemini-4-carbon-cyber-permissive extends gemini-4-carbon.
+func findVariant(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool, keep func(ModelPricing) bool) (ModelPricing, bool, bool) {
 	if model == "" {
-		return ModelPricing{}, false
+		return ModelPricing{}, false, false
 	}
 	if p, ok := all[model]; ok && keep(p) {
-		return p, true
+		return p, true, false
 	}
 	names := []string{model}
 	if alias := canonical(model); alias != model {
@@ -507,11 +515,11 @@ func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool
 	}
 	for _, name := range names {
 		if p, ok := all[name]; ok && keep(p) {
-			return p, true
+			return p, true, false
 		}
 		n := normalizer.Replace(name)
 		if id := idx.exactOnly[n]; id != "" {
-			return all[id], keep(all[id])
+			return all[id], keep(all[id]), false
 		}
 		if !fuzzy || hasKey(idx.exactOnly, n) {
 			continue
@@ -523,10 +531,10 @@ func find(all map[string]ModelPricing, idx *priceIndex, model string, fuzzy bool
 			}
 		}
 		if best != "" {
-			return all[best], true
+			return all[best], true, extendsPricingKey(best, normalizer.Replace(best), name, n)
 		}
 	}
-	return ModelPricing{}, false
+	return ModelPricing{}, false, false
 }
 
 func anyEntry(ModelPricing) bool { return true }
@@ -537,6 +545,24 @@ func hasContextLimit(p ModelPricing) bool { return p.MaxInputTokens > 0 }
 // as written or with '.' and '@' read as '-'.
 func pricingKeyMatches(key, normKey, model, normModel string) bool {
 	return containsPricingKey(model, key) || containsPricingKey(key, model) || containsPricingKey(normModel, normKey) || containsPricingKey(normKey, normModel)
+}
+
+// extendsPricingKey reports whether key matches model only by containing it
+// with more of a name after it: model is not key's tail after a provider
+// prefix, and key does not occur inside model.
+func extendsPricingKey(key, normKey, model, normModel string) bool {
+	return !containsPricingKey(model, key) && !containsPricingKey(normModel, normKey) && !endsWithPricingKey(key, model) && !endsWithPricingKey(normKey, normModel)
+}
+
+// endsWithPricingKey reports whether value is key or ends with it after a
+// non-alphanumeric separator, as gemini/gemini-4-carbon ends with
+// gemini-4-carbon.
+func endsWithPricingKey(value, key string) bool {
+	if !strings.HasSuffix(value, key) {
+		return false
+	}
+	i := len(value) - len(key)
+	return i == 0 || !isAlphanumeric(value[i-1])
 }
 
 // containsPricingKey finds key in value between non-alphanumeric boundaries,
@@ -596,11 +622,27 @@ func (s *Service) lookup(model, resolved string) (ModelPricing, bool) {
 	}
 	fuzzy := !s.requiresExact(model) && !s.requiresExact(resolved)
 	var p ModelPricing
-	ok := false
+	ok, variant := false, false
 	for _, allow := range []bool{false, fuzzy} {
 		for _, name := range names {
 			if !ok {
-				p, ok = find(s.primary, s.primaryIndex(), name, allow, anyEntry)
+				p, ok, variant = findVariant(s.primary, s.primaryIndex(), name, allow, anyEntry)
+			}
+		}
+	}
+	// A LiteLLM key that only extends the id can name a variant with its own
+	// rate, such as vertex_ai/gemini-4-carbon-cyber-permissive for
+	// gemini-4-carbon. When models.dev prices the id itself at another rate,
+	// its rate wins; at the same rate the suffix only marks a release, like
+	// Bedrock's -v1:0, and LiteLLM's entry keeps its context tiers. Upstream
+	// keeps the variant's rate either way.
+	if variant {
+		for _, table := range s.fallbacks() {
+			if exact, found := find(table.all, table.idx, resolved, false, anyEntry); found {
+				if exact.InputCostPerToken != p.InputCostPerToken || exact.OutputCostPerToken != p.OutputCostPerToken {
+					p = exact
+				}
+				break
 			}
 		}
 	}
