@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.20.1] - 2026-11-18
+
+### Fixed
+
+- Antigravity reports show the real model name instead of a placeholder like `model_placeholder_m437` for model IDs ccusage_go does not know yet, when the conversation also stores the name (Gemini 4 Carbon, Claude Opus 5.5 Medium, Claude Sonnet 5.5 Medium, and so on). Those rows used to cost $0; they are now priced. Ports upstream ccusage #2071.
+- `make update-pricing` reads the LiteLLM pin from current upstream checkouts, which moved it into a file input URL.
+
+### Changed
+
+- Embedded pricing is refreshed to the LiteLLM and models.dev snapshots of upstream ccusage as of v20.0.51, adding Gemini 4 Carbon and Hydrogen, Claude Fable 5.2, GPT-6.1 Terra and GPT-6.2 Astra among others. GPT-6.1 Terra gets the Fast (2×) and Flex (0.5×) multipliers.
+
 ## [v0.20.0] - 2026-10-25
 
 This release ports every upstream ccusage change from v20.0.24 through v20.0.44. On real Claude Code and Codex history, its daily, weekly, monthly and session totals now match ccusage v20.0.44 exactly.
