@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.20.2] - 2026-11-18
+
+### Fixed
+
+- Online pricing no longer bills a model at a longer LiteLLM variant's rate when models.dev prices the model itself at a different rate. LiteLLM lists Gemini 4 Carbon and Gemini 4 Argon only under provider prefixes, so the longest fuzzy match, such as `vertex_ai/gemini-4-carbon-cyber-permissive`, billed them at twice their rate; they now cost the same online as with `--offline`. A variant at the model's own rate, such as Bedrock's `-v1:0` ids, still prices it with LiteLLM's context tiers. Upstream ccusage keeps the variant's rate.
+
 ## [v0.20.1] - 2026-11-18
 
 ### Fixed
