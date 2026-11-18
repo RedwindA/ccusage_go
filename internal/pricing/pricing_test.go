@@ -450,10 +450,10 @@ func TestGeminiPricesProviderQualifiedIDsFirst(t *testing.T) {
 	}
 	embedded := NewService()
 	embedded.SetOffline(true)
-	google, _ := embedded.GetPricing(ctx, "google/gemini-2.5-flash", time.Time{})
-	bare, _ := embedded.GetPricing(ctx, "gemini-2.5-flash", time.Time{})
-	if p, err := embedded.GetSourcePricing(ctx, "gemini-2.5-flash", "gemini", nil, time.Time{}); err != nil || p.InputCostPerToken != google.InputCostPerToken || p.InputCostPerToken == bare.InputCostPerToken {
-		t.Errorf("gemini-2.5-flash: %+v %v, want google/'s %+v", p, err, google)
+	google, _ := embedded.GetPricing(ctx, "google/gemini-2.0-flash-lite", time.Time{})
+	bare, _ := embedded.GetPricing(ctx, "gemini-2.0-flash-lite", time.Time{})
+	if p, err := embedded.GetSourcePricing(ctx, "gemini-2.0-flash-lite", "gemini", nil, time.Time{}); err != nil || p.InputCostPerToken != google.InputCostPerToken || p.InputCostPerToken == bare.InputCostPerToken {
+		t.Errorf("gemini-2.0-flash-lite: %+v %v, want google/'s %+v", p, err, google)
 	}
 }
 

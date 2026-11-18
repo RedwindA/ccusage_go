@@ -15,7 +15,7 @@ import (
 
 // LiteLLM models/fields reduced like upstream's ccusage-pricing-snapshots
 // build.rs; regenerate with `make update-pricing UPSTREAM=<ccusage checkout>`.
-// Pinned by upstream flake.lock: BerriAI/litellm@d3b70c42ed1599727669ea7883c3971008a9113d
+// Pinned by upstream flake.lock: BerriAI/litellm@58a788a1d159397a9e6b70f9a2e0f9df740109de
 //
 //go:embed litellm-pricing.json
 var liteSnapshot []byte

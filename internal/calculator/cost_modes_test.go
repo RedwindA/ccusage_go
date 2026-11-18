@@ -54,7 +54,8 @@ func TestFastSuffixedModelsArePricedAsWritten(t *testing.T) {
 	}{
 		{"claude", "claude-opus-4-8", "", 1.31375},
 		{"claude", "claude-opus-4-8", "fast", 2.6275},
-		{"claude", "claude-opus-4-8-fast", "", 2.6275},
+		{"claude", "claude-opus-5-5-fast", "", 2.086},
+		{"claude", "claude-opus-5-5", "", 1.043},
 		{"claude", "claude-opus-4-6-fast", "", 1.31375},
 		{"claude", "anthropic/claude-opus-5-fast", "", 1.31375},
 		{"claude", "gpt-5.5-fast", "", 2.60375},
