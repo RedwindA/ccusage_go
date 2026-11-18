@@ -110,6 +110,17 @@ class UpdateTest(unittest.TestCase):
             'https://raw.githubusercontent.com/BerriAI/litellm/d3b70c42ed1599727669ea7883c3971008a9113d/model_prices_and_context_window.json',
         )
 
+    def test_reads_a_file_input_pin(self):
+        url = 'https://raw.githubusercontent.com/BerriAI/litellm/58a788a1d159397a9e6b70f9a2e0f9df740109de/model_prices_and_context_window.json'
+        lock = {'nodes': {'litellm': {'locked': {'type': 'file', 'url': url, 'narHash': 'sha256-x'}}}}
+        self.assertEqual(
+            update_pricing.litellm_source(json.dumps(lock)),
+            ('BerriAI/litellm@58a788a1d159397a9e6b70f9a2e0f9df740109de', url),
+        )
+        lock['nodes']['litellm']['locked']['url'] = 'https://example.com/prices.json'
+        with self.assertRaises(SystemExit):
+            update_pricing.litellm_source(json.dumps(lock))
+
     def test_refuses_a_catalog_without_the_pin_line_before_writing(self):
         self.catalog.write_text('package pricing\n')
         with self.assertRaises(SystemExit):

@@ -68,10 +68,21 @@ def compact_litellm(raw):
     return json.dumps(compact, indent=2, sort_keys=True) + '\n'
 
 
+RAW_URL = re.compile(r'https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([0-9a-f]{40})/model_prices_and_context_window\.json')
+
+
 def litellm_source(flake_lock):
     """Return (owner/repo@rev, raw URL) for the LiteLLM input a flake.lock pins."""
     locked = json.loads(flake_lock)['nodes']['litellm']['locked']
-    owner, repo, rev = locked['owner'], locked['repo'], locked['rev']
+    if locked.get('type') == 'file':
+        # A file input keeps the commit in its raw.githubusercontent.com URL.
+        url = locked['url']
+        match = RAW_URL.fullmatch(url)
+        if not match:
+            raise SystemExit(f'flake.lock: unexpected LiteLLM file URL {url}')
+        owner, repo, rev = match.groups()
+    else:
+        owner, repo, rev = locked['owner'], locked['repo'], locked['rev']
     url = f'https://raw.githubusercontent.com/{owner}/{repo}/{rev}/model_prices_and_context_window.json'
     return f'{owner}/{repo}@{rev}', url
 
