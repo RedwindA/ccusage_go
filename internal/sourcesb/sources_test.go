@@ -475,3 +475,126 @@ func TestAntigravityNewerModelIDs(t *testing.T) {
 		t.Fatalf("%+v", entries)
 	}
 }
+
+// antiUsage builds a ModelUsage message with an optional model ID.
+func antiUsage(modelID uint64, input uint64, response string) []byte {
+	var u []byte
+	if modelID > 0 {
+		u = varint(1, modelID)
+	}
+	u = append(u, varint(2, input)...)
+	u = append(u, varint(3, 10)...)
+	u = append(u, varint(10, 10)...)
+	if response != "" {
+		u = append(u, blob(11, []byte(response))...)
+	}
+	return u
+}
+
+// antiGeneration builds a gen_metadata row whose chat model carries the
+// usage's model ID in field 3, as Antigravity records it.
+func antiGeneration(model string, modelID uint64, usage []byte, ts uint64, retries ...[]byte) []byte {
+	var chat []byte
+	if modelID > 0 {
+		chat = varint(3, modelID)
+	}
+	chat = append(chat, blob(4, usage)...)
+	chat = append(chat, blob(9, blob(4, varint(1, ts)))...)
+	for _, r := range retries {
+		chat = append(chat, blob(17, blob(2, r))...)
+	}
+	if model != "" {
+		chat = append(chat, blob(19, []byte(model))...)
+	}
+	return blob(1, chat)
+}
+
+func TestAntigravityPrefersExplicitNameOverPlaceholderForUnknownIDs(t *testing.T) {
+	dir := t.TempDir()
+	db := database(t, filepath.Join(dir, "conversations/s.db"), `CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);`)
+	cases := []struct {
+		id    uint64
+		model string
+		resp  string
+	}{
+		{1401, "claude-opus-5-5-medium", "unknown-opus"},
+		{1404, "claude-sonnet-5-5-medium", "unknown-sonnet"},
+		{1427, "gemini-4-carbon", "unknown-carbon-high"},
+		{1437, "gemini-4-carbon", "unknown-carbon-medium"},
+	}
+	for i, c := range cases {
+		row := antiGeneration(c.model, c.id, antiUsage(c.id, 60, c.resp), uint64(1781481600+i), antiUsage(1499, 5, ""))
+		if _, e := db.Exec("INSERT INTO gen_metadata VALUES(?,?)", i, row); e != nil {
+			t.Fatal(e)
+		}
+	}
+	got := map[string]string{}
+	retries := 0
+	for _, e := range mustLoad(t, "antigravity", dir) {
+		if e.InputTokens == 5 {
+			retries++
+			if e.Model != "model_placeholder_m499" {
+				t.Errorf("retry with another model ID took the row's name: %s", e.Model)
+			}
+			continue
+		}
+		got[e.ID] = e.Model
+	}
+	for _, c := range cases {
+		if got[c.resp] != c.model {
+			t.Errorf("%d: got %q, want %q", c.id, got[c.resp], c.model)
+		}
+	}
+	if retries != len(cases) {
+		t.Errorf("retries: %d", retries)
+	}
+}
+
+func TestAntigravityKeepsAliasMappedIDOverExplicitName(t *testing.T) {
+	dir := t.TempDir()
+	db := database(t, filepath.Join(dir, "conversations/s.db"), `CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB);`)
+	if _, e := db.Exec("INSERT INTO gen_metadata VALUES(0,?)", antiGeneration("gemini-3-flash-agent", 1187, antiUsage(1187, 60, ""), 1781481600)); e != nil {
+		t.Fatal(e)
+	}
+	e := mustLoad(t, "antigravity", dir)
+	if len(e) != 1 || e[0].Model != "gemini-3.5-flash-extra-low" {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestAntigravityKeepsExplicitNameWhenMergingUnnamedStepCopy(t *testing.T) {
+	dir := t.TempDir()
+	db := database(t, filepath.Join(dir, "conversations/s.db"), `CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY,data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY,metadata BLOB);`)
+	usage := antiUsage(1401, 60, "shared-response")
+	if _, e := db.Exec("INSERT INTO gen_metadata VALUES(0,?)", antiGeneration("claude-opus-5-5-medium", 1401, usage, 1781481600)); e != nil {
+		t.Fatal(e)
+	}
+	// The step names no model, only the ID and a provider.
+	step := blob(8, varint(1, 1781481600))
+	step = append(step, blob(9, usage)...)
+	step = append(step, blob(24, append(varint(1, 1401), varint(7, 1)...))...)
+	if _, e := db.Exec("INSERT INTO steps VALUES(0,?)", step); e != nil {
+		t.Fatal(e)
+	}
+	e := mustLoad(t, "antigravity", dir)
+	if len(e) != 1 || e[0].Model != "claude-opus-5-5-medium" {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestAntigravityMergePrefersResolvedThenPlaceholderThenDefault(t *testing.T) {
+	merged := func(a, b string) string {
+		x := types.UsageEntry{Model: a, Raw: obj{}}
+		mergeAnti(&x, types.UsageEntry{Model: b, Raw: obj{}})
+		return x.Model
+	}
+	const ph, real, def = "model_placeholder_m401", "claude-opus-5-5-medium", "gemini-internal-model"
+	for _, c := range [][3]string{
+		{def, ph, ph}, {ph, def, ph}, {ph, real, real}, {real, ph, real}, {def, def, def},
+		{"antigravity-model-99", real, real}, {def, "antigravity-model-99", "antigravity-model-99"},
+	} {
+		if got := merged(c[0], c[1]); got != c[2] {
+			t.Errorf("merge(%s, %s) = %s, want %s", c[0], c[1], got, c[2])
+		}
+	}
+}

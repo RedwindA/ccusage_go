@@ -97,6 +97,7 @@ func ptime(b []byte) time.Time {
 
 type antiMeta struct {
 	model     string
+	modelID   int // the row's own model ID, compared with each usage's ID
 	timestamp time.Time
 	usages    [][]byte
 	provider  int
@@ -116,8 +117,9 @@ func antiMetadata(b []byte, step bool) (antiMeta, error) {
 			return m, e
 		}
 		m.model = first(pt(info, 12), pt(info, 8))
-		if m.model == "" && pn(info, 1) > 0 {
-			m.model = antiModelID(pn(info, 1))
+		m.modelID = pn(info, 1)
+		if m.model == "" && m.modelID > 0 {
+			m.model = antiModelID(m.modelID)
 		}
 		m.provider = pn(info, 7)
 		m.timestamp = ptime(pb(p, 8))
@@ -134,8 +136,9 @@ func antiMetadata(b []byte, step bool) (antiMeta, error) {
 			return m, err
 		}
 		m.model = first(pt(p, 19), pt(p, 21))
-		if m.model == "" && pn(p, 3) > 0 {
-			m.model = antiModelID(pn(p, 3))
+		m.modelID = pn(p, 3)
+		if m.model == "" && m.modelID > 0 {
+			m.model = antiModelID(m.modelID)
 		}
 		info, e := proto(pb(p, 9))
 		if e != nil {
@@ -260,11 +263,7 @@ func loadAntigravity(ctx context.Context, file string) ([]types.UsageEntry, erro
 			if err != nil {
 				return nil, err
 			}
-			model := m.model
-			if pn(p, 1) > 0 {
-				model = antiModelID(pn(p, 1))
-			}
-			model = normalizeAnti(first(model, "gemini-internal-model"))
+			model := antiUsageModel(m, pn(p, 1))
 			e := types.UsageEntry{SourceFile: file, SessionID: session, Model: model, InputTokens: pn(p, 2), CacheCreationInputTokens: pn(p, 4), CacheReadInputTokens: pn(p, 5), ReasoningTokens: pn(p, 9), Raw: obj{}}
 			totalOutput := max(pn(p, 3), pn(p, 10)+pn(p, 9))
 			e.OutputTokens = max(pn(p, 10), totalOutput-e.ReasoningTokens)
@@ -381,7 +380,7 @@ func mergeAnti(a *types.UsageEntry, b types.UsageEntry) {
 	if n(a.Raw["provider"]) == 0 {
 		a.Raw["provider"] = b.Raw["provider"]
 	}
-	if a.Model == "gemini-internal-model" {
+	if antiResolution(b.Model) > antiResolution(a.Model) {
 		a.Model = b.Model
 	}
 	ar, br := n(a.Raw["timestamp_rank"]), n(b.Raw["timestamp_rank"])
@@ -396,6 +395,49 @@ func mergeAnti(a *types.UsageEntry, b types.UsageEntry) {
 	ai, _ := a.Raw["identities"].([]string)
 	bi, _ := b.Raw["identities"].([]string)
 	a.Raw["identities"] = append(ai, bi...)
+}
+
+const antiDefaultModel = "gemini-internal-model"
+
+// antiUsageModel picks a usage's model. An ID the tables cannot name yields a
+// placeholder, so a real name stored on the same row (same model ID) wins
+// over it; the placeholder still beats the row's carried-forward name.
+func antiUsageModel(m antiMeta, usageID int) string {
+	idModel := ""
+	if usageID > 0 {
+		idModel = normalizeAnti(antiModelID(usageID))
+		if antiResolution(idModel) == antiResolved {
+			return idModel
+		}
+		if m.model != "" && m.modelID == usageID {
+			if row := normalizeAnti(m.model); antiResolution(row) == antiResolved {
+				return row
+			}
+		}
+		return idModel
+	}
+	if m.model != "" {
+		return normalizeAnti(m.model)
+	}
+	return antiDefaultModel
+}
+
+const (
+	antiDefault = iota
+	antiPlaceholder
+	antiResolved
+)
+
+// antiResolution ranks model names so merging duplicate copies keeps a real
+// name over a placeholder and a placeholder over the default.
+func antiResolution(model string) int {
+	switch {
+	case model == antiDefaultModel:
+		return antiDefault
+	case strings.HasPrefix(model, "model_placeholder_m"), strings.HasPrefix(model, "antigravity-model-"):
+		return antiPlaceholder
+	}
+	return antiResolved
 }
 
 func antiModelID(id int) string {
