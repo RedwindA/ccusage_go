@@ -144,6 +144,20 @@ func TestLiteLLMServiceTierMultipliers(t *testing.T) {
 		t.Errorf("gpt-flex-only: %+v", flexOnly)
 	}
 }
+func TestCodexUltrafastMultiplierOnlyForSupportedModels(t *testing.T) {
+	for model, want := range map[string]float64{
+		"gpt-6.1-sol": 6, "gpt-6-astra": 6, "openai/gpt-6-1-sol": 6,
+		"openai@gpt-6-1-sol": 6, "global.openai.gpt-6.1-sol-2026-09-24": 6,
+		"gpt-6@1-sol": 6, "openai@gpt-6@1-sol-2026-09-24": 6,
+		"gpt-6.1-sol@eu": 6, "openai@gpt-6@1-sol@eu": 6, "openai/gpt-6.1-sol@pro": 1,
+		"gpt-6-1-terra": 1, "gpt-6-sol": 1, "gpt-6.1-sol-mini": 1,
+	} {
+		if got := CodexUltrafastMultiplier(model); got != want {
+			t.Errorf("%s: got %v, want %v", model, got, want)
+		}
+	}
+}
+
 func TestFlexMultiplierOnlyForSupportedOpenAIModelNames(t *testing.T) {
 	for model, want := range map[string]float64{
 		"gpt-6-astra-2026-09-24":               .5,

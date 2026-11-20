@@ -562,7 +562,7 @@ func (l *Loader) parseEntry(raw map[string]interface{}, filePath string) (types.
 	// Top-level cache_* fields are exceedingly rare in real Anthropic JSONL
 	// (cache tokens live under message.usage). Read them only as a final
 	// fallback when validateUsageData did not populate the first-class fields.
-	if entry.CacheCreationInputTokens == 0 {
+	if entry.CacheCreationInputTokens == 0 && raw["cache_creation"] == nil {
 		if v, ok := raw["cache_creation_input_tokens"].(float64); ok {
 			entry.CacheCreationInputTokens = int(v)
 		}
@@ -1013,9 +1013,6 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	if err := usageError(usage); err != nil {
 		return err
 	}
-	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
-		entry.Raw["cache_creation"] = nested
-	}
 	entry.Speed, _ = usage["speed"].(string)
 	if tier, ok := usage["service_tier"].(string); ok {
 		entry.Raw["service_tier"] = tier
@@ -1039,16 +1036,19 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 		entry.Model = model
 	}
 
-	// Cache creation tokens: like upstream's cache_creation_token_count, the
-	// usage.cache_creation.{ephemeral_1h,ephemeral_5m}_input_tokens
-	// breakdown, which costs are priced from, wins over the flat
-	// cache_creation_input_tokens whenever the line has one.
-	if nested, ok := usage["cache_creation"].(map[string]interface{}); ok {
+	// An advisor turn's outer split may cover only its first message.
+	// Prefer the complete split across message iterations when available.
+	split := messageIterationCacheCreation(usage)
+	if split == nil {
+		split, _ = usage["cache_creation"].(map[string]interface{})
+	}
+	if split != nil {
+		entry.Raw["cache_creation"] = split
 		var sum int
-		if v, ok := nested["ephemeral_1h_input_tokens"].(float64); ok {
+		if v, ok := split["ephemeral_1h_input_tokens"].(float64); ok {
 			sum += int(v)
 		}
-		if v, ok := nested["ephemeral_5m_input_tokens"].(float64); ok {
+		if v, ok := split["ephemeral_5m_input_tokens"].(float64); ok {
 			sum += int(v)
 		}
 		entry.CacheCreationInputTokens = sum
@@ -1101,6 +1101,45 @@ func (l *Loader) validateUsageData(raw map[string]interface{}, entry *types.Usag
 	}
 
 	return nil
+}
+
+// messageIterationCacheCreation returns a split only when every message
+// iteration supplies a valid one. Advisor iterations are billed separately.
+func messageIterationCacheCreation(usage map[string]interface{}) map[string]interface{} {
+	iterations, _ := usage["iterations"].([]interface{})
+	var fiveMinutes, oneHour float64
+	var first map[string]interface{}
+	messages := 0
+	for _, v := range iterations {
+		iteration, _ := v.(map[string]interface{})
+		if iteration["type"] != "message" {
+			continue
+		}
+		split, ok := iteration["cache_creation"].(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		five, hasFive := split["ephemeral_5m_input_tokens"]
+		hour, hasHour := split["ephemeral_1h_input_tokens"]
+		if hasFive && !tokenCount(five) || hasHour && !tokenCount(hour) {
+			return nil
+		}
+		f, _ := five.(float64)
+		h, _ := hour.(float64)
+		if messages == 0 {
+			first = split
+		}
+		messages++
+		fiveMinutes += f
+		oneHour += h
+	}
+	if messages <= 1 {
+		return first
+	}
+	return map[string]interface{}{
+		"ephemeral_5m_input_tokens": fiveMinutes,
+		"ephemeral_1h_input_tokens": oneHour,
+	}
 }
 
 // usageError reports why upstream's typed decode of usage, a usage object

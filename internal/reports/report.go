@@ -82,6 +82,7 @@ type Model struct {
 	Input           int     `json:"inputTokens"`
 	Output          int     `json:"outputTokens"`
 	CacheCreate     int     `json:"cacheCreationTokens"`
+	CacheCreation1h *int    `json:"cacheCreation1hTokens,omitempty"`
 	CacheRead       int     `json:"cacheReadTokens"`
 	Total           int     `json:"totalTokens"`
 	Cost            float64 `json:"cost"`
@@ -560,6 +561,14 @@ func (a *accumulator) add(it *item, model string) {
 		m.IsFallback = true
 	}
 	m.CacheCreate += e.CacheCreationInputTokens
+	if it.agent == "claude" {
+		if _, oneHour, ok := e.CacheCreationSplit(); ok {
+			if m.CacheCreation1h == nil {
+				m.CacheCreation1h = new(int)
+			}
+			*m.CacheCreation1h += oneHour
+		}
+	}
 	m.CacheRead += e.CacheReadInputTokens
 	m.Total += total
 	m.Cost += e.Cost

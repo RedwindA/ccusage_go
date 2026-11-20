@@ -142,7 +142,27 @@ func deduplicateUsage(entries []types.UsageEntry, ids []dedupeIDs, dailyCost fun
 			} else if dailyCost != nil && cost(k) != cost(survivors[i]) {
 				replace = cost(k) > cost(survivors[i])
 			} else {
-				replace = e.Speed != "" && old.Speed == ""
+				if e.Speed != old.Speed {
+					replace = claudeSpeedRank(e.Speed) > claudeSpeedRank(old.Speed)
+				} else {
+					_, candidateHasSplit := e.Raw["cache_creation"].(map[string]interface{})
+					_, currentHasSplit := old.Raw["cache_creation"].(map[string]interface{})
+					replace = candidateHasSplit && !currentHasSplit
+					if candidateHasSplit != currentHasSplit {
+						// Copies can each contribute a different piece of
+						// billing data. Retain known cost with the split.
+						keep, other := survivors[i], k
+						if replace {
+							keep, other = other, keep
+						}
+						if !entries[keep].HasCost && entries[other].HasCost {
+							entries[keep].Cost, entries[keep].HasCost = entries[other].Cost, true
+							if priced != nil {
+								priced[keep] = false
+							}
+						}
+					}
+				}
 			}
 			// Register the key only when this entry survives: a requestless
 			// replay's own timestamp would otherwise pull the next response
@@ -176,6 +196,16 @@ func deduplicateUsage(entries []types.UsageEntry, ids []dedupeIDs, dailyCost fun
 		out[i] = entries[s.k]
 	}
 	return out
+}
+
+func claudeSpeedRank(speed string) int {
+	switch speed {
+	case "fast":
+		return 2
+	case "standard":
+		return 1
+	}
+	return 0
 }
 
 // dedupeIDs are the IDs and keys deduplicateUsage matches an entry by.

@@ -110,6 +110,16 @@ class UpdateTest(unittest.TestCase):
             'https://raw.githubusercontent.com/BerriAI/litellm/d3b70c42ed1599727669ea7883c3971008a9113d/model_prices_and_context_window.json',
         )
 
+    def test_keeps_ultrafast_snapshot_with_an_older_checkout(self):
+        name = 'ultrafast-multiplier-overrides.json'
+        source = next(path for path, dest in update_pricing.COPIED.items() if dest == name)
+        (self.upstream / source).unlink()
+        (self.out / name).write_text('existing snapshot')
+
+        update_pricing.update(self.upstream, self.litellm, self.out, self.catalog)
+
+        self.assertEqual((self.out / name).read_text(), 'existing snapshot')
+
     def test_reads_a_file_input_pin(self):
         url = 'https://raw.githubusercontent.com/BerriAI/litellm/58a788a1d159397a9e6b70f9a2e0f9df740109de/model_prices_and_context_window.json'
         lock = {'nodes': {'litellm': {'locked': {'type': 'file', 'url': url, 'narHash': 'sha256-x'}}}}

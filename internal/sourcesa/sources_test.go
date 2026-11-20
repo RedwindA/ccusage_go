@@ -292,21 +292,21 @@ func TestCodexCumulativeDeltasAndRecordedSpeed(t *testing.T) {
 }
 func TestCodexRecordsFlexTierAndKeepsExplicitCopyTiers(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
-	rollout := func(tier string) string {
+	rollout := func(tier string, second int) string {
 		settings := ""
 		if tier != "" {
 			settings = `{"type":"event_msg","timestamp":"2026-07-22T00:00:04Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"` + tier + `"}}}` + "\n"
 		}
-		return settings + `{"type":"event_msg","timestamp":"2026-07-22T00:00:05Z","payload":{"type":"token_count","info":{"model":"gpt-5.4","last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}`
+		return settings + fmt.Sprintf(`{"type":"event_msg","timestamp":"2026-07-22T00:00:%02dZ","payload":{"type":"token_count","info":{"model":"gpt-5.4","last_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}}`, second)
 	}
 	// Each session is copied into a second Codex home, which is read later.
 	want := map[string]string{}
-	for _, tc := range []struct{ session, first, second, want string }{
+	for i, tc := range []struct{ session, first, second, want string }{
 		{"flex", "flex", "", "flex"}, {"unmarked-then-flex", "", "flex", "flex"}, {"flex-then-fast", "flex", "priority", "fast"}, {"fast-then-flex", "priority", "flex", "fast"}, {"flex-then-standard", "flex", "default", "standard"},
 	} {
-		fixture(t, first, "sessions/"+tc.session+".jsonl", rollout(tc.first))
+		fixture(t, first, "sessions/"+tc.session+".jsonl", rollout(tc.first, 5+i))
 		if tc.second != "" {
-			fixture(t, second, "sessions/"+tc.session+".jsonl", rollout(tc.second))
+			fixture(t, second, "sessions/"+tc.session+".jsonl", rollout(tc.second, 5+i))
 		}
 		want[tc.session] = tc.want
 	}
@@ -387,6 +387,233 @@ func TestCodexRepeatedSnapshotDoesNotEndRewrittenBurst(t *testing.T) {
 		t.Fatal(entries)
 	}
 }
+
+func TestCodexSpawnedSiblingsKeepOwnRequestsAtTheForkInstant(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	header := func(id string) string {
+		return fmt.Sprintf(`{"type":"session_meta","timestamp":%q,"payload":{"id":%q,"source":{"subagent":{"thread_spawn":{"parent_thread_id":"missing-parent"}}}}}`, at, id)
+	}
+	record := func(id string) string {
+		return fmt.Sprintf(`{"type":"token_usage_record","timestamp":%q,"payload":{"response_id":%q,"usage":{"input_tokens":10,"output_tokens":1}}}`, at, id)
+	}
+	count := codexLine(t, at, 10)
+	for _, id := range []string{"a", "b"} {
+		fixture(t, root, "sessions/"+id+".jsonl", strings.Join([]string{
+			header(id), codexLine(t, at, 30), record(id + "-1"), count, record(id + "-2"), count,
+		}, "\n"))
+	}
+	// Even when the unnamed copy is found first, the requests belong to a.
+	fixture(t, root, "sessions/0-copy.jsonl", count+"\n"+count)
+	fixture(t, root, "archived_sessions/a-copy.jsonl", strings.Join([]string{
+		header("a-copy"), record("a-1"), count, record("a-2"), count,
+	}, "\n"))
+	want := map[string]int{"a": 22, "b": 22}
+	if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens by session %v, want %v", got, want)
+	}
+}
+
+func TestCodexMissingParentDoesNotHideLateFirstResponse(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "child.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"child","forked_from_id":"missing"}}`+"\n"+
+		codexLine(t, "2026-11-18T12:00:04Z", 10)+"\n"+codexLine(t, "2026-11-18T12:00:04.100Z", 20))
+	if total, _ := sumTokens(t, root); total != 32 {
+		t.Fatalf("counted %d tokens, want 32", total)
+	}
+}
+
+func TestCodexTotalOnlySnapshotDoesNotStartReplayBurst(t *testing.T) {
+	root := t.TempDir()
+	fixture(t, root, "child.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"child","forked_from_id":"missing"}}
+{"type":"event_msg","timestamp":"2026-11-18T12:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":50}}}}`+"\n"+
+		codexLine(t, "2026-11-18T12:00:00.100Z", 10))
+	if total, _ := sumTokens(t, root); total != 11 {
+		t.Fatalf("counted %d tokens, want 11", total)
+	}
+}
+
+func TestCodexRecordedAndLegacyCopiesUseFullOccurrenceOrder(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	settings := func(tier string) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":%q}}}`, at, tier)
+	}
+	fixture(t, root, "sessions/active.jsonl", strings.Join([]string{
+		settings("ultrafast"), count, settings("standard"), codexRecordLine(at, "recorded", 10), count,
+	}, "\n"))
+	// The archive lacks recorded tiers and response IDs.
+	fixture(t, root, "archived_sessions/copy.jsonl", count+"\n"+count)
+	entries := loadTest(t, "codex", root)
+	if len(entries) != 2 || entries[0].SessionID != "active" || entries[1].SessionID != "active" ||
+		entries[0].Speed != "ultrafast" || entries[1].Speed != "standard" {
+		t.Fatalf("tiers=%+v", entries)
+	}
+}
+
+func TestCodexPartialArchiveUsesRecordedPosition(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	recorded := codexRecordLine(at, "second", 10) + "\n" + count
+	fixture(t, root, "sessions/active.jsonl", count+"\n"+recorded+"\n"+count)
+	fixture(t, root, "archived_sessions/partial.jsonl", recorded+"\n"+count)
+	want := map[string]int{"active": 33}
+	if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens by session %v, want %v", got, want)
+	}
+}
+
+func TestCodexPartialRolloutsKeepOccurrencesAroundSharedIDs(t *testing.T) {
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	recorded := func(id string) string { return codexRecordLine(at, id, 10) + "\n" + count }
+	for _, tc := range []struct {
+		name         string
+		first, later []string
+		want         int
+	}{
+		{"gap before anchor", []string{count, recorded("b"), recorded("c")}, []string{recorded("a"), recorded("c")}, 33},
+		{"gap between anchors", []string{recorded("b"), recorded("d")}, []string{recorded("a"), recorded("b"), count, recorded("d")}, 44},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			fixture(t, root, "sessions/early.jsonl", strings.Join(tc.first, "\n"))
+			fixture(t, root, "sessions/later.jsonl", strings.Join(tc.later, "\n"))
+			if total, sessions := sumTokens(t, root); total != tc.want {
+				t.Fatalf("counted %d tokens, want %d: %v", total, tc.want, sessions)
+			}
+		})
+	}
+}
+
+func TestCodexMixedCopiesRetainRecordedTier(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	const settings = `{"type":"event_msg","timestamp":"2026-11-18T12:00:00Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"ultrafast"}}}`
+	count := codexLine(t, at, 10)
+	fixture(t, root, "sessions/active.jsonl", settings+"\n"+count)
+	fixture(t, root, "archived_sessions/copy.jsonl", codexRecordLine(at, "recorded", 10)+"\n"+count)
+	entries := loadTest(t, "codex", root)
+	if len(entries) != 1 || entries[0].Speed != "ultrafast" {
+		t.Fatalf("expected one Ultrafast request, got %+v", entries)
+	}
+}
+
+func TestCodexMixedSiblingRequestsRetainTheirOwnTiers(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	const settings = `{"type":"event_msg","timestamp":"2026-11-18T12:00:00Z","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"ultrafast"}}}`
+	header := func(id string) string {
+		return fmt.Sprintf(`{"type":"session_meta","timestamp":%q,"payload":{"id":%q,"forked_from_id":"parent","history_base":{}}}`, at, id)
+	}
+	count := codexLine(t, at, 10)
+	fixture(t, root, "sessions/legacy.jsonl", header("legacy")+"\n"+settings+"\n"+count)
+	fixture(t, root, "sessions/recorded.jsonl", header("recorded")+"\n"+codexRecordLine(at, "response", 10)+"\n"+count)
+	entries := loadTest(t, "codex", root)
+	if len(entries) != 2 || entries[0].SessionID != "legacy" || entries[0].Speed != "ultrafast" ||
+		entries[1].SessionID != "recorded" || entries[1].Speed != "" {
+		t.Fatalf("each sibling should retain its own tier: %+v", entries)
+	}
+}
+
+func TestCodexReplayShadowPreservesIndependentReferenceFork(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	fixture(t, root, "sessions/parent.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T11:59:00Z","payload":{"id":"parent"}}`+"\n"+codexLine(t, "2026-11-18T11:59:00Z", 10))
+	fixture(t, root, "sessions/fork.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"fork","forked_from_id":"parent"}}`+"\n"+count)
+	fixture(t, root, "sessions/reference.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"reference","forked_from_id":"parent","history_base":{}}}`+"\n"+count)
+	fixture(t, root, "archived_sessions/copy.jsonl", count)
+	want := map[string]int{"parent": 11, "reference": 11}
+	if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens by session %v, want %v", got, want)
+	}
+}
+
+func TestCodexForkMatchingUsesRecordedRequests(t *testing.T) {
+	root := t.TempDir()
+	const start = "2026-11-17T12:00:00Z"
+	const fork = "2026-11-18T12:00:00Z"
+	head := func(at, id, extra string) string {
+		return fmt.Sprintf(`{"type":"session_meta","timestamp":%q,"payload":{"id":%q%s}}`, at, id, extra)
+	}
+	parentOpening := codexRecordLine(start, "replayed", 20) + "\n" + codexLine(t, start, 20)
+	childOpening := codexRecordLine(fork, "replayed", 20) + "\n" + codexLine(t, fork, 20)
+	for _, parentRecorded := range []bool{false, true} {
+		at := "2026-11-18T12:01:00Z"
+		if parentRecorded {
+			at = fork
+		}
+		parentTail := codexLine(t, at, 10)
+		if parentRecorded {
+			parentTail = codexRecordLine(fork, "parent-local", 10) + "\n" + parentTail
+		}
+		fixture(t, root, "sessions/parent.jsonl", head(start, "parent", "")+"\n"+parentOpening+"\n"+parentTail)
+		fixture(t, root, "sessions/fork.jsonl", head(fork, "fork", `,"forked_from_id":"parent"`)+"\n"+childOpening+"\n"+codexRecordLine(at, "fork-local", 10)+"\n"+codexLine(t, at, 10))
+		// A legacy copy of the entire fork cannot identify its second
+		// request. Its first is a known replay with or without its ID.
+		want := map[string]int{"parent": 32, "fork": 11}
+		for _, opening := range []string{codexLine(t, fork, 20), childOpening} {
+			fixture(t, root, "archived_sessions/fork-copy.jsonl", opening+"\n"+codexLine(t, at, 10))
+			if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+				t.Errorf("parent recorded=%t: got %v, want %v", parentRecorded, got, want)
+			}
+		}
+	}
+}
+
+func codexRecordLine(at, id string, input int) string {
+	return fmt.Sprintf(`{"type":"token_usage_record","timestamp":%q,"payload":{"response_id":%q,"usage":{"input_tokens":%d,"output_tokens":1}}}`, at, id, input)
+}
+
+func TestCodexReferenceForkKeepsUsageAtTheForkInstant(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	fixture(t, root, "parent.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T11:59:00Z","payload":{"id":"parent"}}`+"\n"+count)
+	fixture(t, root, "child.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"child","forked_from_id":"parent","history_base":{"thread_id":"parent"}}}`+"\n"+count)
+	want := map[string]int{"child": 11, "parent": 11}
+	if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens by session %v, want %v", got, want)
+	}
+}
+
+func TestCodexReferenceForkKeepsUsageFromHeaderlessParent(t *testing.T) {
+	root := t.TempDir()
+	const at = "2026-11-18T12:00:00Z"
+	count := codexLine(t, at, 10)
+	fixture(t, root, "sessions/parent.jsonl", count)
+	fixture(t, root, "sessions/child.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"child","forked_from_id":"parent","history_base":{}}}`+"\n"+count)
+	want := map[string]int{"child": 11, "parent": 11}
+	if _, got := sumTokens(t, root); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens by session %v, want %v", got, want)
+	}
+}
+
+func TestCodexReplacementIsNotAPhysicalReplay(t *testing.T) {
+	const thread = "11111111-1111-4111-8111-111111111111"
+	const replacement = "22222222-2222-4222-8222-222222222222"
+	const start = "2026-11-18T11:59:00Z"
+	const fork = "2026-11-18T12:00:00Z"
+	for _, tc := range []struct {
+		name, extra string
+		want        int
+	}{
+		{"rollout-2026-11-18T12-00-00-" + thread + "_" + replacement + ".jsonl", "", 22},
+		{"child.jsonl", `,"history_base":false`, 11},
+	} {
+		root := t.TempDir()
+		fixture(t, root, "parent.jsonl", `{"type":"session_meta","timestamp":"2026-11-18T11:59:00Z","payload":{"id":"parent"}}`+"\n"+codexLine(t, start, 10))
+		meta := fmt.Sprintf(`{"type":"session_meta","timestamp":%q,"payload":{"id":%q,"forked_from_id":"parent"%s}}`, fork, thread, tc.extra)
+		fixture(t, root, tc.name, meta+"\n"+codexLine(t, fork, 10))
+		if total, _ := sumTokens(t, root); total != tc.want {
+			t.Errorf("%s counted %d tokens, want %d", tc.name, total, tc.want)
+		}
+	}
+}
+
 func piLine(id, parent, ts string, input int) string {
 	r := object{"type": "message", "timestamp": ts, "message": object{"role": "assistant", "model": "gpt-5", "usage": object{"input": input, "output": 1}}}
 	if id != "" {
@@ -550,16 +777,19 @@ func TestDamagedFilesAreSkipped(t *testing.T) {
 	})
 }
 
-// Ports upstream's dedupes_matching_codex_usage_events_from_distinct_sessions
-// and its tier cases: outside session views, two sessions' copies of one
-// usage event count once, the first keeping its session, and their tiers
-// merge as copies within a session do.
+// Two rollouts' copies of one event count once and use the strongest
+// recorded tier. Attribution stays with the first rollout.
 func TestCodexMergesMatchingUsageFromDistinctSessions(t *testing.T) {
 	event := func(session, speed string) types.UsageEntry {
-		return types.UsageEntry{SessionID: session, Timestamp: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Model: "gpt-5", InputTokens: 90, CacheReadInputTokens: 10, OutputTokens: 50, TotalTokens: 150, Speed: speed}
+		return types.UsageEntry{SessionID: session, SourceFile: session + ".jsonl", Timestamp: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Model: "gpt-5", InputTokens: 90, CacheReadInputTokens: 10, OutputTokens: 50, TotalTokens: 150, Speed: speed}
 	}
-	for _, tc := range []struct{ first, second, want string }{{"", "", ""}, {"", "fast", "fast"}, {"fast", "", "fast"}, {"standard", "fast", "standard"}, {"fast", "standard", "standard"}} {
-		merged := MergeCodexCopies([]types.UsageEntry{event("session-a", tc.first), event("session-b", tc.second)})
+	for _, tc := range []struct{ first, second, want string }{
+		{"", "", ""}, {"", "fast", "fast"}, {"fast", "", "fast"},
+		{"standard", "fast", "standard"}, {"fast", "standard", "standard"},
+		{"", "ultrafast", "ultrafast"}, {"fast", "ultrafast", "ultrafast"},
+		{"ultrafast", "flex", "ultrafast"}, {"ultrafast", "standard", "standard"},
+	} {
+		merged := mergeCodexCopies([]types.UsageEntry{event("session-a", tc.first), event("session-b", tc.second)}, nil, nil)
 		if len(merged) != 1 || merged[0].SessionID != "session-a" || merged[0].Speed != tc.want {
 			t.Errorf("tiers %q then %q: %+v", tc.first, tc.second, merged)
 		}
@@ -568,7 +798,7 @@ func TestCodexMergesMatchingUsageFromDistinctSessions(t *testing.T) {
 
 // Ports upstream's dedupes_copied_branch_history_across_session_files: a
 // branch rollout that copied its parent's history without naming the parent
-// counts only its own usage outside session views.
+// counts only its own usage in every report.
 func TestCodexMergesCopiedBranchHistoryAcrossSessionFiles(t *testing.T) {
 	root := t.TempDir()
 	tokenCount := func(ts string, input, cached, output, reasoning, total int) string {
@@ -577,10 +807,7 @@ func TestCodexMergesCopiedBranchHistoryAcrossSessionFiles(t *testing.T) {
 	parent := `{"timestamp":"2026-05-12T08:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5.2"}}` + "\n" + tokenCount("2026-05-12T08:01:00.000Z", 1000, 100, 200, 20, 1200)
 	fixture(t, root, "2026-05-12T08-00-00-parent.jsonl", parent)
 	fixture(t, root, "2026-05-12T08-02-00-branch.jsonl", parent+"\n"+tokenCount("2026-05-12T08:02:00.000Z", 1600, 300, 450, 40, 2050))
-	if entries := loadTest(t, "codex", root); len(entries) != 3 {
-		t.Fatalf("the session view keeps both copies: %+v", entries)
-	}
-	merged := MergeCodexCopies(loadTest(t, "codex", root))
+	merged := loadTest(t, "codex", root)
 	if len(merged) != 2 || merged[0].SessionID != "2026-05-12T08-00-00-parent" || merged[1].SessionID != "2026-05-12T08-02-00-branch" {
 		t.Fatal(merged)
 	}

@@ -53,6 +53,24 @@ func TestCodexCountsOnlyUsageRecordsPairedWithCompactions(t *testing.T) {
 	}
 }
 
+func TestCodexSnapshotPreventsBillingStandaloneCompactionCopy(t *testing.T) {
+	root := t.TempDir()
+	const recordedAt = "2026-09-01T00:00:00Z"
+	const snapshotAt = "2026-09-01T00:00:01Z"
+	record := codexRecordLine(recordedAt, "compact", 10)
+	marker := `{"type":"compacted","payload":{"compaction_response_id":"compact"}}`
+	settings := `{"timestamp":"2026-09-01T00:00:00Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"ultrafast"}}}`
+	fixture(t, root, "sessions/covered.jsonl", record+"\n"+codexLine(t, snapshotAt, 10)+"\n"+marker)
+	fixture(t, root, "archived_sessions/standalone.jsonl", settings+"\n"+record+"\n"+marker)
+	entries := loadTest(t, "codex", root)
+	if total, compactions := codexTotals(entries); total != 11 || compactions != 0 {
+		t.Fatalf("counted %d tokens and %d standalone compactions", total, compactions)
+	}
+	if entries[0].Speed != "ultrafast" {
+		t.Fatalf("speed=%q, want ultrafast", entries[0].Speed)
+	}
+}
+
 func TestCodexUsageRecordModelsKeepTheTurnModel(t *testing.T) {
 	for marker, want := range map[string]int{"response-1": 2, "different-response": 1} {
 		root := t.TempDir()

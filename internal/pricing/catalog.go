@@ -23,6 +23,9 @@ var liteSnapshot []byte
 //go:embed models-dev-catalog-rules.json
 var rulesSnapshot []byte
 
+//go:embed ultrafast-multiplier-overrides.json
+var ultrafastSnapshot []byte
+
 type catalogRules struct {
 	Owners    []string `json:"owners"`
 	Platforms []string `json:"platforms"`
@@ -48,6 +51,16 @@ type speedOverrides struct {
 // for every LiteLLM and models.dev model on each online refresh.
 var fastSnapshotOverrides = sync.OnceValue(func() speedOverrides { return decodeSpeedOverrides(fastSnapshot) })
 var flexSnapshotOverrides = sync.OnceValue(func() speedOverrides { return decodeSpeedOverrides(flexSnapshot) })
+var ultrafastSnapshotOverrides = sync.OnceValue(func() speedOverrides {
+	o := decodeSpeedOverrides(ultrafastSnapshot)
+	exact := make(map[string]float64, len(o.Exact)*2)
+	for name, multiplier := range o.Exact {
+		exact[name] = multiplier
+		exact[normalize(name)] = multiplier
+	}
+	o.Exact = exact
+	return o
+})
 
 func decodeSpeedOverrides(data []byte) speedOverrides {
 	var o speedOverrides
@@ -59,6 +72,33 @@ func decodeSpeedOverrides(data []byte) speedOverrides {
 
 func fastMultiplier(name string) float64 { return fastSnapshotOverrides().multiplier(name) }
 func flexMultiplier(name string) float64 { return flexSnapshotOverrides().multiplier(name) }
+
+// CodexUltrafastMultiplier applies the published allowlist to a model name.
+// It is read only for requests whose rollout records the Ultrafast tier.
+func CodexUltrafastMultiplier(name string) float64 {
+	overrides := ultrafastSnapshotOverrides()
+	for {
+		// An @ can separate a provider from the model or spell a dot
+		// inside the model ID. Try the model spelling at each boundary.
+		if multiplier := overrides.multiplier(strings.ReplaceAll(name, "@", "-")); multiplier != 1 {
+			return multiplier
+		}
+		// A final @ may also introduce a region suffix.
+		if end := strings.LastIndexByte(name, '@'); end >= 0 {
+			switch strings.ToLower(name[end+1:]) {
+			case "eu", "us":
+				if multiplier := overrides.multiplier(strings.ReplaceAll(name[:end], "@", "-")); multiplier != 1 {
+					return multiplier
+				}
+			}
+		}
+		_, tail, ok := strings.Cut(name, "@")
+		if !ok {
+			return 1
+		}
+		name = tail
+	}
+}
 
 // multiplier returns the service-tier multiplier for a model, or 1. It tries
 // the whole id and the variant a default family alias points to, then each

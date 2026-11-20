@@ -195,19 +195,9 @@ func (c *Calculator) calculateSingleCost(ctx context.Context, entry *types.Usage
 
 // applyPricing sets entry's cost fields from its tokens and p.
 func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricing) {
-	create5, create1 := entry.CacheCreationInputTokens, 0
-	raw := entry.Raw
-	if message, ok := raw["message"].(map[string]interface{}); ok {
-		if usage, ok := message["usage"].(map[string]interface{}); ok {
-			raw = usage
-		}
-	}
-	if usage, ok := raw["usage"].(map[string]interface{}); ok {
-		raw = usage
-	}
-	if breakdown, ok := raw["cache_creation"].(map[string]interface{}); ok {
-		create5 = int(number(breakdown["ephemeral_5m_input_tokens"]))
-		create1 = int(number(breakdown["ephemeral_1h_input_tokens"]))
+	create5, create1, split := entry.CacheCreationSplit()
+	if !split {
+		create5 = entry.CacheCreationInputTokens
 	}
 	contextTokens := float64(entry.InputTokens) + float64(entry.CacheReadInputTokens) + float64(create5) + float64(create1)
 	inputForCost := entry.InputTokens
@@ -244,6 +234,8 @@ func (c *Calculator) applyPricing(entry *types.UsageEntry, p pricing.ModelPricin
 		multiplier = p.FlexMultiplier
 	case speed == "fast" || speed == "priority":
 		multiplier = p.FastMultiplier
+	case speed == "ultrafast" && entry.Agent == "codex":
+		multiplier = pricing.CodexUltrafastMultiplier(entry.Model)
 	}
 	outputTokens := entry.OutputTokens
 	if extra, exists := entry.Raw["extra_output_tokens"]; exists {

@@ -168,6 +168,84 @@ func TestClaudeSessionIDDetailJSON(t *testing.T) {
 	}
 }
 
+func TestClaudeAdvisorTurnCountsCacheWritesFromEveryMessage(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	cfg := filepath.Join(home, "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"pricingOverrides":{"parent-model":{"inputCostPerToken":1,"outputCostPerToken":2,"cacheCreationInputTokenCost":1.25},"advisor-model":{"inputCostPerToken":1,"outputCostPerToken":2}}}}`)
+	sourceCLIWrite(t, filepath.Join(claude, "projects/p/s.jsonl"), `{"timestamp":"2026-11-18T12:00:00Z","sessionId":"s","requestId":"req-one","message":{"id":"msg-one","model":"parent-model","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_5m_input_tokens":10},"iterations":[{"type":"message","model":null,"input_tokens":50,"output_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":10}},{"type":"advisor_message","model":"advisor-model","input_tokens":5,"output_tokens":1,"cache_creation":{"ephemeral_1h_input_tokens":3}},{"type":"message","model":null,"input_tokens":50,"output_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":20}}]}}}`)
+	for _, command := range [][]string{{"claude", "daily"}, {"claude", "session"}, {"daily"}, {"session"}} {
+		payload := sourceCLIJSON(t, append(command, "--offline", "--json", "--config", cfg, "--mode", "calculate", "--timezone", "UTC")...)
+		totals := payload["totals"].(map[string]any)
+		if totals["totalTokens"] != 149.0 || totals["cacheCreationTokens"] != 33.0 || totals["totalCost"] != 185.5 {
+			t.Errorf("%v: totals=%v, want 149 tokens, 33 cache writes, $185.50", command, totals)
+		}
+		key := command[len(command)-1]
+		if len(command) == 2 && key == "session" {
+			key = "sessions"
+		}
+		breakdowns := payload[key].([]any)[0].(map[string]any)["modelBreakdowns"].([]any)
+		got := map[string]any{}
+		for _, value := range breakdowns {
+			model := value.(map[string]any)
+			got[model["modelName"].(string)] = model["cacheCreation1hTokens"]
+		}
+		if !reflect.DeepEqual(got, map[string]any{"parent-model": 20.0, "advisor-model": 3.0}) {
+			t.Errorf("%v: 1h cache writes by model %v", command, got)
+		}
+	}
+}
+
+func TestClaudeCacheCreationSplitSurvivesDedupeAndIncompleteIterations(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	const row = `{"timestamp":"2026-11-18T12:00:00Z","sessionId":"s","requestId":%q,"costUSD":1,"message":{"id":%q,"model":%q,"usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":10%s}}}`
+	sourceCLIWrite(t, filepath.Join(claude, "projects/p/s.jsonl"), strings.Join([]string{
+		fmt.Sprintf(row, "req-one", "msg-one", "split-model", ""),
+		fmt.Sprintf(row, "req-one", "msg-one", "split-model", `,"cache_creation":{"ephemeral_5m_input_tokens":10},"iterations":[{"type":"message","cache_creation":{"ephemeral_1h_input_tokens":100}},{"type":"message","cache_creation":{"ephemeral_1h_input_tokens":"20"}}]`),
+		fmt.Sprintf(row, "req-two", "msg-two", "flat-model", ""),
+	}, "\n"))
+	for _, kind := range []string{"daily", "session"} {
+		payload := sourceCLIJSON(t, "claude", kind, "--offline", "--json", "--no-cost", "--timezone", "UTC")
+		key := kind
+		if key == "session" {
+			key = "sessions"
+		}
+		breakdowns := payload[key].([]any)[0].(map[string]any)["modelBreakdowns"].([]any)
+		got := map[string]any{}
+		for _, value := range breakdowns {
+			m := value.(map[string]any)
+			got[m["modelName"].(string)] = m["cacheCreation1hTokens"]
+			if m["cacheCreationTokens"] != 10.0 {
+				t.Errorf("%s: cacheCreationTokens=%v, want 10", kind, m["cacheCreationTokens"])
+			}
+		}
+		if !reflect.DeepEqual(got, map[string]any{"split-model": 0.0, "flat-model": nil}) {
+			t.Errorf("%s: 1h cache writes by model %v", kind, got)
+		}
+	}
+}
+
+func TestClaudeCacheSplitKeepsStoredCostAndRespectsZeroCounts(t *testing.T) {
+	home := isolateSourceHomes(t)
+	claude := filepath.Join(home, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	const row = `{"timestamp":"2026-11-18T12:00:00Z","sessionId":"s","requestId":"req","cache_creation_input_tokens":%d%s,"message":{"id":"msg","model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":0%s}}}`
+	flat := fmt.Sprintf(row, 0, `,"costUSD":1`, "")
+	split := fmt.Sprintf(row, 20, "", `,"iterations":[{"type":"message","cache_creation":{"ephemeral_1h_input_tokens":0}}]`)
+	for _, lines := range [][]string{{flat, split}, {split, flat}} {
+		sourceCLIWrite(t, filepath.Join(claude, "projects/p/s.jsonl"), strings.Join(lines, "\n"))
+		payload := sourceCLIJSON(t, "claude", "session", "--offline", "--json", "--mode", "display", "--timezone", "UTC")
+		totals := payload["totals"].(map[string]any)
+		m := payload["sessions"].([]any)[0].(map[string]any)["modelBreakdowns"].([]any)[0].(map[string]any)
+		if totals["totalTokens"] != 12.0 || totals["totalCost"] != 1.0 || m["cacheCreation1hTokens"] != 0.0 {
+			t.Fatalf("totals=%v, model=%v", totals, m)
+		}
+	}
+}
+
 // A workflow agent records its parent's sessionId under a directory of its
 // own. Session reports list it as that directory's session, as upstream
 // does, while --id with the parent's ID still finds its usage.

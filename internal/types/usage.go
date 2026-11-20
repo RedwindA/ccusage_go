@@ -56,6 +56,36 @@ type UsageEntry struct {
 	Raw             map[string]interface{} `json:"-"`
 }
 
+// CacheCreationSplit reports the cache-write durations when the log records
+// them. Claude's loader keeps the resolved split at the top level of Raw.
+func (e *UsageEntry) CacheCreationSplit() (fiveMinutes, oneHour int, ok bool) {
+	raw := e.Raw
+	split, ok := raw["cache_creation"].(map[string]interface{})
+	if !ok || e.Agent != "claude" {
+		if message, ok := raw["message"].(map[string]interface{}); ok {
+			if usage, ok := message["usage"].(map[string]interface{}); ok {
+				raw = usage
+			}
+		}
+		if usage, ok := raw["usage"].(map[string]interface{}); ok {
+			raw = usage
+		}
+		split, ok = raw["cache_creation"].(map[string]interface{})
+	}
+	count := func(v interface{}) int {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case int:
+			return n
+		case int64:
+			return int(n)
+		}
+		return 0
+	}
+	return count(split["ephemeral_5m_input_tokens"]), count(split["ephemeral_1h_input_tokens"]), ok
+}
+
 type UsageReport struct {
 	Period      string       `json:"period"`
 	StartTime   time.Time    `json:"start_time"`

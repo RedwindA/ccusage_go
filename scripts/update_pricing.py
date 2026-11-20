@@ -1,6 +1,6 @@
 """Refresh internal/pricing's embedded snapshots from an upstream ccusage checkout.
 
-The models.dev pricing, its catalog rules and the Fast and Flex multiplier
+The models.dev pricing, its catalog rules and the service-tier multiplier
 overrides are copied verbatim. The LiteLLM table is downloaded at the revision the
 checkout's flake.lock pins and reduced the way upstream's
 rust/crates/ccusage-pricing-snapshots/build.rs reduces it, keeping LiteLLM's
@@ -26,6 +26,7 @@ COPIED = {
     'rust/crates/ccusage-pricing-snapshots/src/models-dev-catalog-rules.json': 'models-dev-catalog-rules.json',
     'rust/crates/ccusage-core/src/fast-multiplier-overrides.json': 'fast-multiplier-overrides.json',
     'rust/crates/ccusage-core/src/flex-multiplier-overrides.json': 'flex-multiplier-overrides.json',
+    'rust/crates/ccusage-core/src/ultrafast-multiplier-overrides.json': 'ultrafast-multiplier-overrides.json',
 }
 
 # The fields upstream's build.rs keeps, plus the provider entry it reads the
@@ -99,7 +100,13 @@ def update(upstream, litellm_json=None, out=PRICING_DIR, catalog_go=CATALOG_GO):
     else:
         raw = Path(litellm_json).read_bytes()
     snapshot = compact_litellm(json.loads(raw)).encode()
-    copies = {name: (upstream / source).read_bytes() for source, name in COPIED.items()}
+    copies = {}
+    for source, name in COPIED.items():
+        try:
+            copies[name] = (upstream / source).read_bytes()
+        except FileNotFoundError:
+            if name != 'ultrafast-multiplier-overrides.json':
+                raise
     (Path(out) / 'litellm-pricing.json').write_bytes(snapshot)
     for name, data in copies.items():
         (Path(out) / name).write_bytes(data)

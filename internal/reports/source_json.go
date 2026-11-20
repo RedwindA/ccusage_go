@@ -82,6 +82,9 @@ func focusedBreakdown(m Model) map[string]any {
 	if m.StoredCost != nil {
 		v["storedCost"] = *m.StoredCost
 	}
+	if m.CacheCreation1h != nil {
+		v["cacheCreation1hTokens"] = *m.CacheCreation1h
+	}
 	return v
 }
 func jsonTimestamp(value string) any {

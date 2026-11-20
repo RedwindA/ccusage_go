@@ -258,13 +258,10 @@ func TestCodexCountsUsageCopiedAcrossSessionsOnce(t *testing.T) {
 			t.Errorf("%v: totals %v, want 2050 tokens", report, totals)
 		}
 	}
-	for _, tc := range []struct {
-		report []string
-		branch float64
-	}{{[]string{"codex", "session"}, 2050}, {[]string{"codex", "session", "--since", "20260501"}, 2050}, {[]string{"session"}, 2050}, {[]string{"session", "--since", "20260501"}, 850}} {
-		payload := sourceCLIJSON(t, append(tc.report, args...)...)
+	for _, report := range [][]string{{"codex", "session"}, {"codex", "session", "--since", "20260501"}, {"session"}, {"session", "--since", "20260501"}} {
+		payload := sourceCLIJSON(t, append(report, args...)...)
 		rows, _ := payload["sessions"].([]any)
-		if tc.report[0] == "session" {
+		if report[0] == "session" {
 			rows, _ = payload["session"].([]any)
 		}
 		got := map[string]any{}
@@ -276,8 +273,75 @@ func TestCodexCountsUsageCopiedAcrossSessionsOnce(t *testing.T) {
 			}
 			got[id] = r["totalTokens"]
 		}
-		if want := map[string]any{"2026/05/12/rollout-2026-05-12T08-00-00-parent": 1200.0, "2026/05/12/rollout-2026-05-12T08-02-00-branch": tc.branch}; !reflect.DeepEqual(got, want) {
-			t.Errorf("%v: sessions %v, want %v", tc.report, got, want)
+		if want := map[string]any{"2026/05/12/rollout-2026-05-12T08-00-00-parent": 1200.0, "2026/05/12/rollout-2026-05-12T08-02-00-branch": 850.0}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%v: sessions %v, want %v", report, got, want)
+		}
+	}
+}
+
+func TestCodexForkRequestsAgreeAcrossReports(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	count := func(at string, input, total int) string {
+		return fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5","last_token_usage":{"input_tokens":%d},"total_token_usage":{"input_tokens":%d}}}}`, at, input, total)
+	}
+	start := count("2026-11-17T12:00:00Z", 100, 100)
+	request := count("2026-11-18T12:01:00Z", 77, 177)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/parent.jsonl"),
+		`{"type":"session_meta","timestamp":"2026-11-17T12:00:00Z","payload":{"id":"parent"}}`+"\n"+start+"\n"+request)
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/child.jsonl"),
+		`{"type":"session_meta","timestamp":"2026-11-18T12:00:00Z","payload":{"id":"child","forked_from_id":"parent"}}`+"\n"+
+			count("2026-11-18T12:00:00Z", 100, 100)+"\n"+request)
+	sourceCLIWrite(t, filepath.Join(codex, "archived_sessions/parent-copy.jsonl"), start+"\n"+request)
+	for _, prefix := range [][]string{{"codex"}, nil} {
+		for _, kind := range []string{"daily", "session"} {
+			for _, window := range [][]string{nil, {"--since", "20261118", "--until", "20261118"}} {
+				args := append(append([]string{}, prefix...), kind, "--offline", "--json", "--timezone", "UTC")
+				args = append(args, window...)
+				want := 254.0
+				if len(window) > 0 {
+					want = 154
+				}
+				totals := sourceCLIJSON(t, args...)["totals"].(map[string]any)
+				if totals["totalTokens"] != want {
+					t.Errorf("%v: tokens=%v, want %v", args, totals["totalTokens"], want)
+				}
+			}
+		}
+	}
+}
+
+func TestCodexUltrafastBillsOnlyRecordedRequests(t *testing.T) {
+	home := isolateSourceHomes(t)
+	codex := filepath.Join(home, "codex")
+	t.Setenv("CODEX_HOME", codex)
+	cfg := filepath.Join(home, "ccusage.json")
+	sourceCLIWrite(t, cfg, `{"defaults":{"pricingOverrides":{"gpt-6.1-sol":{"inputCostPerToken":0.000001,"outputCostPerToken":0.000002,"cacheReadInputTokenCost":0.0000002,"cacheCreationInputTokenCost":0.0000015,"fastMultiplier":2,"flexMultiplier":0.5}}}}`)
+	sourceCLIWrite(t, filepath.Join(codex, "config.toml"), `service_tier = "standard"`)
+	const settings = `{"timestamp":%q,"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":%q}}}`
+	const count = `{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-6.1-sol","last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"cache_write_input_tokens":10,"output_tokens":5}}}}`
+	sourceCLIWrite(t, filepath.Join(codex, "sessions/example.jsonl"), strings.Join([]string{
+		fmt.Sprintf(settings, "2026-11-18T12:00:00Z", "ultrafast"),
+		fmt.Sprintf(count, "2026-11-18T12:00:01Z"),
+		fmt.Sprintf(settings, "2026-11-18T12:00:02Z", "standard"),
+		fmt.Sprintf(count, "2026-11-18T12:00:03Z"),
+	}, "\n"))
+	for _, tc := range []struct {
+		speed string
+		cost  float64
+	}{
+		{"auto", 693e-6}, {"standard", 198e-6}, {"fast", 396e-6}, {"flex", 99e-6},
+	} {
+		for _, command := range [][]string{{"codex", "daily"}, {"codex", "session"}, {"daily"}} {
+			totals := sourceCLIJSON(t, append(command, "--offline", "--json", "--config", cfg, "--speed", tc.speed)...)["totals"].(map[string]any)
+			cost, focused := totals["costUSD"].(float64)
+			if !focused {
+				cost = totals["totalCost"].(float64)
+			}
+			if totals["totalTokens"] != 210.0 || math.Abs(cost-tc.cost) > 1e-12 {
+				t.Errorf("%v --speed %s: %v, want 210 tokens and $%g", command, tc.speed, totals, tc.cost)
+			}
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"math"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,13 @@ import (
 )
 
 type codexUsage [6]int // inclusive input, cache read, cache creation, output, reasoning, total
+
+func (u codexUsage) hasTokens() bool { return u[0] != 0 || u[3] != 0 || u[4] != 0 }
+
+const codexUUIDPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
+var codexReplacement = regexp.MustCompile(`^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-(` + codexUUIDPattern + `)_` + codexUUIDPattern + `\.jsonl$`)
+
 func parseCodexUsage(m object) codexUsage {
 	u := codexUsage{codexCount(m, "input_tokens", "prompt_tokens", "input"), codexCount(m, "cached_input_tokens", "cache_read_input_tokens", "cached_tokens"), codexCount(m, "cache_write_input_tokens", "cache_creation_input_tokens"), codexCount(m, "output_tokens", "completion_tokens", "output"), codexCount(m, "reasoning_output_tokens", "reasoning_tokens"), codexCount(m, "total_tokens")}
 	u[1] = min(u[1], u[0])
@@ -72,6 +80,11 @@ type codexSession struct {
 	compacted   map[string]time.Time
 	id, parent  string
 	fork        time.Time
+	spawned     bool
+	reference   bool
+	// The first usage record in a spawned subagent belongs to that
+	// subagent. Replay can only consume snapshots before it.
+	replayLimit int
 	// burst is the first token count when the session opens with two
 	// written back to back, as Codex writes a fork's replayed history.
 	burst time.Time
@@ -107,7 +120,7 @@ var codexRowKeys = map[string]bool{
 // Session headers carry the full instructions, messages carry their text and
 // compacted lines the replacement history; all are skipped.
 var codexPayloadKeys = map[string]bool{
-	"id": true, "forked_from_id": true, "source": true, "cwd": true,
+	"id": true, "forked_from_id": true, "source": true, "cwd": true, "history_base": true,
 	"model": true, "model_name": true, "metadata": true,
 	"type": true, "thread_settings": true, "info": true,
 	"response_id": true, "usage": true, "thread_token_usage": true, "compaction_response_id": true,
@@ -263,7 +276,7 @@ func readCodexRows(path string) ([]object, string, error) {
 
 func parseCodex(p, dir string) (codexSession, error) {
 	rows, opened, err := readCodexRows(p)
-	s := codexSession{}
+	s := codexSession{replayLimit: -1}
 	if err != nil {
 		return s, err
 	}
@@ -275,10 +288,19 @@ func parseCodex(p, dir string) (codexSession, error) {
 	if len(rows) > 0 && str(rows[0]["type"]) == "session_meta" {
 		h := obj(rows[0]["payload"])
 		s.id = str(h["id"])
-		s.parent = first(str(h["forked_from_id"]), str(obj(obj(obj(h["source"])["subagent"])["thread_spawn"])["parent_thread_id"]))
+		spawnParent := str(obj(obj(obj(h["source"])["subagent"])["thread_spawn"])["parent_thread_id"])
+		s.parent = first(str(h["forked_from_id"]), spawnParent)
+		s.spawned = spawnParent != ""
+		s.reference = obj(h["history_base"]) != nil
+		if s.parent != "" && !s.reference {
+			if match := codexReplacement.FindStringSubmatch(filepath.Base(codexPlainPath(p))); match != nil {
+				s.reference = s.id == match[1]
+			}
+		}
 		s.fork = timestamp(rows[0]["timestamp"])
 		project = first(str(h["cwd"]), project)
 	}
+	thread := s.id
 	if s.id == "" {
 		s.id = session
 	}
@@ -300,10 +322,15 @@ func parseCodex(p, dir string) (codexSession, error) {
 		e.TotalTokens = usage[5]
 		e.Speed = speed
 		e.Raw["is_fallback"] = fallback
-		e.Raw["session_uuid"] = s.id
+		if thread != "" {
+			e.Raw["session_uuid"] = thread
+		}
 		if s.parent != "" {
 			e.IsSidechain = true
 			e.Raw["parent_session_id"] = s.parent
+			if s.reference {
+				e.Raw["reference_fork"] = true
+			}
 		}
 		return e
 	}
@@ -315,6 +342,7 @@ func parseCodex(p, dir string) (codexSession, error) {
 		return requests[id]
 	}
 	latest := "" // the last valid usage record's response ID
+	latestAwaitsSnapshot := false
 	currentModel, speed := "", ""
 	fallbackModel := false
 	previous := codexUsage{}
@@ -348,6 +376,9 @@ func parseCodex(p, dir string) (codexSession, error) {
 			}
 			continue
 		case "token_usage_record":
+			if s.spawned && s.replayLimit < 0 {
+				s.replayLimit = len(s.entries)
+			}
 			id := str(payload["response_id"])
 			usage := parseCodexUsage(obj(payload["usage"]))
 			if id == "" || t.IsZero() || usage == (codexUsage{}) || requests[id] != nil && requests[id].counted {
@@ -362,6 +393,7 @@ func parseCodex(p, dir string) (codexSession, error) {
 				req.usage, req.thread, req.recorded = usage, obj(payload["thread_token_usage"]), true
 			}
 			latest = id
+			latestAwaitsSnapshot = true
 			if req.compacted {
 				req.counted = true
 				s.compactions = append(s.compactions, req.entry)
@@ -371,6 +403,7 @@ func parseCodex(p, dir string) (codexSession, error) {
 		var usage codexUsage
 		parsedModel := ""
 		eventSpeed := ""
+		recordID := ""
 		if typ == "event_msg" {
 			if t.IsZero() {
 				continue
@@ -385,6 +418,8 @@ func parseCodex(p, dir string) (codexSession, error) {
 						speed = "fast"
 					case "flex":
 						speed = "flex"
+					case "ultrafast":
+						speed = "ultrafast"
 					}
 				}
 				continue
@@ -397,14 +432,19 @@ func parseCodex(p, dir string) (codexSession, error) {
 			if totals == nil && last == nil {
 				continue
 			}
-			// A repeated snapshot adds no usage but still belongs to a burst.
-			if len(heads) < 2 {
+			// A repeated nonempty snapshot adds no usage but can still
+			// identify the start of a replay burst.
+			curr := parseCodexUsage(totals)
+			lastUsage := curr
+			if last != nil {
+				lastUsage = parseCodexUsage(last)
+			}
+			if len(heads) < 2 && lastUsage.hasTokens() {
 				heads = append(heads, t)
 			}
-			curr := parseCodexUsage(totals)
 			advanced := totals == nil || !hasPrevious || curr != previous
 			if last != nil && advanced {
-				usage = parseCodexUsage(last)
+				usage = lastUsage
 			} else if totals != nil {
 				for i := range usage {
 					usage[i] = max(0, curr[i]-previous[i])
@@ -416,7 +456,11 @@ func parseCodex(p, dir string) (codexSession, error) {
 				previous = curr
 				hasPrevious = true
 			}
-			if usage[0]+usage[1]+usage[2]+usage[3]+usage[4] == 0 {
+			awaitingSnapshot := advanced && latestAwaitsSnapshot
+			if advanced {
+				latestAwaitsSnapshot = false
+			}
+			if !usage.hasTokens() {
 				continue
 			}
 			// Local compaction advances the cumulative counts between the
@@ -425,6 +469,9 @@ func parseCodex(p, dir string) (codexSession, error) {
 			// unrelated request with the same counts from consuming it.
 			if req := requests[latest]; advanced && req != nil && !req.counted && (req.usage == usage || req.thread != nil && totals != nil && parseCodexUsage(req.thread) == curr) {
 				req.counted = true
+				if awaitingSnapshot {
+					recordID = latest
+				}
 			}
 			parsedModel = first(codexModel(payload), codexModel(info))
 			eventSpeed = speed
@@ -460,10 +507,15 @@ func parseCodex(p, dir string) (codexSession, error) {
 			currentModel = "gpt-5"
 			fallbackModel = true
 		}
-		s.entries = append(s.entries, newEntry(currentModel, fallbackModel, t, usage, eventSpeed))
+		e := newEntry(currentModel, fallbackModel, t, usage, eventSpeed)
+		if recordID != "" {
+			e.Raw["record_response_id"] = recordID
+		}
+		s.entries = append(s.entries, e)
 		s.usages = append(s.usages, usage)
 	}
-	if len(heads) == 2 && inCodexBurst(heads[0], heads[1]) {
+	if len(heads) == 2 && inCodexBurst(heads[0], heads[1]) &&
+		(s.fork.IsZero() || heads[0].Sub(s.fork).Abs() <= time.Second) {
 		s.burst = heads[0]
 	}
 	for id, req := range requests {
@@ -476,9 +528,11 @@ func parseCodex(p, dir string) (codexSession, error) {
 	}
 	return s, nil
 }
+
 func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([]types.UsageEntry, error) {
 	sessions := make([]codexSession, len(files))
 	byID := map[string]int{}
+	parents := map[string]string{}
 	// Like upstream, a rollout that cannot be read is skipped.
 	if err := parallelEach(ctx, files, func(i int) {
 		sessions[i], _ = parseCodex(files[i], dirs[i])
@@ -489,32 +543,49 @@ func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([
 		if _, ok := byID[sessions[i].id]; !ok {
 			byID[sessions[i].id] = i
 		}
+		if s := &sessions[i]; s.parent != "" && parents[s.id] == "" {
+			parents[s.id] = s.parent
+		}
 	}
 	var result []types.UsageEntry
+	replayedEntries := map[int]bool{}
 	for _, s := range sessions {
 		skip := 0
 		var replayed map[string]time.Time
-		if s.parent != "" {
+		if s.parent != "" && !s.reference {
+			useBurst := true
+			limit := len(s.entries)
+			if s.replayLimit >= 0 {
+				limit = s.replayLimit
+			}
 			if j, ok := byID[s.parent]; ok {
 				parent := sessions[j]
 				replayed = parent.compacted
-				for skip < len(s.usages) && skip < len(parent.usages) {
+				for skip < limit && skip < len(parent.usages) {
 					if !s.fork.IsZero() && parent.entries[skip].Timestamp.After(s.fork) {
 						break
 					}
 					if s.usages[skip] != parent.usages[skip] {
 						break
 					}
+					childID, parentID := codexRecordID(&s.entries[skip]), codexRecordID(&parent.entries[skip])
+					if childID != "" && parentID != "" && childID != parentID {
+						useBurst = false
+						break
+					}
 					skip++
 				}
 			}
-			if skip == 0 && !s.burst.IsZero() {
-				for at := s.burst; skip < len(s.entries) && inCodexBurst(at, s.entries[skip].Timestamp); skip++ {
+			if useBurst && skip == 0 && !s.burst.IsZero() {
+				for at := s.burst; skip < limit && inCodexBurst(at, s.entries[skip].Timestamp); skip++ {
 					at = s.entries[skip].Timestamp
 				}
 			}
 		}
-		result = append(result, s.entries[skip:]...)
+		for i := range skip {
+			replayedEntries[len(result)+i] = true
+		}
+		result = append(result, s.entries...)
 		for _, e := range s.compactions {
 			// The parent's compactions up to the fork were replayed, even
 			// when the parent's cumulative counts covered them.
@@ -524,44 +595,5 @@ func loadCodex(ctx context.Context, files, dirs []string, loc *time.Location) ([
 			result = append(result, e)
 		}
 	}
-	return finalize(mergeCodexCopies(result, true), loc, false), nil
-}
-
-// MergeCodexCopies counts a usage event that several sessions record once,
-// keeping the first copy's session. Upstream does so in every report but the
-// session one, so a branch rollout that copied its parent's history without
-// naming the parent does not bill that history twice.
-func MergeCodexCopies(entries []types.UsageEntry) []types.UsageEntry {
-	return mergeCodexCopies(entries, false)
-}
-
-// mergeCodexCopies merges the copies of each usage event, within a session
-// when bySession is set. Copied sessions keep an explicit tier over an
-// unclassified copy, and conflicting tiers resolve to Standard, then Fast,
-// then Flex, whatever the file order. Copies of a compaction request share
-// its response ID in any session, and the first copy keeps its session, time
-// and model.
-func mergeCodexCopies(entries []types.UsageEntry, bySession bool) []types.UsageEntry {
-	tierRank := map[string]int{"flex": 1, "fast": 2, "standard": 3}
-	indexes := map[[2]string]int{}
-	var merged []types.UsageEntry
-	for _, e := range entries {
-		usage := e
-		if !bySession {
-			usage.SessionID = ""
-		}
-		key := [2]string{"", signature(usage, false)}
-		if id, ok := e.Raw["response_id"].(string); ok {
-			key = [2]string{id, ""}
-		}
-		if i, ok := indexes[key]; ok {
-			if tierRank[e.Speed] > tierRank[merged[i].Speed] {
-				merged[i].Speed = e.Speed
-			}
-			continue
-		}
-		indexes[key] = len(merged)
-		merged = append(merged, e)
-	}
-	return merged
+	return finalize(mergeCodexCopies(result, parents, replayedEntries), loc, false), nil
 }
