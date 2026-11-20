@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v0.21.0] - 2026-11-21
+
+### Added
+
+- Codex applies Ultrafast pricing to requests that record that service tier. Explicit `--speed standard`, `fast` and `flex` still override the recorded tier.
+- Claude JSON model breakdowns include `cacheCreation1hTokens` when the log reports a cache-write duration split.
+
+### Fixed
+
+- Codex reports agree on fork usage and archive copies. A fork and its parent can each send an identical request after the fork. Copied requests count once in both date and session reports, and distinct requests from spawned subagents count even when their timestamps match.
+- Claude advisor turns include cache writes from every message iteration that reports a complete split. Advisor calls are billed separately, and deduplication retains the duration split in otherwise equal copies.
+
 ## [v0.20.2] - 2026-11-18
 
 ### Fixed
